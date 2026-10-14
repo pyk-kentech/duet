@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""가짜 Claude Code CLI. `claude -p --output-format json [flags] [prompt]` 흉내."""
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _fake_common as fc  # noqa: E402
+
+argv = sys.argv[1:]
+if argv == ["--version"]:
+    print("9.9.9 (Fake Claude Code)")
+    sys.exit(0)
+
+stdin_text = fc.read_stdin_if_piped()
+fc.dump(argv, stdin_text)
+fc.handle_common_failures()
+
+s = fc.scenario()
+if s == "garbage":
+    sys.stdout.write("this is not json\n")
+    sys.exit(0)
+if s == "empty":
+    sys.exit(0)
+
+# 위치 인자 프롬프트(옵션과 그 값을 건너뛰고 남는 인자) 또는 stdin
+VALUE_FLAGS = {"--output-format", "--allowedTools", "--allowed-tools", "--permission-mode",
+               "--disallowedTools", "--model", "--tools"}
+positional = []
+i = 0
+while i < len(argv):
+    a = argv[i]
+    if a in VALUE_FLAGS:
+        i += 2
+        continue
+    if a.startswith("-"):
+        i += 1
+        continue
+    positional.append(a)
+    i += 1
+prompt = positional[0] if positional else (stdin_text or "")
+
+out = {
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "result": fc.text(),
+    "prompt_len": len(prompt),
+}
+print(json.dumps(out, ensure_ascii=False))

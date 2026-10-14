@@ -152,6 +152,7 @@ class AgentRequest:
     cwd: Path
     mode: Mode
     timeout_sec: int
+    step: str = ""         # "propose" | "critique" | ... 기록용. MockAdapter가 응답을 고르는 기준
 
 @dataclass
 class AgentResult:
@@ -161,6 +162,8 @@ class AgentResult:
     exit_code: int
     duration_sec: float
     rate_limited: bool     # 구독 한도 걸림 감지 여부
+    timed_out: bool        # 타임아웃으로 강제 종료됨 (exit_code=-1)
+    # ok 프로퍼티: exit_code==0 and not timed_out and not rate_limited
 
 class AgentAdapter(Protocol):
     name: str              # "claude" | "codex" | "mock-claude" ...
@@ -168,7 +171,7 @@ class AgentAdapter(Protocol):
     def ask(self, req: AgentRequest) -> AgentResult: ...
 ```
 
-### 5.2 CLI별 호출 방식 (⚠️ M1에서 반드시 `--help`로 실제 플래그 검증)
+### 5.2 CLI별 호출 방식 (✅ 2026-10-15, Claude Code 2.1.300 / codex-cli 0.162.1 의 `--help`로 검증 완료)
 
 | 항목 | Claude Code | Codex CLI |
 |---|---|---|
@@ -179,7 +182,11 @@ class AgentAdapter(Protocol):
 | WRITE 모드 | `--permission-mode acceptEdits --allowedTools Read,Edit,Write,Glob,Grep,Bash` | `--sandbox workspace-write` |
 
 - 플래그는 어댑터 안에 하드코딩하지 말고 `config.py`의 기본값으로 두어, 버전 차이가 나면 `duet.toml`로 덮어쓸 수 있게 한다.
-- 프롬프트가 매우 길어질 수 있으므로(설계안 2개 + 비판), 인자 길이 한계(~100KB)를 넘으면 stdin 전달 또는 임시 파일 경로를 프롬프트에 넣는 방식으로 폴백한다. 어느 방식이 각 CLI에서 동작하는지 M1에서 확인.
+- 프롬프트가 매우 길어질 수 있으므로(설계안 2개 + 비판), `prompt_arg_max_chars`(기본 100,000자)를 넘으면 stdin으로 폴백한다. 두 CLI 모두 `--help`에 명시된 방식이다:
+  - Claude Code: `-p`에서 위치 인자 프롬프트를 생략하면 stdin을 프롬프트로 읽는다.
+  - Codex: 프롬프트 자리에 `-`를 주면 stdin에서 읽는다.
+- `--help` 검증에서 확인한 추가 사실: Claude의 `--permission-mode`는 `acceptEdits|auto|bypassPermissions|manual|dontAsk|plan`, Codex의 `--sandbox`는 `read-only|workspace-write|danger-full-access`. 표의 값은 모두 유효하다.
+- 명령어의 고정 부분(`-p --output-format json`, `exec --skip-git-repo-check`)도 `base_args`로 설정에 노출해 버전 차이에 대응한다.
 - **한도 감지**: stderr/stdout에서 rate limit, usage limit 류 문구를 정규식으로 감지 → `rate_limited=True`. Orchestrator는 상태 저장 후 "한도 도달, 나중에 `duet resume`" 안내하며 종료(자동 대기는 하지 않음).
 
 ### 5.3 판정 형식
@@ -281,16 +288,22 @@ max_review = 3
 timeout_sec = 1200
 max_diff_chars = 60000
 
+prompt_arg_max_chars = 100000   # 넘으면 stdin 폴백
+
 [claude]
 bin = "claude"
+base_args = ["-p", "--output-format", "json"]
 read_args = ["--allowedTools", "Read,Glob,Grep"]
 write_args = ["--permission-mode", "acceptEdits", "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash"]
 
 [codex]
 bin = "codex"
+base_args = ["exec", "--skip-git-repo-check"]
 read_args = ["--sandbox", "read-only"]
 write_args = ["--sandbox", "workspace-write"]
 ```
+
+- 범위를 벗어난 값(`debate_rounds` 0~5, `max_review` 1~10, implementer == reviewer 등)은 조용히 보정하지 않고 에러로 거부한다.
 
 `tomllib`(3.11+ 표준 라이브러리)로 읽는다.
 
