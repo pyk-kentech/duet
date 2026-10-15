@@ -391,6 +391,14 @@ write_args = ["--sandbox", "workspace-write"]
 - README(설치, 로그인 전제, 사용 예, 커스텀 템플릿, 주의사항)
 - ✅ 사용자가 실제 CLI로 `--design-only` 한 번 돌려볼 수 있는 상태
 
+### M8. 설정·모델·사용량·환경 점검 (2026-10-15 사용자 요청으로 추가)
+- `settings.py`, `usage.py`, `doctor.py`, `ui/terminal.py`, `duet doctor`, `--claude-model` 등
+- ✅ 설정 층 우선순위, 모델 플래그, 사용량 수집(가짜 CLI·가짜 세션 기록), 점검, pty 터미널 입력 테스트
+
+### M9. 원격 머신 (2026-10-15 사용자 요청으로 추가)
+- `remote.py`(duet.pyz 배포, ssh, `duet _api`), 작업 기록 파일화(`duet _job`)
+- ✅ 가짜 ssh 로 배포 → 원격 mock 실행 → 원격 기록 조회까지, 헤드리스 브라우저로 화면 확인
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -442,4 +450,43 @@ UI 의 실행 버튼은 셸 권한이 있는 에이전트를 띄우므로, 다�
 - CSP `script-src 'self'`, 인라인 스크립트·스타일 없음, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`.
 - 모델 출력(마크다운, diff)은 innerHTML 을 쓰지 않고 DOM 노드로만 그린다. 링크는 http(s) 만 클릭 가능.
 - 경로 인자는 등록된 프로젝트, 실제 run 디렉터리, `NN_*.md` 기록 파일, 16진 커밋 해시만 허용.
+
+---
+
+## 14. 설정·모델·사용량·환경 점검
+
+### 전역 설정 `~/.duet/settings.json`
+- `workspace_roots`: 새 실행 때 고르는 상위 폴더 목록(첫 번째가 기본). UI 는 "위치 + 폴더 이름"으로 경로를 만든다.
+- `defaults`: duet.toml 과 같은 형식의 기본 실행 설정. 우선순위는 **CLI 인자 > `<workdir>/duet.toml` > settings.json defaults > 기본값**. 파일이 깨져 있으면 무시한다.
+- `machines`: 원격 머신(15장).
+
+### 모델·추론 강도
+- `[claude] model/effort` → `claude --model X --effort Y`, `[codex] model/effort` → `codex exec -m X -c model_reasoning_effort="Y"`. 비우면 각 CLI 의 기본값.
+- CLI: `duet run ... --claude-model opus --claude-effort high --codex-model gpt-6.1-sol --codex-effort xhigh`.
+- 실행 상태(`run.json` config)에 저장해 resume 때 처음과 같은 모델을 쓴다.
+- UI 후보: Claude 는 별칭(fable/opus/sonnet/haiku)과 전체 이름, Codex 는 `~/.codex/models_cache.json` 의 모델과 모델별 지원 추론 강도.
+
+### 사용량 (로컬 파일만 읽음, 구독을 쓰지 않음)
+- 호출마다 `AgentResult.usage` → 기록 메타(`tokens_in`, `tokens_out`, `cost_usd`, `model`)와 `run.json` calls 에 저장.
+  - Claude: `-p --output-format json` 응답의 usage·total_cost_usd·modelUsage.
+  - Codex: 호출 직후 `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` 중 같은 작업 폴더·시작 시각 이후의 세션에서 token_count(누적 토큰)와 rate_limits.
+- 구독 한도: Codex 는 최근 세션 기록의 rate_limits(창별 사용률 %, 초기화 시각, 플랜). Claude CLI 는 한도(%)를 노출하지 않으므로 `~/.claude/projects/*.jsonl` 의 메시지 사용량을 합산해 최근 5시간·7일 토큰만 보여준다.
+- UI '사용량' 화면: Codex 한도 막대, Claude 토큰, duet 실행의 에이전트별·날짜별·프로젝트별 합계. 실행 화면에는 에이전트별 토큰과 Codex 한도 70% 이상 경고.
+
+### 환경 점검과 설치·로그인
+- `duet doctor [--json]`: duet/Python, git, curl, uv, Claude Code(설치·`claude auth status`), Codex CLI(설치·`codex login status`).
+- UI '환경·로그인' 화면의 버튼은 **고정된 동작만** 실행한다(임의 명령 없음):
+  - 설치: `curl -fsSL https://claude.ai/install.sh | bash`, `curl -fsSL https://chatgpt.com/codex/install.sh | sh`, `curl -LsSf https://astral.sh/uv/install.sh | sh`, `uv python install 3.12`, git/curl 은 시스템 패키지 관리자(sudo).
+  - 로그인: `claude auth login`, `codex login --device-auth`. 로그아웃도 제공.
+- 동작은 가상 터미널(pty)에서 돌고, UI 가 출력(제어 문자 제거)을 보여주며 링크를 뽑아 주고, 입력칸으로 코드·sudo 비밀번호(숨김)를 보낼 수 있다.
+- 설치 스크립트가 `~/.local/bin` 에 두므로 duet 는 자식 프로세스 PATH 끝에 `~/.local/bin`, `~/.duet/bin` 을 덧붙인다(사용자 PATH 우선).
+
+## 15. 원격 머신
+
+- 설정의 머신: `{id, name, ssh: "user@host", port, workspace_root, python}`. SSH 는 **키 인증만**(BatchMode), ControlMaster 로 연결 재사용.
+- 원격에는 Python 3.11+ 만 필요하다. UI 의 '배포'가 설치된 duet 패키지로 실행 가능한 zip(`duet.pyz`, 내용 해시로 버전 비교)을 만들어 `~/.duet/bin/` 에 복사하고 `~/.duet/bin/duet` 래퍼를 만든다. Python 이 없으면 uv → Python 3.12 설치 버튼으로 준비한다.
+- 원격 조회·동작은 `ssh <머신> <python> ~/.duet/bin/duet.pyz _api <메서드>` (인자·결과 JSON). 로컬 HTTP API 와 같은 메서드 표를 쓴다. 원격 실행 기록·프로젝트 목록은 원격 머신의 `.duet/`, `~/.duet/` 에 남는다.
+- UI 는 모든 화면·주소가 머신을 구분한다(`#/m/<id>/p/<경로>/r/<run>`). 프로젝트 목록은 머신별로 묶고, 원격 목록은 8초 캐시.
+- 설치·로그인 동작은 `ssh -tt <머신> '<명령>'` 으로 같은 터미널 화면에서 한다.
+- UI 가 시작한 작업은 `~/.duet/jobs/*.json` 에 기록하고, `duet _job` 래퍼가 끝날 때 종료 코드를 `.rc` 에 남긴다(UI 를 다시 켜거나 원격에서도 결과를 안다).
 

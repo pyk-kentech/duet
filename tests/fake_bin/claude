@@ -11,6 +11,14 @@ argv = sys.argv[1:]
 if argv == ["--version"]:
     print("9.9.9 (Fake Claude Code)")
     sys.exit(0)
+if argv[:2] == ["auth", "login"]:
+    print("Browser didn't open? Use the url below to sign in:")
+    print("https://claude.ai/oauth/authorize?code=true&state=FAKE")
+    sys.stdout.write("Paste code here if prompted > ")
+    sys.stdout.flush()
+    code = sys.stdin.readline().strip()
+    print("Login successful." if code else "No code.")
+    sys.exit(0 if code else 1)
 if argv[:2] == ["auth", "status"]:
     logged = os.environ.get("DUET_FAKE_LOGGED", "1") == "1"
     print(json.dumps({"loggedIn": logged, "authMethod": "claude.ai" if logged else "none",
