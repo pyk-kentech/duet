@@ -31,6 +31,13 @@ duet --help
 pytest -q                                          # 실제 CLI를 호출하지 않는 테스트
 ```
 
+venv를 활성화하지 않고도 어디서나 `duet`을 쓰려면 [uv](https://docs.astral.sh/uv/)로 설치합니다
+(`~/.local/bin/duet`에 링크되며, `--editable`이라 저장소를 고치면 바로 반영됩니다):
+
+```bash
+uv tool install --python 3.12 --editable /path/to/duet
+```
+
 ## 사용법
 
 ```bash
