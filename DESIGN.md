@@ -41,18 +41,21 @@ duet run "..." --workdir ./x --skip-design
 # 역할 바꾸기
 duet run "..." --workdir ./x --implementer codex --reviewer claude
 
-# 중단된 실행 이어하기 (마지막 run 기준)
+# 중단된 실행 이어하기 (마지막 run 기준, --run <id> 로 특정 run)
 duet resume --workdir ./x
 
 # 지난 실행 기록 보기
 duet log --workdir ./x            # 최근 run 요약
 duet log --workdir ./x --full     # 전체 발언을 순서대로 출력
+duet log --workdir ./x --all      # 모든 run 한 줄씩
 
 # CLI 없이 흐름 테스트
 duet run "..." --workdir ./x --mock
 ```
 
 실행 중 터미널에는 단계별 진행 상황(누가 무엇을 하는 중인지, 소요 시간, 판정)이 한 줄씩 찍힌다.
+
+종료 코드: 0 승인 완료/설계만 완료, 1 미승인 종료, 2 사용 오류, 3 중단(한도·반복 실패 → `resume`).
 
 ---
 
@@ -246,6 +249,9 @@ BuildPhase
 
 - `.duet/`는 자동으로 `.gitignore`에 추가.
 - 각 기록 파일 상단에 메타데이터 주석(에이전트, 모드, 소요 시간, exit code)을 넣는다.
+- 실패한 호출도 `NN_label_failed.md` 로 남긴다(stderr 포함).
+- `done` 은 완료한 스텝 키 목록. resume 은 이 목록에 없는 스텝부터 실행하며, 필요한 텍스트는 기록 파일에서 다시 읽는다.
+- `done_design` 은 `--design-only` 로 설계만 끝낸 상태(끝난 실행이므로 resume 불가).
 
 ```json
 {
@@ -259,7 +265,8 @@ BuildPhase
   "base_commit": "5da7bc7",
   "proposals": { "claude": "01_propose_claude.md", "codex": "02_propose_codex.md" },
   "last_review": "07_review1_codex.md",
-  "status": "running | done_approved | done_unapproved | stopped_rate_limit | failed",
+  "status": "running | done_approved | done_unapproved | done_design | stopped_rate_limit | failed",
+  "done": ["propose:claude", "propose:codex", "critique:1:claude", "..."],
   "calls": [ { "agent": "claude", "step": "propose", "sec": 41.2, "exit": 0 } ]
 }
 ```
