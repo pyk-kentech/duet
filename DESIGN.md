@@ -178,7 +178,7 @@ class AgentAdapter(Protocol):
 
 | 항목 | Claude Code | Codex CLI |
 |---|---|---|
-| 헤드리스 실행 | `claude -p <prompt>` | `codex exec <prompt>` |
+| 헤드리스 실행 | `claude -p [옵션] -- <prompt>` | `codex exec [옵션] <prompt>` |
 | 결과 받기 | `--output-format json` → `.result` | `--output-last-message <file>` |
 | 작업 디렉터리 | `cwd`로 지정 | `-C <dir>` (+ `--skip-git-repo-check`) |
 | READ 모드 | `--allowedTools Read,Glob,Grep` | `--sandbox read-only` |
@@ -188,6 +188,7 @@ class AgentAdapter(Protocol):
 - 프롬프트가 매우 길어질 수 있으므로(설계안 2개 + 비판), `prompt_arg_max_chars`(기본 100,000자)를 넘으면 stdin으로 폴백한다. 두 CLI 모두 `--help`에 명시된 방식이다:
   - Claude Code: `-p`에서 위치 인자 프롬프트를 생략하면 stdin을 프롬프트로 읽는다.
   - Codex: 프롬프트 자리에 `-`를 주면 stdin에서 읽는다.
+- **Claude 는 프롬프트 앞에 `--` 가 필수**: `--allowedTools <tools...>` 가 공백 구분 가변 인자라서 뒤따르는 프롬프트를 도구 이름으로 삼킨다(첫 실제 실행에서 "Input must be provided..." 로 발견). `--` 를 넣으면 파싱을 통과함을 잘못된 API 키 + `--bare` 로 확인(인증 단계에서 실패하므로 사용량 소모 없음). JSON 의 `is_error: true` 는 exit 0 이어도 실패로 본다.
 - `--help` 검증에서 확인한 추가 사실: Claude의 `--permission-mode`는 `acceptEdits|auto|bypassPermissions|manual|dontAsk|plan`, Codex의 `--sandbox`는 `read-only|workspace-write|danger-full-access`. 표의 값은 모두 유효하다.
 - 명령어의 고정 부분(`-p --output-format json`, `exec --skip-git-repo-check`)도 `base_args`로 설정에 노출해 버전 차이에 대응한다.
 - **한도 감지**: stderr/stdout에서 rate limit, usage limit 류 문구를 정규식으로 감지 → `rate_limited=True`. Orchestrator는 상태 저장 후 "한도 도달, 나중에 `duet resume`" 안내하며 종료(자동 대기는 하지 않음).

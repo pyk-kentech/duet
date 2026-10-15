@@ -15,6 +15,7 @@ from duet.agents.claude_code import ClaudeCodeAdapter
 from duet.agents.codex import CodexAdapter
 from duet.agents.mock import MockAdapter
 from duet.config import Config, load_config
+from duet.runner import run_process
 from tests.conftest import read_dump
 
 
@@ -29,7 +30,7 @@ class TestClaude:
         cmd, stdin = a.build_command(req(tmp_path, mode=Mode.READ))
         assert stdin is None
         assert cmd[0].endswith("fake_bin/claude")
-        assert cmd[1:] == ["-p", "--output-format", "json", "--allowedTools", "Read,Glob,Grep", "안녕"]
+        assert cmd[1:] == ["-p", "--output-format", "json", "--allowedTools", "Read,Glob,Grep", "--", "안녕"]
 
     def test_write_command(self, fake_cfg: Config, tmp_path: Path):
         a = ClaudeCodeAdapter(fake_cfg)
@@ -80,6 +81,24 @@ class TestClaude:
         assert p('{"no_result": 1}') == '{"no_result": 1}'
         assert p("[1,2]") == "[1,2]"
         assert p("") == ""
+        full = ClaudeCodeAdapter.parse_output_full
+        assert full('{"result": "Invalid API key", "is_error": true}') == ("Invalid API key", True)
+        assert full('{"result": "ok", "is_error": false}') == ("ok", False)
+
+    def test_json_is_error_counts_as_failure(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("DUET_FAKE_SCENARIO", "json_error")
+        r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path))
+        assert not r.ok and r.exit_code == 1 and r.text == "Invalid API key · Fix external API key"
+
+    def test_prompt_not_swallowed_by_variadic_option(self, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
+        # 가짜 claude 는 실제처럼 --allowedTools 가 뒤따르는 인자를 삼킨다. `--` 가 없으면 실패해야 한다.
+        monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+        r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path, prompt="프롬프트"))
+        assert r.ok
+        d = read_dump(dump_path)
+        assert d["argv"][-2:] == ["--", "프롬프트"]
+        bad = run_process([fake_cfg.claude.bin, "-p", "--allowedTools", "Read,Glob,Grep", "프롬프트"], cwd=tmp_path)
+        assert bad.exit_code == 1 and "Input must be provided" in bad.stderr
 
     def test_failure(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
         monkeypatch.setenv("DUET_FAKE_SCENARIO", "fail")
@@ -119,7 +138,7 @@ class TestClaude:
     def test_custom_flags_from_config(self, fake_cfg: Config, tmp_path: Path):
         cfg = load_config(None, {"claude": {"bin": fake_cfg.claude.bin, "read_args": ["--tools", "Read"]}})
         cmd, _ = ClaudeCodeAdapter(cfg).build_command(req(tmp_path))
-        assert cmd[-3:] == ["--tools", "Read", "안녕"]
+        assert cmd[-4:] == ["--tools", "Read", "--", "안녕"]
 
 
 # ====================================================================== codex

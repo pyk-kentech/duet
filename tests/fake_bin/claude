@@ -22,23 +22,42 @@ if s == "garbage":
     sys.exit(0)
 if s == "empty":
     sys.exit(0)
+if s == "json_error":
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": True,
+                      "api_error_status": 401, "result": "Invalid API key · Fix external API key"}))
+    sys.exit(0)
 
-# 위치 인자 프롬프트(옵션과 그 값을 건너뛰고 남는 인자) 또는 stdin
-VALUE_FLAGS = {"--output-format", "--allowedTools", "--allowed-tools", "--permission-mode",
-               "--disallowedTools", "--model", "--tools"}
+# 실제 claude(commander)처럼 파싱: 값 하나짜리 옵션, 가변 인자 옵션(<tools...>: 다음 옵션이나 `--` 전까지 삼킴),
+# `--` 뒤는 전부 위치 인자. 위치 인자가 없고 stdin 도 없으면 실제와 같은 에러.
+VALUE_FLAGS = {"--output-format", "--permission-mode", "--model", "--effort"}
+VARIADIC_FLAGS = {"--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools", "--tools"}
 positional = []
 i = 0
 while i < len(argv):
     a = argv[i]
+    if a == "--":
+        positional.extend(argv[i + 1:])
+        break
     if a in VALUE_FLAGS:
         i += 2
+        continue
+    if a in VARIADIC_FLAGS:
+        i += 1
+        while i < len(argv) and not argv[i].startswith("-"):
+            i += 1
         continue
     if a.startswith("-"):
         i += 1
         continue
     positional.append(a)
     i += 1
-prompt = positional[0] if positional else (stdin_text or "")
+if positional:
+    prompt = positional[0]
+elif stdin_text:
+    prompt = stdin_text
+else:
+    sys.stderr.write("Error: Input must be provided either through stdin or as a prompt argument when using --print\n")
+    sys.exit(1)
 
 out = {
     "type": "result",
