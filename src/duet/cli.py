@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import signal
 import sys
 from pathlib import Path
@@ -40,6 +41,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--design-only", action="store_true", help="설계 토론만 하고 종료")
     p_run.add_argument("--skip-design", action="store_true", help="기존 DESIGN.md로 바로 구현")
     p_run.add_argument("--force", action="store_true", help="커밋 안 된 변경이 있어도 진행")
+    for agent, example in (("claude", "opus, sonnet, claude-opus-5-5"), ("codex", "gpt-6.1-sol")):
+        p_run.add_argument(f"--{agent}-model", metavar="MODEL", help=f"{agent} 모델 (예: {example}). 기본: CLI 기본값")
+        p_run.add_argument(f"--{agent}-effort", metavar="LEVEL", help=f"{agent} 추론 강도 (예: low, medium, high, xhigh)")
     p_run.set_defaults(func=cmd_run)
 
     p_resume = sub.add_parser("resume", help="중단된 마지막 실행을 이어서 진행")
@@ -63,6 +67,19 @@ def build_parser() -> argparse.ArgumentParser:
                       help="목록에 추가할 작업 폴더 (여러 번 지정 가능)")
     p_ui.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않음")
     p_ui.set_defaults(func=cmd_ui)
+
+    p_doc = sub.add_parser("doctor", help="실행 환경 점검 (git, Claude Code, Codex CLI 설치·로그인)")
+    p_doc.add_argument("--json", action="store_true", help="JSON 으로 출력")
+    p_doc.set_defaults(func=cmd_doctor)
+
+    # 내부용: 원격 UI 호출, UI 가 띄운 작업의 종료 코드 기록
+    p_api = sub.add_parser("_api", help=argparse.SUPPRESS)
+    p_api.add_argument("method")
+    p_api.set_defaults(func=cmd_api)
+    p_job = sub.add_parser("_job", help=argparse.SUPPRESS)
+    p_job.add_argument("rc_file")
+    p_job.add_argument("rest", nargs=argparse.REMAINDER)
+    p_job.set_defaults(func=cmd_job)
     return parser
 
 
@@ -95,6 +112,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         overrides={
             "implementer": args.implementer, "reviewer": args.reviewer, "synth": args.synth,
             "debate_rounds": args.debate_rounds, "max_review": args.max_review,
+            "claude.model": args.claude_model, "claude.effort": args.claude_effort,
+            "codex.model": args.codex_model, "codex.effort": args.codex_effort,
         },
     )
     return Orchestrator().run(opts).exit_code
@@ -113,6 +132,47 @@ def cmd_ui(args: argparse.Namespace) -> int:
     except OSError as e:
         raise OrchestratorError(str(e)) from e
     return EXIT_OK
+
+
+# ---------------------------------------------------------------------- doctor / internal
+def cmd_doctor(args: argparse.Namespace) -> int:
+    from duet.doctor import format_checks, ready, run_checks
+
+    checks = run_checks()
+    if args.json:
+        print(json.dumps({"checks": checks, "ready": ready(checks)}, ensure_ascii=False, indent=2))
+    else:
+        print(format_checks(checks))
+        print()
+        print("준비됨: 실제 실행이 가능합니다." if ready(checks) else
+              "준비 안 됨: 위의 ✗/! 항목을 해결하세요. `duet ui` 의 '환경·로그인' 화면에서 버튼으로 할 수 있습니다.")
+    return EXIT_OK if ready(checks) else EXIT_UNAPPROVED
+
+
+def cmd_api(args: argparse.Namespace) -> int:
+    """원격 UI 호출: stdin 의 JSON 인자 → stdout 한 줄 JSON {"ok": ...} 또는 {"error": ..., "status": ...}"""
+    from duet.ui.dashboard import ApiError, Dashboard, dispatch
+
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+        out: dict = {"ok": dispatch(Dashboard(), args.method, payload)}
+    except ApiError as e:
+        out = {"error": e.message, "status": e.status}
+    except Exception as e:  # noqa: BLE001
+        out = {"error": f"원격 오류: {type(e).__name__}: {e}", "status": 500}
+    sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+    return EXIT_OK
+
+
+def cmd_job(args: argparse.Namespace) -> int:
+    rest = args.rest[1:] if args.rest[:1] == ["--"] else args.rest
+    rc = 1
+    try:
+        rc = main(rest)
+    finally:
+        Path(args.rc_file).write_text(str(rc), encoding="utf-8")
+    return rc
 
 
 # ---------------------------------------------------------------------- log

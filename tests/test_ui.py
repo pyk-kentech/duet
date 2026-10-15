@@ -31,10 +31,12 @@ def server():
     srv.shutdown()
     srv.server_close()
     # UI 가 띄운 작업이 남지 않게
-    for j in srv.dashboard.jobs:
-        if j.popen.poll() is None:
-            j.popen.kill()
-            j.popen.wait()
+    for popen in srv.dashboard._popens:
+        if popen.poll() is None:
+            popen.kill()
+            popen.wait()
+    for t in srv.terms.values():
+        t.kill()
 
 
 def call(srv, method, path, *, body=None, token=TOKEN, host=None, ctype="application/json", raw=False):

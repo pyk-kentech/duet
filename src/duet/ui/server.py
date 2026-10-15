@@ -15,6 +15,8 @@ import ipaddress
 import json
 import secrets
 import sys
+import threading
+import time
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -22,7 +24,13 @@ from importlib import resources
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlsplit
 
-from duet.ui.dashboard import ApiError, Dashboard
+from duet.config import CLAUDE_MODEL_SUGGESTIONS, EFFORT_SUGGESTIONS
+from duet.doctor import ACTIONS, PATH_PREFIX, action_shell
+from duet.remote import Remote, RemoteError
+from duet.settings import LOCAL_MACHINE, SettingsError, load_settings, save_settings, validate_machine
+from duet.ui.dashboard import ApiError, Dashboard, dispatch
+from duet.ui.terminal import TermJob
+from duet.usage import codex_home
 
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}
 MAX_BODY = 1_000_000
@@ -48,6 +56,9 @@ class DuetServer(ThreadingHTTPServer):
         self.dashboard = dashboard
         self.token = token
         self.loopback = is_loopback(addr[0])
+        self.terms: dict[str, TermJob] = {}
+        self._terms_lock = threading.Lock()
+        self._remote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
     @property
     def port(self) -> int:
@@ -56,6 +67,192 @@ class DuetServer(ThreadingHTTPServer):
     def allowed_hosts(self) -> set[str]:
         p = self.port
         return {f"127.0.0.1:{p}", f"localhost:{p}", f"[::1]:{p}"}
+
+    # ================================================================ machines
+    def machines(self) -> list[dict[str, Any]]:
+        try:
+            return list(load_settings().get("machines") or [])
+        except SettingsError:
+            return []
+
+    def machine(self, mid: str) -> dict[str, Any]:
+        for m in self.machines():
+            if m["id"] == mid:
+                return m
+        raise ApiError(404, f"등록되지 않은 머신입니다: {mid}")
+
+    def call(self, machine: str, method: str, args: dict[str, Any]) -> Any:
+        if machine == LOCAL_MACHINE:
+            return dispatch(self.dashboard, method, args)
+        try:
+            return Remote(self.machine(machine)).api(method, args)
+        except RemoteError as e:
+            raise ApiError(e.status, e.message) from e
+
+    def all_projects(self) -> dict[str, Any]:
+        local = dispatch(self.dashboard, "projects", {})
+        groups = [{"id": LOCAL_MACHINE, "name": "이 머신", "local": True, **local}]
+        remotes = self.machines()
+        results: dict[str, dict[str, Any]] = {}
+
+        def fetch(m: dict[str, Any]) -> None:
+            cached = self._remote_cache.get(m["id"])
+            if cached and time.monotonic() - cached[0] < REMOTE_CACHE_SEC:
+                results[m["id"]] = cached[1]
+                return
+            try:
+                data = Remote(m).api("projects", {}, timeout=20)
+                res = {"projects": data["projects"], "jobs": data["jobs"], "error": None}
+            except RemoteError as e:
+                res = {"projects": [], "jobs": [], "error": e.message}
+            self._remote_cache[m["id"]] = (time.monotonic(), res)
+            results[m["id"]] = res
+
+        threads = [threading.Thread(target=fetch, args=(m,), daemon=True) for m in remotes]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(25)
+        for m in remotes:
+            r = results.get(m["id"], {"projects": [], "jobs": [], "error": "응답 없음"})
+            groups.append({"id": m["id"], "name": m.get("name") or m["id"], "local": False,
+                           "ssh": m["ssh"], "workspace_root": m.get("workspace_root") or "", **r})
+        # 예전 화면 호환: 최상위 projects/jobs 는 이 머신 것
+        return {"machines": groups, "projects": local["projects"], "jobs": local["jobs"]}
+
+    def probe_machine(self, mid: str) -> dict[str, Any]:
+        m = self.machine(mid)
+        info = Remote(m).probe()
+        if info.get("python") and info["python"] != m.get("python"):
+            data = load_settings()
+            for x in data["machines"]:
+                if x["id"] == mid:
+                    x["python"] = info["python"]
+            save_settings(data)
+        return info
+
+    def deploy_machine(self, mid: str) -> dict[str, Any]:
+        m = self.machine(mid)
+        if not m.get("python"):
+            info = self.probe_machine(mid)
+            if not info.get("reachable"):
+                raise ApiError(502, info.get("error") or "연결 실패")
+            if not info.get("python"):
+                raise ApiError(400, "원격에 Python 3.11 이상이 없습니다. 먼저 'uv 설치' → 'Python 3.12 설치'를 하세요.")
+            m = self.machine(mid)
+        try:
+            out = Remote(m).deploy()
+        except RemoteError as e:
+            raise ApiError(e.status, e.message) from e
+        self._remote_cache.pop(mid, None)
+        return out
+
+    # ================================================================ settings
+    def settings_view(self) -> dict[str, Any]:
+        try:
+            data = load_settings()
+            err = None
+        except SettingsError as e:
+            data, err = {"workspace_roots": [], "defaults": {}, "machines": []}, str(e)
+        return {"settings": data, "error": err, "suggestions": model_suggestions(),
+                "effective": self.dashboard._defaults(None)}
+
+    def save_settings(self, body: dict[str, Any]) -> dict[str, Any]:
+        data = load_settings()
+        if "workspace_roots" in body:
+            data["workspace_roots"] = [str(r).strip() for r in body["workspace_roots"] if str(r).strip()]
+        if "defaults" in body:
+            data["defaults"] = _clean_defaults(body["defaults"])
+        try:
+            save_settings(data)
+        except SettingsError as e:
+            raise ApiError(400, str(e)) from e
+        return self.settings_view()
+
+    def upsert_machine(self, body: dict[str, Any]) -> dict[str, Any]:
+        m = {k: body.get(k) for k in ("id", "name", "ssh", "port", "workspace_root", "python") if body.get(k) not in (None, "")}
+        if "port" in m:
+            try:
+                m["port"] = int(m["port"])
+            except (TypeError, ValueError):
+                raise ApiError(400, "포트는 숫자여야 합니다.") from None
+        try:
+            validate_machine(m)
+        except SettingsError as e:
+            raise ApiError(400, str(e)) from e
+        data = load_settings()
+        others = [x for x in data["machines"] if x["id"] != m["id"]]
+        prev = next((x for x in data["machines"] if x["id"] == m["id"]), {})
+        if "python" not in m and prev.get("python") and prev.get("ssh") == m["ssh"]:
+            m["python"] = prev["python"]
+        data["machines"] = [*others, m]
+        try:
+            save_settings(data)
+        except SettingsError as e:
+            raise ApiError(400, str(e)) from e
+        self._remote_cache.pop(m["id"], None)
+        return self.settings_view()
+
+    def delete_machine(self, mid: str | None) -> dict[str, Any]:
+        data = load_settings()
+        data["machines"] = [x for x in data["machines"] if x["id"] != mid]
+        save_settings(data)
+        self._remote_cache.pop(mid or "", None)
+        return self.settings_view()
+
+    # ================================================================ setup / terminal jobs
+    def actions_view(self) -> dict[str, Any]:
+        return {"actions": {a.id: {"title": a.title, "interactive": a.interactive, "note": a.note, "command": a.shell}
+                            for a in ACTIONS.values()}}
+
+    def start_action(self, machine: str, action_id: Any) -> dict[str, Any]:
+        try:
+            action = action_shell(str(action_id))
+        except KeyError:
+            raise ApiError(400, "알 수 없는 동작입니다.") from None
+        if machine == LOCAL_MACHINE:
+            argv = ["sh", "-c", PATH_PREFIX + action.shell]
+        else:
+            argv = Remote(self.machine(machine)).term_argv(action.shell)
+        with self._terms_lock:
+            for t in self.terms.values():
+                if t.running and t.machine == machine and t.title == action.title:
+                    raise ApiError(409, f"'{action.title}' 가 이미 실행 중입니다.")
+            tid = secrets.token_hex(6)
+            job = TermJob(id=tid, title=action.title, argv=argv, machine=machine, note=action.note)
+            self.terms[tid] = job
+        job.start()
+        self._remote_cache.pop(machine, None)
+        return job.snapshot()
+
+    def _term(self, tid: Any) -> TermJob:
+        job = self.terms.get(str(tid))
+        if job is None:
+            raise ApiError(404, "터미널 작업을 찾을 수 없습니다.")
+        return job
+
+    def term(self, tid: Any, offset: int) -> dict[str, Any]:
+        return self._term(tid).snapshot(offset)
+
+    def terms_list(self) -> list[dict[str, Any]]:
+        out = []
+        for t in sorted(self.terms.values(), key=lambda x: x.started_at, reverse=True)[:20]:
+            snap = t.snapshot(10**12)
+            out.append({k: snap[k] for k in ("id", "title", "machine", "running", "returncode", "started_at")})
+        return out
+
+    def term_input(self, tid: Any, text: Any) -> dict[str, Any]:
+        if not isinstance(text, str) or len(text) > 4000 or "\x03" in text:
+            raise ApiError(400, "입력이 잘못되었습니다.")
+        try:
+            self._term(tid).write(text)
+        except (RuntimeError, OSError) as e:
+            raise ApiError(409, str(e)) from e
+        return {"ok": True}
+
+    def term_kill(self, tid: Any) -> dict[str, Any]:
+        self._term(tid).kill()
+        return {"ok": True}
 
     def url(self) -> str:
         host = self.server_address[0]
@@ -167,28 +364,96 @@ class Handler(BaseHTTPRequestHandler):
         self._send(HTTPStatus.OK, _static_text(name).encode("utf-8"), ctype)
 
     # ---------------------------------------------------------------- api
+    # HTTP 경로 → 대시보드 메서드. 쿼리/본문의 machine 이 원격이면 SSH 로 그 머신의 duet _api 를 부른다.
+    ROUTES: dict[tuple[str, str], str] = {
+        ("POST", "/api/projects"): "add_project",
+        ("DELETE", "/api/projects"): "remove_project",
+        ("GET", "/api/runs"): "runs",
+        ("GET", "/api/run"): "run",
+        ("GET", "/api/entry"): "entry",
+        ("GET", "/api/console"): "console",
+        ("GET", "/api/design"): "design",
+        ("GET", "/api/commits"): "commits",
+        ("GET", "/api/diff"): "diff",
+        ("GET", "/api/jobs"): "jobs",
+        ("POST", "/api/actions/run"): "start_run",
+        ("POST", "/api/actions/resume"): "resume",
+        ("POST", "/api/actions/stop"): "stop",
+        ("GET", "/api/usage"): "usage",
+        ("GET", "/api/doctor"): "doctor",
+        ("GET", "/api/defaults"): "defaults",
+    }
+
     def _api(self, method: str, path: str, q: dict[str, str], body: dict[str, Any]) -> Any:
-        d = self.server.dashboard
-        routes: dict[tuple[str, str], Callable[[], Any]] = {
-            ("GET", "/api/projects"): lambda: {"projects": d.projects(), "jobs": d.jobs_list()},
-            ("POST", "/api/projects"): lambda: d.add_project(body.get("path")),
-            ("DELETE", "/api/projects"): lambda: d.remove_project(q.get("project")),
-            ("GET", "/api/runs"): lambda: d.runs(q.get("project")),
-            ("GET", "/api/run"): lambda: d.run(q.get("project"), q.get("run")),
-            ("GET", "/api/entry"): lambda: d.entry(q.get("project"), q.get("run"), q.get("file")),
-            ("GET", "/api/console"): lambda: d.console(q.get("project"), q.get("run"), _int(q.get("offset"))),
-            ("GET", "/api/design"): lambda: d.design(q.get("project"), q.get("run"), q.get("which") or "current"),
-            ("GET", "/api/commits"): lambda: d.commits(q.get("project"), q.get("run")),
-            ("GET", "/api/diff"): lambda: d.diff(q.get("project"), q.get("run"), q.get("commit") or None),
-            ("GET", "/api/jobs"): lambda: {"jobs": d.jobs_list()},
-            ("POST", "/api/actions/run"): lambda: d.start_run(body),
-            ("POST", "/api/actions/resume"): lambda: d.resume(body),
-            ("POST", "/api/actions/stop"): lambda: d.stop(body),
+        srv = self.server
+        args = {**q, **body}
+        machine = str(args.pop("machine", "") or LOCAL_MACHINE)
+        special = {
+            ("GET", "/api/projects"): lambda: srv.all_projects(),
+            ("GET", "/api/settings"): lambda: srv.settings_view(),
+            ("POST", "/api/settings"): lambda: srv.save_settings(body),
+            ("POST", "/api/machines"): lambda: srv.upsert_machine(body),
+            ("DELETE", "/api/machines"): lambda: srv.delete_machine(q.get("id")),
+            ("POST", "/api/machines/probe"): lambda: srv.probe_machine(machine),
+            ("POST", "/api/machines/deploy"): lambda: srv.deploy_machine(machine),
+            ("GET", "/api/setup/actions"): lambda: srv.actions_view(),
+            ("POST", "/api/setup/action"): lambda: srv.start_action(machine, body.get("action")),
+            ("GET", "/api/term"): lambda: srv.term(q.get("id"), _int(q.get("offset"))),
+            ("GET", "/api/terms"): lambda: {"terms": srv.terms_list()},
+            ("POST", "/api/term/input"): lambda: srv.term_input(body.get("id"), body.get("text")),
+            ("POST", "/api/term/kill"): lambda: srv.term_kill(body.get("id")),
         }
-        handler = routes.get((method, path))
-        if handler is None:
+        handler = special.get((method, path))
+        if handler is not None:
+            return handler()
+        name = self.ROUTES.get((method, path))
+        if name is None:
             raise ApiError(404, "없는 API 입니다.")
-        return handler()
+        return srv.call(machine, name, args)
+
+
+REMOTE_CACHE_SEC = 8.0
+
+
+def model_suggestions() -> dict[str, Any]:
+    """모델 선택 상자에 보여줄 후보. Codex 는 ~/.codex/models_cache.json 에서 읽는다."""
+    codex: list[dict[str, Any]] = []
+    try:
+        cache = json.loads((codex_home() / "models_cache.json").read_text(encoding="utf-8"))
+        for m in cache.get("models", []):
+            if isinstance(m, dict) and m.get("slug") and m.get("visibility") == "list":
+                codex.append({"id": m["slug"], "label": m.get("display_name") or m["slug"],
+                              "efforts": [e.get("effort") for e in m.get("supported_reasoning_levels") or [] if isinstance(e, dict)],
+                              "default_effort": m.get("default_reasoning_level")})
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {
+        "claude": {"models": [{"id": x, "label": x} for x in CLAUDE_MODEL_SUGGESTIONS],
+                   "efforts": EFFORT_SUGGESTIONS["claude"]},
+        "codex": {"models": codex, "efforts": EFFORT_SUGGESTIONS["codex"]},
+    }
+
+
+def _clean_defaults(d: Any) -> dict[str, Any]:
+    if not isinstance(d, dict):
+        raise ApiError(400, "defaults 는 객체여야 합니다.")
+    out: dict[str, Any] = {}
+    for k in ("implementer", "reviewer", "synth"):
+        if d.get(k):
+            out[k] = str(d[k])
+    for k in ("debate_rounds", "max_review", "timeout_sec"):
+        if d.get(k) not in (None, ""):
+            try:
+                out[k] = int(d[k])
+            except (TypeError, ValueError):
+                raise ApiError(400, f"{k} 는 숫자여야 합니다.") from None
+    for agent in ("claude", "codex"):
+        sub = d.get(agent) or {}
+        if isinstance(sub, dict):
+            clean = {k: str(sub[k]).strip() for k in ("model", "effort") if str(sub.get(k) or "").strip()}
+            if clean:
+                out[agent] = clean
+    return out
 
 
 def _int(v: str | None) -> int:

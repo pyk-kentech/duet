@@ -39,6 +39,7 @@ class AgentResult:
     rate_limited: bool = False  # 구독 한도 걸림 감지 여부
     timed_out: bool = False
     command: list[str] = field(default_factory=list, repr=False)
+    usage: dict | None = None   # input_tokens, output_tokens, cached_input_tokens, cost_usd, model, rate_limits ...
 
     @property
     def ok(self) -> bool:

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
@@ -37,6 +38,15 @@ DEFAULT_DIFF_EXCLUDES = [
 RENAMED_KEYS = {"prompt_arg_max_chars": "prompt_arg_max_bytes"}
 
 
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:\[\]/-]{0,80}$")
+EFFORT_SUGGESTIONS = {
+    "claude": ["low", "medium", "high", "xhigh", "max"],
+    "codex": ["minimal", "low", "medium", "high", "xhigh", "max"],
+}
+CLAUDE_MODEL_SUGGESTIONS = ["fable", "opus", "sonnet", "haiku",
+                            "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+
+
 class ConfigError(Exception):
     """설정 값이 잘못됨."""
 
@@ -47,6 +57,8 @@ class AgentConfig:
     base_args: list[str] = field(default_factory=list)
     read_args: list[str] = field(default_factory=list)
     write_args: list[str] = field(default_factory=list)
+    model: str = ""     # 비우면 CLI 기본 모델
+    effort: str = ""    # 추론 강도. 비우면 CLI 기본값
 
 
 def _default_claude() -> AgentConfig:
@@ -126,6 +138,10 @@ class Config:
                 v = getattr(ac, key)
                 if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
                     raise ConfigError(f"[{name}] {key}는 문자열 리스트여야 합니다")
+            for key in ("model", "effort"):
+                v = getattr(ac, key)
+                if not isinstance(v, str) or not _TOKEN_RE.match(v):
+                    raise ConfigError(f"[{name}] {key} 값이 잘못되었습니다: {v!r} (영문·숫자·.-_:[]/ 만)")
 
 
 CONFIG_FILENAME = "duet.toml"
@@ -139,18 +155,27 @@ _AGENT_KEYS = {f.name for f in fields(AgentConfig)}
 def load_config(
     workdir: Path | str | None = None,
     overrides: Mapping[str, Any] | None = None,
+    *,
+    global_defaults: Mapping[str, Any] | None = None,
 ) -> Config:
-    """기본값 → duet.toml → overrides 순으로 덮어쓴 Config를 돌려준다.
+    """기본값 → 전역 설정(~/.duet/settings.json 의 defaults) → duet.toml → overrides 순으로 덮어쓴 Config.
 
     overrides의 None 값은 '지정 안 함'으로 보고 무시한다(CLI 인자 기본값 None 대응).
+    overrides 에는 "claude.model" 같은 점 표기 키도 쓸 수 있다.
     """
     cfg = Config()
+    if global_defaults is None:
+        from duet.settings import global_defaults as _gd  # 순환 import 방지
+
+        global_defaults = _gd()
+    if global_defaults:
+        cfg = _apply(cfg, global_defaults, source="전역 설정(~/.duet/settings.json)")
     if workdir is not None:
         path = Path(workdir) / CONFIG_FILENAME
         if path.is_file():
             cfg = _apply(cfg, _read_toml(path), source=str(path))
     if overrides:
-        cfg = _apply(cfg, {k: v for k, v in overrides.items() if v is not None}, source="CLI 인자")
+        cfg = _apply(cfg, _nest({k: v for k, v in overrides.items() if v is not None}), source="CLI 인자")
     cfg.validate()
     return cfg
 
@@ -179,3 +204,20 @@ def _apply(cfg: Config, data: Mapping[str, Any], *, source: str) -> Config:
         else:
             raise ConfigError(f"{source}: 알 수 없는 설정 키: {key}")
     return replace(cfg, **top)
+
+
+def _nest(flat: Mapping[str, Any]) -> dict[str, Any]:
+    """{"claude.model": "x"} → {"claude": {"model": "x"}}"""
+    out: dict[str, Any] = {}
+    for k, v in flat.items():
+        if "." in k:
+            head, tail = k.split(".", 1)
+            sub = out.setdefault(head, {})
+            if isinstance(sub, dict):
+                sub[tail] = v
+        else:
+            if isinstance(v, Mapping) and isinstance(out.get(k), dict):
+                out[k].update(v)
+            else:
+                out[k] = v
+    return out

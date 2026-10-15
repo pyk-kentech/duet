@@ -32,7 +32,7 @@ def test_roundtrip(tmp_path: Path):
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["task"] == "메모 CLI" and raw["calls"][0] == {
         "agent": "claude", "step": "propose", "sec": 41.3, "exit": 0,
-        "rate_limited": False, "timed_out": False, "file": "01_propose_claude.md"}
+        "rate_limited": False, "timed_out": False, "file": "01_propose_claude.md", "usage": None}
 
     back = RunState.load(tmp_path)
     assert back == st

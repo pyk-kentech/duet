@@ -58,10 +58,24 @@ class ProcessResult:
         return self.exit_code == 0 and not self.timed_out
 
 
+# 공식 설치 스크립트(claude, codex, uv)가 실행 파일을 두는 곳. 셸 설정을 안 읽는 환경(UI, ssh)에서도 찾게 한다.
+EXTRA_BIN_DIRS = ("~/.local/bin", "~/.duet/bin")
+
+
+def augmented_path(path: str | None) -> str:
+    parts = [p for p in (path or "").split(os.pathsep) if p]
+    for d in EXTRA_BIN_DIRS:
+        full = os.path.expanduser(d)
+        if full not in parts:
+            parts.append(full)
+    return os.pathsep.join(parts)
+
+
 def _merged_env(env: Mapping[str, str] | None) -> dict[str, str]:
     full = dict(os.environ)
     if env:
         full.update(env)
+    full["PATH"] = augmented_path(full.get("PATH"))
     return full
 
 

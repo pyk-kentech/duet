@@ -10,6 +10,12 @@ argv = sys.argv[1:]
 if argv == ["--version"]:
     print("codex-cli 0.0.0-fake")
     sys.exit(0)
+if argv[:2] == ["login", "status"]:
+    if os.environ.get("DUET_FAKE_LOGGED", "1") == "1":
+        print("Logged in using ChatGPT")
+        sys.exit(0)
+    print("Not logged in")
+    sys.exit(1)
 
 stdin_text = fc.read_stdin_if_piped()
 fc.dump(argv, stdin_text)
@@ -35,4 +41,5 @@ if s == "garbage":
 if out_path:
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(fc.text() + "\n")
+fc.write_rollout(argv)
 sys.stdout.write("[fake codex] prompt_len=%d\n" % len(prompt))

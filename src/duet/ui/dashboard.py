@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import re
 import signal
@@ -24,8 +25,10 @@ from duet.lock import read_lock
 from duet.orchestrator import CONSOLE_LOG
 from duet.phases.build import build_review_diff
 from duet.phases.debate import BACKUP_FILENAME, DESIGN_FILENAME
-from duet.registry import Registry, normalize
+from duet.doctor import ready, run_checks
+from duet.registry import Registry, duet_home, normalize
 from duet.runner import ExecutableNotFound, pid_alive, spawn_detached
+from duet.usage import claude_local_usage, codex_rate_limits
 from duet.state import DONE_UNAPPROVED, DUET_DIR, RUNNING, RunState, list_run_dirs
 from duet.transcript import Transcript, split_header
 from duet.verdict import parse_verdict
@@ -47,37 +50,46 @@ class ApiError(Exception):
         self.message = message
 
 
-@dataclass
-class Job:
-    id: int
-    kind: str              # "run" | "resume"
-    project: str
-    argv: list[str]
-    log_path: Path
-    popen: Popen
-    started_at: str
-    returncode: int | None = None
+def self_command() -> list[str]:
+    """이 duet 를 다시 실행하는 명령. zip(duet.pyz)으로 돌고 있으면 그 파일을 실행한다."""
+    import duet
 
-    def poll(self) -> None:
-        if self.returncode is None:
-            self.returncode = self.popen.poll()
+    f = str(Path(duet.__file__))
+    if ".pyz" in f:
+        return [sys.executable, f[: f.index(".pyz") + 4]]
+    return [sys.executable, "-m", "duet"]
 
-    def to_dict(self) -> dict[str, Any]:
-        self.poll()
+
+def jobs_dir() -> Path:
+    return duet_home() / "jobs"
+
+
+def _read_job(path: Path) -> dict[str, Any] | None:
+    try:
+        rec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    rc_path = path.with_suffix(".rc")
+    rc = None
+    if rc_path.exists():
         try:
-            tail = self.log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
-        except OSError:
-            tail = ""
-        return {"id": self.id, "kind": self.kind, "project": self.project, "pid": self.popen.pid,
-                "running": self.returncode is None, "returncode": self.returncode,
-                "started_at": self.started_at, "log_tail": tail, "log_path": str(self.log_path)}
+            rc = int(rc_path.read_text().strip())
+        except (OSError, ValueError):
+            rc = -1
+    running = rc is None and pid_alive(int(rec.get("pid") or 0))
+    if rc is None and not running:
+        rc = -1  # 기록 없이 사라짐(강제 종료 등)
+    try:
+        tail = Path(rec["log_path"]).read_text(encoding="utf-8", errors="replace")[-4000:]
+    except (OSError, KeyError):
+        tail = ""
+    return {**rec, "running": running, "returncode": rc, "log_tail": tail}
 
 
 @dataclass
 class Dashboard:
     registry: Registry = field(default_factory=Registry)
-    python: str = sys.executable
-    jobs: list[Job] = field(default_factory=list)
+    _popens: list[Popen] = field(default_factory=list)   # 이 프로세스가 띄운 자식(좀비 방지용 reap)
     _jobs_lock: threading.Lock = field(default_factory=threading.Lock)
     _verdict_cache: dict[tuple[str, float], dict] = field(default_factory=dict)
 
@@ -272,6 +284,11 @@ class Dashboard:
                     overrides[key] = int(v)
                 except (TypeError, ValueError):
                     raise ApiError(400, f"{key} 는 숫자여야 합니다.") from None
+        for agent in AGENT_NAMES:
+            for field_ in ("model", "effort"):
+                v = payload.get(f"{agent}_{field_}")
+                if v not in (None, ""):
+                    overrides[f"{agent}.{field_}"] = str(v).strip()
         try:
             load_config(wd if wd.is_dir() else None, overrides)
         except ConfigError as e:
@@ -288,7 +305,9 @@ class Dashboard:
 
         argv = ["run", f"@{task_file}", "--workdir", str(wd)]
         for key, flag in (("implementer", "--implementer"), ("reviewer", "--reviewer"), ("synth", "--synth"),
-                          ("debate_rounds", "--debate-rounds"), ("max_review", "--max-review")):
+                          ("debate_rounds", "--debate-rounds"), ("max_review", "--max-review"),
+                          ("claude.model", "--claude-model"), ("claude.effort", "--claude-effort"),
+                          ("codex.model", "--codex-model"), ("codex.effort", "--codex-effort")):
             if key in overrides:
                 argv += [flag, str(overrides[key])]
         for on, flag in ((design_only, "--design-only"), (skip_design, "--skip-design"),
@@ -333,43 +352,53 @@ class Dashboard:
             raise ApiError(409, "이미 끝난 실행입니다.") from None
         return {"stopped": info.pid, "run_id": info.run_id}
 
-    def jobs_list(self) -> list[dict[str, Any]]:
+    def jobs_list(self, limit: int = 20) -> list[dict[str, Any]]:
         self.reap()
-        with self._jobs_lock:
-            return [j.to_dict() for j in reversed(self.jobs[-20:])]
+        d = jobs_dir()
+        if not d.is_dir():
+            return []
+        out = []
+        for path in sorted(d.glob("*.json"), reverse=True)[:limit]:
+            rec = _read_job(path)
+            if rec:
+                out.append(rec)
+        return out
 
     def reap(self) -> None:
         with self._jobs_lock:
-            for j in self.jobs:
-                j.poll()
+            self._popens = [p for p in self._popens if p.poll() is None]
 
     # ================================================================ helpers
     def _spawn(self, kind: str, wd: Path, argv: list[str]) -> dict[str, Any]:
         log_dir = wd / DUET_DIR / UI_DIR / "jobs"
         log_dir.mkdir(parents=True, exist_ok=True)
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        log_path = log_dir / f"{stamp}-{kind}.log"
-        cmd = [self.python, "-m", "duet", *argv]
+        job_id = f"{stamp}-{kind}"
+        log_path = log_dir / f"{job_id}.log"
+        rec_dir = jobs_dir()
+        rec_dir.mkdir(parents=True, exist_ok=True)
+        rec_path = rec_dir / f"{job_id}.json"
+        # _job 래퍼가 끝날 때 종료 코드를 .rc 에 남긴다(UI 를 다시 켜거나 원격에서도 결과를 알 수 있게)
+        cmd = [*self_command(), "_job", str(rec_path.with_suffix(".rc")), "--", *argv]
         try:
             with log_path.open("ab") as log_file:
                 popen = spawn_detached(cmd, wd, log_file=log_file, env={"PYTHONUNBUFFERED": "1"})
         except ExecutableNotFound as e:
             raise ApiError(500, str(e)) from e
+        rec = {"id": job_id, "kind": kind, "project": str(wd), "argv": argv, "pid": popen.pid,
+               "log_path": str(log_path), "started_at": dt.datetime.now().isoformat(timespec="seconds")}
+        rec_path.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
         with self._jobs_lock:
-            job = Job(id=len(self.jobs) + 1, kind=kind, project=str(wd), argv=argv, log_path=log_path,
-                      popen=popen, started_at=dt.datetime.now().isoformat(timespec="seconds"))
-            self.jobs.append(job)
-        return job.to_dict()
+            self._popens.append(popen)
+        return _read_job(rec_path) or {**rec, "running": True, "returncode": None, "log_tail": ""}
 
     def _ensure_not_busy(self, wd: Path) -> None:
         info = read_lock(wd)
         if info is not None:
             raise ApiError(409, f"이 작업 폴더에서 이미 실행 중입니다 (pid {info.pid}, 실행 {info.run_id}).")
-        with self._jobs_lock:
-            for j in self.jobs:
-                j.poll()
-                if j.project == str(wd) and j.returncode is None:
-                    raise ApiError(409, "이 작업 폴더에서 UI 가 시작한 실행이 아직 끝나지 않았습니다.")
+        for j in self.jobs_list(limit=50):
+            if j.get("project") == str(wd) and j["running"]:
+                raise ApiError(409, "이 작업 폴더에서 UI 가 시작한 실행이 아직 끝나지 않았습니다.")
 
     def _live(self, wd: Path) -> dict[str, Any] | None:
         info = read_lock(wd)
@@ -406,14 +435,50 @@ class Dashboard:
                     "reason": "지금 실행 중입니다."}
         return {"possible": True, "needs_max_review": False, "current_max_review": cur, "reason": ""}
 
-    def _defaults(self, wd: Path) -> dict[str, Any]:
+    def _defaults(self, wd: Path | None) -> dict[str, Any]:
         try:
-            cfg = load_config(wd if wd.is_dir() else None)
+            cfg = load_config(wd if wd is not None and wd.is_dir() else None)
         except ConfigError as e:
             return {"error": str(e)}
         return {"implementer": cfg.implementer, "reviewer": cfg.reviewer, "synth": cfg.synth_name,
                 "debate_rounds": cfg.debate_rounds, "max_review": cfg.max_review,
+                "claude": {"model": cfg.claude.model, "effort": cfg.claude.effort},
+                "codex": {"model": cfg.codex.model, "effort": cfg.codex.effort},
                 "limits": {"debate_rounds": MAX_DEBATE_ROUNDS, "max_review": MAX_REVIEW_ROUNDS}}
+
+    # ================================================================ usage
+    def usage_summary(self) -> dict[str, Any]:
+        projects = []
+        by_agent: dict[str, dict] = {}
+        by_day: dict[str, dict[str, dict]] = {}
+        for p in self.registry.list():
+            wd = Path(p)
+            if not wd.is_dir():
+                continue
+            proj_total: dict[str, dict] = {}
+            for rd in list_run_dirs(wd):
+                try:
+                    st = RunState.load(rd)
+                except (OSError, ValueError, TypeError):
+                    continue
+                day = (st.created_at or "")[:10]
+                for agent, u in st.usage_totals().items():
+                    for bucket in (proj_total.setdefault(agent, {}), by_agent.setdefault(agent, {}),
+                                   by_day.setdefault(day, {}).setdefault(agent, {})):
+                        for k, v in u.items():
+                            bucket[k] = round(bucket.get(k, 0) + v, 4) if isinstance(v, float) else bucket.get(k, 0) + v
+            if proj_total:
+                projects.append({"path": p, "name": wd.name, "by_agent": proj_total})
+        return {
+            "codex_limits": codex_rate_limits(),
+            "claude_local": claude_local_usage(),
+            "duet": {"by_agent": by_agent, "by_day": dict(sorted(by_day.items(), reverse=True)[:14]),
+                     "projects": projects},
+        }
+
+    def doctor(self) -> dict[str, Any]:
+        checks = run_checks()
+        return {"checks": checks, "ready": ready(checks)}
 
     def _verdict(self, path: Path) -> dict[str, Any]:
         key = (str(path), path.stat().st_mtime)
@@ -464,3 +529,36 @@ def current_call(console: Path, now: dt.datetime | None = None) -> dict[str, Any
             return {"agent": agent, "step": step, "retry": int(retry or 0),
                     "started": f"{hh}:{mm}:{ss}", "elapsed_sec": int(elapsed)}
     return None
+
+
+# ====================================================================== API 메서드 표 (로컬 HTTP 와 원격 _api 가 같이 씀)
+def _req(args: dict[str, Any], key: str) -> Any:
+    return args.get(key)
+
+
+API_METHODS: dict[str, Any] = {
+    "projects": lambda d, a: {"projects": d.projects(), "jobs": d.jobs_list()},
+    "add_project": lambda d, a: d.add_project(a.get("path")),
+    "remove_project": lambda d, a: d.remove_project(a.get("project")),
+    "runs": lambda d, a: d.runs(a.get("project")),
+    "run": lambda d, a: d.run(a.get("project"), a.get("run")),
+    "entry": lambda d, a: d.entry(a.get("project"), a.get("run"), a.get("file")),
+    "console": lambda d, a: d.console(a.get("project"), a.get("run"), int(a.get("offset") or 0)),
+    "design": lambda d, a: d.design(a.get("project"), a.get("run"), a.get("which") or "current"),
+    "commits": lambda d, a: d.commits(a.get("project"), a.get("run")),
+    "diff": lambda d, a: d.diff(a.get("project"), a.get("run"), a.get("commit") or None),
+    "jobs": lambda d, a: {"jobs": d.jobs_list()},
+    "start_run": lambda d, a: d.start_run(a),
+    "resume": lambda d, a: d.resume(a),
+    "stop": lambda d, a: d.stop(a),
+    "usage": lambda d, a: d.usage_summary(),
+    "doctor": lambda d, a: d.doctor(),
+    "defaults": lambda d, a: d._defaults(None),
+}
+
+
+def dispatch(d: Dashboard, method: str, args: dict[str, Any]) -> Any:
+    fn = API_METHODS.get(method)
+    if fn is None:
+        raise ApiError(404, f"없는 API 입니다: {method}")
+    return fn(d, args or {})

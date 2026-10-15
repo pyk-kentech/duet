@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 
 from duet.agents.base import (
@@ -23,6 +24,7 @@ from duet.agents.base import (
 )
 from duet.config import AgentConfig, Config
 from duet.runner import ExecutableNotFound, run_process
+from duet.usage import codex_call_usage
 
 STDIN_MARKER = "-"
 
@@ -59,6 +61,7 @@ class CodexAdapter:
         cmd = [
             self.agent_cfg.bin,
             *self.agent_cfg.base_args,
+            *self.model_args(),
             "-C", str(req.cwd),
             *mode_args,
             "--output-last-message", str(last_message_path),
@@ -68,8 +71,18 @@ class CodexAdapter:
         # '-' 로 시작하는 프롬프트가 옵션으로 읽히지 않게 (codex-cli 0.162.1 에서 `--` 동작 확인)
         return [*cmd, "--", req.prompt], None
 
+    def model_args(self) -> list[str]:
+        args: list[str] = []
+        if self.agent_cfg.model:
+            args += ["-m", self.agent_cfg.model]
+        if self.agent_cfg.effort:
+            # ~/.codex/config.toml 의 model_reasoning_effort 를 이 호출에서만 덮어쓴다
+            args += ["-c", f'model_reasoning_effort="{self.agent_cfg.effort}"']
+        return args
+
     # ---------------------------------------------------------------- ask
     def ask(self, req: AgentRequest) -> AgentResult:
+        started = time.time()
         fd, tmp = tempfile.mkstemp(prefix="duet-codex-", suffix=".md")
         os.close(fd)
         last_message_path = Path(tmp)
@@ -81,6 +94,10 @@ class CodexAdapter:
                 text = r.stdout.strip()
         finally:
             last_message_path.unlink(missing_ok=True)
+        try:
+            usage = codex_call_usage(req.cwd, started)
+        except Exception:  # noqa: BLE001 - 사용량은 부가 정보, 실패해도 호출 결과는 살린다
+            usage = None
         return AgentResult(
             text=text,
             raw_stdout=r.stdout,
@@ -93,6 +110,7 @@ class CodexAdapter:
             ),
             timed_out=r.timed_out,
             command=cmd,
+            usage=usage,
         )
 
     @staticmethod

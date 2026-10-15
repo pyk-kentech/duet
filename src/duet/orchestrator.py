@@ -43,7 +43,8 @@ from duet.workspace import GitError, WorkdirRefused, check_workdir
 
 Printer = Callable[[str], None]
 
-CONFIG_KEYS = ("implementer", "reviewer", "synth", "debate_rounds", "max_review")
+CONFIG_KEYS = ("implementer", "reviewer", "synth", "debate_rounds", "max_review",
+               "claude.model", "claude.effort", "codex.model", "codex.effort")
 CONSOLE_LOG = "console.log"
 
 EXIT_OK = 0
@@ -139,6 +140,9 @@ class Orchestrator:
                 build = "구현 생략(설계만)" if opts.design_only else \
                     f"구현: {cfg.implementer} / 리뷰: {cfg.reviewer} / 리뷰 최대 {cfg.max_review}회"
                 self.log(f"{design} / {build}" + (" / mock" if opts.mock else ""))
+                self.log("모델: " + " / ".join(
+                    f"{n} {getattr(cfg, n).model or '기본'}" + (f"({getattr(cfg, n).effort})" if getattr(cfg, n).effort else "")
+                    for n in ("claude", "codex")))
                 return self._execute(workdir, run_dir, cfg, agents, state)
 
     # ---------------------------------------------------------------- resume
@@ -273,6 +277,8 @@ class Orchestrator:
         return {
             "implementer": cfg.implementer, "reviewer": cfg.reviewer, "synth": cfg.synth_name,
             "debate_rounds": cfg.debate_rounds, "max_review": cfg.max_review,
+            "claude.model": cfg.claude.model, "claude.effort": cfg.claude.effort,
+            "codex.model": cfg.codex.model, "codex.effort": cfg.codex.effort,
             "design_only": opts.design_only, "skip_design": opts.skip_design, "mock": opts.mock,
         }
 

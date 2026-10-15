@@ -11,6 +11,11 @@ argv = sys.argv[1:]
 if argv == ["--version"]:
     print("9.9.9 (Fake Claude Code)")
     sys.exit(0)
+if argv[:2] == ["auth", "status"]:
+    logged = os.environ.get("DUET_FAKE_LOGGED", "1") == "1"
+    print(json.dumps({"loggedIn": logged, "authMethod": "claude.ai" if logged else "none",
+                      "subscriptionType": "max" if logged else None}))
+    sys.exit(0 if logged else 1)
 
 stdin_text = fc.read_stdin_if_piped()
 fc.dump(argv, stdin_text)
@@ -65,5 +70,9 @@ out = {
     "is_error": False,
     "result": fc.text(),
     "prompt_len": len(prompt),
+    "usage": {"input_tokens": 10, "cache_creation_input_tokens": 100, "cache_read_input_tokens": 1000,
+              "output_tokens": 50, "output_tokens_details": {"thinking_tokens": 7}},
+    "total_cost_usd": 0.0123,
+    "modelUsage": {"claude-opus-5-5": {}},
 }
 print(json.dumps(out, ensure_ascii=False))

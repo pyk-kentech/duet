@@ -39,6 +39,7 @@ class CallRecord:
     rate_limited: bool = False
     timed_out: bool = False
     file: str | None = None
+    usage: dict | None = None
 
 
 @dataclass
@@ -74,9 +75,19 @@ class RunState:
 
     def record_call(self, agent: str, step: str, sec: float, exit_code: int, *,
                     rate_limited: bool = False, timed_out: bool = False,
-                    file: str | None = None) -> None:
+                    file: str | None = None, usage: dict | None = None) -> None:
         self.calls.append(CallRecord(agent, step, round(sec, 1), exit_code,
-                                     rate_limited=rate_limited, timed_out=timed_out, file=file))
+                                     rate_limited=rate_limited, timed_out=timed_out, file=file, usage=usage))
+
+    def usage_totals(self) -> dict[str, dict]:
+        """에이전트별 사용량 합계."""
+        from duet.usage import add_usage
+
+        out: dict[str, dict] = {}
+        for c in self.calls:
+            if c.usage:
+                add_usage(out.setdefault(c.agent, {}), c.usage)
+        return out
 
     @property
     def finished(self) -> bool:

@@ -23,6 +23,7 @@ from duet.agents.base import (
 )
 from duet.config import AgentConfig, Config
 from duet.runner import ExecutableNotFound, run_process
+from duet.usage import claude_call_usage
 
 
 class ClaudeCodeAdapter:
@@ -53,17 +54,34 @@ class ClaudeCodeAdapter:
     def build_command(self, req: AgentRequest) -> tuple[list[str], str | None]:
         """(명령어, stdin 텍스트)를 돌려준다. 프롬프트가 길면 stdin으로 넘긴다."""
         mode_args = self.agent_cfg.read_args if req.mode is Mode.READ else self.agent_cfg.write_args
-        cmd = [self.agent_cfg.bin, *self.agent_cfg.base_args, *mode_args]
+        cmd = [self.agent_cfg.bin, *self.agent_cfg.base_args, *self.model_args(), *mode_args]
         if len(req.prompt.encode("utf-8")) > self.cfg.prompt_arg_max_bytes:
             return cmd, req.prompt
         # `--allowedTools <tools...>` 같은 가변 인자 옵션이 프롬프트를 삼키지 않도록 옵션 종료자를 넣는다
         return [*cmd, "--", req.prompt], None
+
+    def model_args(self) -> list[str]:
+        args: list[str] = []
+        if self.agent_cfg.model:
+            args += ["--model", self.agent_cfg.model]
+        if self.agent_cfg.effort:
+            args += ["--effort", self.agent_cfg.effort]
+        return args
 
     # ---------------------------------------------------------------- ask
     def ask(self, req: AgentRequest) -> AgentResult:
         cmd, stdin_text = self.build_command(req)
         r = run_process(cmd, cwd=req.cwd, timeout_sec=req.timeout_sec, stdin_text=stdin_text)
         text, is_error = self.parse_output_full(r.stdout)
+        usage = None
+        try:
+            data = json.loads(r.stdout.strip() or "null")
+            if isinstance(data, dict):
+                usage = claude_call_usage(data)
+        except ValueError:
+            pass
+        if usage is not None and self.agent_cfg.effort:
+            usage["effort"] = self.agent_cfg.effort
         exit_code = r.exit_code
         if is_error and exit_code == 0:
             exit_code = 1  # JSON 이 is_error 를 알리면 exit 0 이어도 실패로 본다
@@ -79,6 +97,7 @@ class ClaudeCodeAdapter:
             ),
             timed_out=r.timed_out,
             command=cmd,
+            usage=usage,
         )
 
     @staticmethod

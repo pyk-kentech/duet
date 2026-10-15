@@ -104,13 +104,14 @@ class PhaseContext:
                 "duration_sec": elapsed, "exit_code": result.exit_code,
                 "rate_limited": result.rate_limited, "timed_out": result.timed_out,
                 "ok": result.ok,
+                **_usage_meta(result.usage),
                 **(extra_meta or {}),
             }
             body = result.text if result.ok else _failure_body(result)
             path = self.transcript.save(label if result.ok else f"{label}_failed", body, meta)
             self.state.record_call(agent_name, step, elapsed, result.exit_code,
                                    rate_limited=result.rate_limited, timed_out=result.timed_out,
-                                   file=path.name)
+                                   file=path.name, usage=result.usage)
 
             if result.ok:
                 self.log(f"{agent_name} ← {step} 완료 ({elapsed:.0f}초) → {path.name}")
@@ -139,3 +140,14 @@ def _failure_body(result: AgentResult) -> str:
     if result.raw_stdout.strip() and result.raw_stdout.strip() != result.text.strip():
         parts += ["## stdout (마지막 4000자)", "```", result.raw_stdout[-4000:], "```", ""]
     return "\n".join(parts)
+
+
+def _usage_meta(u: dict | None) -> dict[str, object]:
+    if not u:
+        return {}
+    meta: dict[str, object] = {}
+    for src, dst in (("model", "model"), ("effort", "effort"), ("input_tokens", "tokens_in"),
+                     ("output_tokens", "tokens_out"), ("cost_usd", "cost_usd")):
+        if u.get(src) not in (None, ""):
+            meta[dst] = u[src]
+    return meta

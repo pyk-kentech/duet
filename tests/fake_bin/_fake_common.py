@@ -50,3 +50,29 @@ def handle_common_failures():
     if s == "hang":
         time.sleep(float(os.environ.get("DUET_FAKE_SLEEP", "30")))
         sys.exit(0)
+
+
+def write_rollout(argv):
+    """CODEX_HOME 이 있으면 진짜 codex 처럼 세션 기록을 남긴다(사용량·한도 테스트용)."""
+    import datetime as dt
+    home = os.environ.get("CODEX_HOME")
+    if not home:
+        return
+    cwd = argv[argv.index("-C") + 1] if "-C" in argv else os.getcwd()
+    model = argv[argv.index("-m") + 1] if "-m" in argv else "gpt-fake"
+    now = dt.datetime.now()
+    folder = os.path.join(home, "sessions", f"{now:%Y}", f"{now:%m}", f"{now:%d}")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"rollout-{now:%Y-%m-%dT%H-%M-%S}-{os.getpid()}.jsonl")
+    ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    events = [
+        {"timestamp": ts, "type": "session_meta", "payload": {"cwd": os.path.realpath(cwd), "originator": "codex_exec", "timestamp": ts}},
+        {"timestamp": ts, "type": "turn_context", "payload": {"cwd": cwd, "model": model, "effort": "high"}},
+        {"timestamp": ts, "type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 2000, "cached_input_tokens": 1500, "output_tokens": 300, "reasoning_output_tokens": 120}},
+            "rate_limits": {"primary": {"used_percent": 42.5, "window_minutes": 10080, "resets_at": 1792472350},
+                            "secondary": None, "plan_type": "pro"}}},
+    ]
+    with open(path, "w", encoding="utf-8") as f:
+        for e in events:
+            f.write(json.dumps(e) + "\n")
