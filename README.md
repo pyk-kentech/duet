@@ -38,6 +38,38 @@ venv를 활성화하지 않고도 어디서나 `duet`을 쓰려면 [uv](https://
 uv tool install --python 3.12 --editable /path/to/duet
 ```
 
+## 다른 머신에서 쓰기
+
+duet는 실행하는 머신의 `claude`, `codex`를 부릅니다. 그래서 새 머신에도 두 CLI를 설치하고 각각 로그인해야 합니다.
+같은 계정으로 로그인하면 구독 사용량 한도도 함께 씁니다.
+
+| 머신에 필요한 것 | 확인 |
+|---|---|
+| Python 3.11+ 또는 [uv](https://docs.astral.sh/uv/) (uv가 Python을 받아 줌) | `python3 --version` / `uv --version` |
+| git | `git --version` |
+| Claude Code, 로그인 | `claude --version` 후 `claude` 한 번 실행 |
+| Codex CLI, 로그인 | `codex --version`, `codex login` |
+
+설치 방법은 셋 중 하나를 고르세요.
+
+```bash
+# A. css53 저장소에서 SSH로 바로 설치 (새 머신이 css53에 SSH 접속 가능할 때)
+uv tool install --python 3.12 git+ssh://yonggamman@css53/home/yonggamman/duet
+
+# B. 패키지 파일 복사 (css53에서 `uv build` 로 만든 dist/duet-0.1.0-py3-none-any.whl)
+scp yonggamman@css53:duet/dist/duet-0.1.0-py3-none-any.whl .
+uv tool install --python 3.12 ./duet-0.1.0-py3-none-any.whl
+#   uv 가 없으면: python3.11 -m pip install --user ./duet-0.1.0-py3-none-any.whl
+
+# C. GitHub 등 원격 저장소에 올린 뒤
+uv tool install --python 3.12 git+https://github.com/<계정>/duet
+```
+
+- 최신으로 바꾸기: 같은 명령에 `--force`를 붙여 다시 설치합니다.
+- 지원 OS: Linux, macOS. Windows는 WSL2 안에서 쓰세요(프로세스 그룹·시그널을 씁니다).
+- 실행 기록은 각 머신의 작업 폴더(`.duet/`)에, 프로젝트 목록은 각 머신의 `~/.duet/`에 남습니다. 관리자 UI는 그 머신의 프로젝트만 보여줍니다.
+- 다른 머신의 UI를 내 PC 브라우저로 보려면: `ssh -L 8787:127.0.0.1:8787 <그 머신>` 후 그 머신에서 `duet ui --no-browser`.
+
 ## 사용법
 
 ```bash
