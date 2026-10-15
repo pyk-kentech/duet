@@ -289,6 +289,15 @@ class Dashboard:
                 v = payload.get(f"{agent}_{field_}")
                 if v not in (None, ""):
                     overrides[f"{agent}.{field_}"] = str(v).strip()
+        if str(payload.get("test_command") or "").strip():
+            overrides["test_command"] = str(payload["test_command"]).strip()
+        if payload.get("block_severity"):
+            overrides["block_severity"] = str(payload["block_severity"])
+        if payload.get("stall_rounds") not in (None, ""):
+            try:
+                overrides["stall_rounds"] = int(payload["stall_rounds"])
+            except (TypeError, ValueError):
+                raise ApiError(400, "stall_rounds 는 숫자여야 합니다.") from None
         try:
             load_config(wd if wd.is_dir() else None, overrides)
         except ConfigError as e:
@@ -307,7 +316,9 @@ class Dashboard:
         for key, flag in (("implementer", "--implementer"), ("reviewer", "--reviewer"), ("synth", "--synth"),
                           ("debate_rounds", "--debate-rounds"), ("max_review", "--max-review"),
                           ("claude.model", "--claude-model"), ("claude.effort", "--claude-effort"),
-                          ("codex.model", "--codex-model"), ("codex.effort", "--codex-effort")):
+                          ("codex.model", "--codex-model"), ("codex.effort", "--codex-effort"),
+                          ("test_command", "--test-command"), ("block_severity", "--block-severity"),
+                          ("stall_rounds", "--stall-rounds")):
             if key in overrides:
                 argv += [flag, str(overrides[key])]
         for on, flag in ((design_only, "--design-only"), (skip_design, "--skip-design"),
@@ -423,6 +434,11 @@ class Dashboard:
 
     def _resume_hint(self, st: RunState, wd: Path) -> dict[str, Any]:
         cur = int(st.config.get("max_review") or 0)
+        if st.status == DONE_UNAPPROVED and st.stop_reason == "stalled" and st.round < cur:
+            live = self._live(wd)
+            if live and live.get("run_id") == st.run_id:
+                return {"possible": False, "needs_max_review": False, "current_max_review": cur, "reason": "지금 실행 중입니다."}
+            return {"possible": True, "needs_max_review": False, "current_max_review": cur, "reason": ""}
         if st.status == DONE_UNAPPROVED:
             return {"possible": cur < MAX_REVIEW_ROUNDS, "needs_max_review": True, "current_max_review": cur,
                     "reason": "리뷰 상한이 최대치입니다." if cur >= MAX_REVIEW_ROUNDS else ""}
@@ -444,6 +460,8 @@ class Dashboard:
                 "debate_rounds": cfg.debate_rounds, "max_review": cfg.max_review,
                 "claude": {"model": cfg.claude.model, "effort": cfg.claude.effort},
                 "codex": {"model": cfg.codex.model, "effort": cfg.codex.effort},
+                "test_command": cfg.test_command, "block_severity": cfg.block_severity,
+                "stall_rounds": cfg.stall_rounds, "require_tests_pass": cfg.require_tests_pass,
                 "limits": {"debate_rounds": MAX_DEBATE_ROUNDS, "max_review": MAX_REVIEW_ROUNDS}}
 
     # ================================================================ usage

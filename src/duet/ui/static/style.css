@@ -438,3 +438,9 @@ table.plain tr:last-child td { border-bottom: 0; }
 .subtabs a.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .subtabs a:hover { text-decoration: none; }
 .tok { font-variant-numeric: tabular-nums; }
+
+.agent-x { background: var(--neutral-soft); color: var(--muted); }
+.t-passed { background: var(--ok-soft); color: var(--ok); }
+.t-failed, .t-timeout { background: var(--bad-soft); color: var(--bad); }
+.t-error { background: var(--warn-soft); color: var(--warn); }
+.checkline { display: inline-flex; gap: 8px; align-items: center; font-size: 13.5px; }

@@ -37,7 +37,7 @@ const STATUS = {
 };
 const STEP = {
   propose: '설계안', critique: '비판·개정', synthesize: '설계 종합', implement: '구현', fix: '리뷰 반영',
-  review: '리뷰', base: '기준 커밋', design_only: '설계만', approved: '승인', unapproved: '미승인',
+  review: '리뷰', test: '테스트', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
 };
 const PHASE = { init: '준비', debate: '설계 토론', build: '구현·리뷰', done: '끝' };
 const CHECK_STATUS = { ok: '정상', warn: '확인 필요', missing: '없음', error: '오류' };
@@ -58,6 +58,17 @@ function verdictTag(v) {
   const extra = v.must_fix ? ` ${v.must_fix}` : '';
   const title = v.parse_failed ? '판정 블록이 없어 반려로 간주' : v.contradiction ? 'APPROVED 인데 must_fix>0 → 반려' : '';
   return h('span', { class: `verdict v-${v.status}`, title: title || null }, label + extra + (v.parse_failed || v.contradiction ? ' ?' : ''));
+}
+const TEST_STATUS = { passed: '통과', failed: '실패', error: '실행 불가', timeout: '시간 초과' };
+function testTag(status) {
+  if (!status) return null;
+  return h('span', { class: `verdict t-${status}` }, `테스트 ${TEST_STATUS[status] || status}`);
+}
+function decisionTag(hst) {
+  if (!hst) return null;
+  const title = (hst.reasons || []).join(' · ');
+  if (hst.approved) return h('span', { class: 'verdict v-APPROVED', title }, '승인' + (hst.reviewer_status !== 'APPROVED' ? ' *' : ''));
+  return h('span', { class: 'verdict v-CHANGES_REQUESTED', title }, '반려' + (hst.blocking != null ? ` ${hst.blocking}` : ''));
 }
 function fmtDur(sec) {
   sec = Math.max(0, Math.round(Number(sec) || 0));
@@ -644,6 +655,8 @@ class RunView {
       h('span', { class: 'chip' }, 'claude ', h('b', null, modelOf('claude'))),
       h('span', { class: 'chip' }, 'codex ', h('b', null, modelOf('codex'))),
       c.mock ? h('span', { class: 'chip' }, 'mock') : null,
+      c.block_severity ? h('span', { class: 'chip' }, '반려 기준 ', h('b', null, { P1: 'P1', P2: 'P1·P2', P3: 'P1·P2·P3' }[c.block_severity] || c.block_severity)) : null,
+      c.test_command ? h('span', { class: 'chip' }, '테스트 ', h('b', null, c.test_command === 'auto' ? '자동' : c.test_command)) : null,
       st.base_commit ? h('span', { class: 'chip' }, '기준 ', h('b', { class: 'mono' }, st.base_commit)) : null,
       h('span', { class: 'chip' }, `호출 ${st.calls.length}회 · ${fmtDur(totalSec)}`));
     const totals = {};
@@ -663,6 +676,8 @@ class RunView {
       h('span', null, '상태는 ‘실행 중’인데 duet 프로세스가 없습니다. 터미널이 닫혔거나 비정상 종료된 것 같습니다. 이어하기로 계속할 수 있습니다.')));
     if (st.error && !d.live) alerts.push(h('div', { class: `alert ${st.status === 'failed' ? 'alert-bad' : 'alert-warn'}` },
       h('b', null, STATUS[st.status] || st.status), h('span', null, st.error)));
+    if (st.stop_reason === 'stalled' && !d.live) alerts.push(h('div', { class: 'alert alert-warn' }, h('b', null, '수렴 안 됨'),
+      h('span', null, `막는 지적 수가 ${c.stall_rounds || 2}라운드 연속 줄지 않아 멈췄습니다 (${(st.review_history || []).map(x => x.blocking ?? '?').join(' → ')}). 마지막 리뷰를 읽고 직접 판단하거나, 이어하기로 계속할 수 있습니다.`)));
     const limits = this.latestLimits();
     if (limits) alerts.push(limits);
 
@@ -714,14 +729,17 @@ class RunView {
     return box;
   }
   roundsSummary() {
-    const entries = this.data.entries.filter(e => e.meta.ok !== 'false' && !e.label.endsWith('_failed'));
+    const st = this.data.state;
+    const hist = Object.fromEntries((st.review_history || []).map(x => [x.file, x]));
+    const entries = this.data.entries.filter(e => e.meta.step === 'test' || (e.meta.ok !== 'false' && !e.label.endsWith('_failed')));
     const items = [];
     for (const e of entries) {
       const s = e.meta.step;
       if (s === 'implement' || s === 'fix') items.push(h('span', { class: 'chip' }, `${e.meta.round}회차 ${STEP[s]}`));
+      else if (s === 'test') items.push(h('span', { class: 'arrow' }, '→'), testTag(e.meta.test_status));
       else if (s === 'review') {
         items.push(h('span', { class: 'arrow' }, '→'));
-        items.push(h('span', { class: 'chip' }, '리뷰 ', verdictTag(e.verdict)));
+        items.push(h('span', { class: 'chip' }, '리뷰 ', hist[e.name] ? decisionTag(hist[e.name]) : verdictTag(e.verdict)));
       }
     }
     if (!items.length) return null;
@@ -769,8 +787,10 @@ class RunView {
       const m = e.meta;
       const ph = phaseOf(m.step);
       if (ph !== lastPhase) { items.push(h('li', { class: 'phase-label' }, ph)); lastPhase = ph; }
-      const failed = m.ok === 'false' || e.label.endsWith('_failed');
+      const isTest = m.step === 'test';
+      const failed = !isTest && (m.ok === 'false' || e.label.endsWith('_failed'));
       const roundTxt = m.round && m.round !== '0' ? `${m.round}회차` : '';
+      const hst = (d.state.review_history || []).find(x => x.file === e.name);
       items.push(h('li', { class: failed ? 'failed' : null }, h('button', {
         type: 'button', class: this.selected === e.name ? 'active' : null,
         onclick: () => { this.selected = e.name; this.renderTimeline(); this.renderViewer(); },
@@ -783,7 +803,7 @@ class RunView {
           failed ? h('span', null, m.rate_limited === 'true' ? '한도 도달' : m.timed_out === 'true' ? '시간 초과' : `실패 (exit ${m.exit_code})`) : null,
           m.attempt && m.attempt !== '1' ? h('span', null, `재시도 ${Number(m.attempt) - 1}`) : null,
           m.tokens_out ? h('span', { class: 'tok', title: `입력 ${m.tokens_in || 0} 토큰` }, `출력 ${fmtTok(m.tokens_out)}`) : null,
-          verdictTag(e.verdict)))));
+          isTest ? testTag(m.test_status) : hst ? decisionTag(hst) : verdictTag(e.verdict)))));
     }
     const cc = d.current_call;
     if (d.live) {
@@ -1187,6 +1207,10 @@ class SettingsView {
       synth: sel('synth', d.synth || '', ['claude', 'codex'], '리뷰 담당'),
       debate_rounds: h('input', { type: 'number', min: 0, max: 5, value: d.debate_rounds ?? '', placeholder: String(eff.debate_rounds) }),
       max_review: h('input', { type: 'number', min: 1, max: 10, value: d.max_review ?? '', placeholder: String(eff.max_review) }),
+      test_command: h('input', { type: 'text', value: d.test_command || '', placeholder: '자동 감지 (none 이면 끔)', spellcheck: 'false' }),
+      block_severity: sel('block_severity', d.block_severity || '', ['P1', 'P2', 'P3'], `기본값 (${eff.block_severity})`),
+      stall_rounds: h('input', { type: 'number', min: 0, max: 10, value: d.stall_rounds ?? '', placeholder: String(eff.stall_rounds) }),
+      require_tests_pass: h('input', { type: 'checkbox', checked: (d.require_tests_pass ?? eff.require_tests_pass) ? true : null }),
       claude_model: h('input', { type: 'text', list: 'claude-models', value: (d.claude || {}).model || '', placeholder: 'CLI 기본값', spellcheck: 'false' }),
       codex_model: h('input', { type: 'text', list: 'codex-models', value: (d.codex || {}).model || '', placeholder: 'CLI 기본값', spellcheck: 'false' }),
     };
@@ -1206,11 +1230,18 @@ class SettingsView {
       h('div', { class: 'form-grid' },
         field('Claude 모델', f.claude_model), field('Claude 추론', f.claude_effort),
         field('Codex 모델', f.codex_model), field('Codex 추론', f.codex_effort)),
+      h('h3', null, '리뷰·테스트'),
+      h('p', { class: 'desc' }, '반려 기준: 이 심각도 이상의 지적이 남아 있으면 반려합니다(P1 핵심 동작·보안, P2 설계 위반·일반 입력 오류, P3 드문 경계 사례). 수렴 판단: 막는 지적 수가 N 라운드 연속 줄지 않으면 멈춥니다(0=끔).'),
+      h('div', { class: 'form-grid' },
+        field('테스트 명령', f.test_command), field('반려 기준', f.block_severity), field('수렴 판단 라운드', f.stall_rounds),
+        h('label', { class: 'checkline' }, f.require_tests_pass, '테스트 실패 시 승인 안 함')),
       h('div', { class: 'actions' }, h('button', { class: 'btn btn-primary', type: 'button', onclick: () => this.save({ defaults: {
         implementer: f.implementer.value, reviewer: f.reviewer.value, synth: f.synth.value,
         debate_rounds: f.debate_rounds.value, max_review: f.max_review.value,
         claude: { model: f.claude_model.value, effort: f.claude_effort.value },
         codex: { model: f.codex_model.value, effort: f.codex_effort.value },
+        test_command: f.test_command.value, block_severity: f.block_severity.value,
+        stall_rounds: f.stall_rounds.value, require_tests_pass: f.require_tests_pass.checked,
       } }) }, '저장')));
 
     // ---------------- 원격 머신
@@ -1328,6 +1359,9 @@ async function openRunDialog({ machine = LOCAL, project = '', defaults = null, h
   f.synth.value = '';
   f.debate_rounds.value = eff.debate_rounds;
   f.max_review.value = eff.max_review;
+  f.block_severity.value = eff.block_severity || 'P2';
+  f.test_command.value = '';
+  f.test_command.placeholder = eff.test_command && eff.test_command !== 'auto' ? `설정값: ${eff.test_command}` : '자동 감지 (예: python3 -m pytest -q)';
   f.claude_model.value = (eff.claude || {}).model || '';
   f.codex_model.value = (eff.codex || {}).model || '';
   setEffortOptions('claude', (eff.claude || {}).effort);
@@ -1367,6 +1401,7 @@ form.addEventListener('submit', async ev => {
     debate_rounds: f.debate_rounds.value, max_review: f.max_review.value,
     claude_model: f.claude_model.value.trim(), claude_effort: f.claude_effort.value,
     codex_model: f.codex_model.value.trim(), codex_effort: f.codex_effort.value,
+    test_command: f.test_command.value.trim(), block_severity: f.block_severity.value,
     design_only: f.design_only.checked, skip_design: f.skip_design.checked, mock: f.mock.checked, force: f.force.checked,
   };
   const problem = !body.project ? (f.root.value === CUSTOM ? '작업 폴더 경로를 입력하세요.' : '폴더 이름을 입력하세요.')

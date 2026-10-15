@@ -29,6 +29,7 @@ class Verdict:
     source: str = "none"          # "block" | "legacy" | "none"
     parse_failed: bool = False
     contradiction: bool = False
+    severity: dict[str, int] | None = None   # {"P1": n, "P2": n, "P3": n} (리뷰어가 적었을 때만)
 
     @property
     def approved(self) -> bool:
@@ -39,6 +40,8 @@ class Verdict:
         notes = []
         if self.must_fix is not None:
             notes.append(f"must_fix={self.must_fix}")
+        if self.severity:
+            notes.append(" ".join(f"{k}={v}" for k, v in self.severity.items()))
         if self.parse_failed:
             notes.append("판정 블록 없음 → 반려로 간주")
         if self.contradiction:
@@ -51,6 +54,7 @@ _LIST = r"(?:[-*+>]\s*|\d+[.)]\s*)?"
 _STATUS_RE = re.compile(r"^\s*" + _LIST + r"status\s*:\s*(APPROVED|CHANGES_REQUESTED)\b",
                         re.IGNORECASE | re.MULTILINE)
 _MUST_FIX_RE = re.compile(r"^\s*" + _LIST + r"must_fix\s*:\s*(\d+)", re.IGNORECASE | re.MULTILINE)
+_SEV_RE = re.compile(r"^\s*" + _LIST + r"(p[123])\s*:\s*(\d+)", re.IGNORECASE | re.MULTILINE)
 _LEGACY_RE = re.compile(r"VERDICT\s*:\s*(APPROVED|CHANGES_REQUESTED)\b", re.IGNORECASE)
 # 모델이 즐겨 붙이는 강조 기호: **status:** APPROVED, `APPROVED` (밑줄은 CHANGES_REQUESTED 의 일부라 건드리지 않음)
 _DECORATION_RE = re.compile(r"[*`]")
@@ -71,9 +75,10 @@ def parse_verdict(text: str) -> Verdict:
         status = Status(m.group(1).upper())
         mf = _MUST_FIX_RE.search(body)
         must_fix = int(mf.group(1)) if mf else None
+        sev = {k.upper(): int(v) for k, v in _SEV_RE.findall(body)} or None
         if status is Status.APPROVED and must_fix:
-            return Verdict(Status.CHANGES_REQUESTED, must_fix, "block", contradiction=True)
-        return Verdict(status, must_fix, "block")
+            return Verdict(Status.CHANGES_REQUESTED, must_fix, "block", contradiction=True, severity=sev)
+        return Verdict(status, must_fix, "block", severity=sev)
 
     legacy = _LEGACY_RE.findall(_plain(text or ""))
     if legacy:

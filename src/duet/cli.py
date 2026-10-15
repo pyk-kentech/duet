@@ -41,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--design-only", action="store_true", help="설계 토론만 하고 종료")
     p_run.add_argument("--skip-design", action="store_true", help="기존 DESIGN.md로 바로 구현")
     p_run.add_argument("--force", action="store_true", help="커밋 안 된 변경이 있어도 진행")
+    p_run.add_argument("--test-command", metavar="CMD",
+                       help='구현 후 duet 가 돌릴 테스트 명령 (기본: auto = duet.toml → 자동 감지, "none" 이면 끔)')
+    p_run.add_argument("--block-severity", choices=["P1", "P2", "P3"],
+                       help="이 심각도 이상의 지적이 남아 있으면 반려 (기본: P2 → P3 만 남으면 승인)")
+    p_run.add_argument("--stall-rounds", type=int, metavar="N",
+                       help="막는 지적 수가 N 라운드 연속 줄지 않으면 멈춤 (기본: 2, 0=끔)")
     for agent, example in (("claude", "opus, sonnet, claude-opus-5-5"), ("codex", "gpt-6.1-sol")):
         p_run.add_argument(f"--{agent}-model", metavar="MODEL", help=f"{agent} 모델 (예: {example}). 기본: CLI 기본값")
         p_run.add_argument(f"--{agent}-effort", metavar="LEVEL", help=f"{agent} 추론 강도 (예: low, medium, high, xhigh)")
@@ -114,6 +120,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             "debate_rounds": args.debate_rounds, "max_review": args.max_review,
             "claude.model": args.claude_model, "claude.effort": args.claude_effort,
             "codex.model": args.codex_model, "codex.effort": args.codex_effort,
+            "test_command": args.test_command, "block_severity": args.block_severity,
+            "stall_rounds": args.stall_rounds,
         },
     )
     return Orchestrator().run(opts).exit_code

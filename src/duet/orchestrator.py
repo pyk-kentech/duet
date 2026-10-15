@@ -44,7 +44,8 @@ from duet.workspace import GitError, WorkdirRefused, check_workdir
 Printer = Callable[[str], None]
 
 CONFIG_KEYS = ("implementer", "reviewer", "synth", "debate_rounds", "max_review",
-               "claude.model", "claude.effort", "codex.model", "codex.effort")
+               "claude.model", "claude.effort", "codex.model", "codex.effort",
+               "test_command", "block_severity", "stall_rounds", "require_tests_pass")
 CONSOLE_LOG = "console.log"
 
 EXIT_OK = 0
@@ -153,14 +154,16 @@ class Orchestrator:
         state = RunState.load(run_dir)
         prev_max = int(state.config.get("max_review") or 0)
 
-        if state.status == DONE_UNAPPROVED:
+        stalled_early = (state.status == DONE_UNAPPROVED and state.stop_reason == "stalled"
+                         and state.round < prev_max)
+        if state.status == DONE_UNAPPROVED and not stalled_early:
             # 리뷰 상한을 다 쓴 실행: 상한을 늘려 주면 마지막 리뷰를 반영하는 라운드부터 이어간다
             if max_review is None or max_review <= prev_max:
                 raise OrchestratorError(
                     f"마지막 실행({state.run_id})은 리뷰 {prev_max}회를 모두 써서 미승인으로 끝났습니다. "
                     f"이어가려면 상한을 늘리세요: duet resume --workdir {workdir} --max-review {prev_max + 1}"
                 )
-        elif state.finished:
+        elif state.finished and not stalled_early:
             raise OrchestratorError(
                 f"마지막 실행({state.run_id})은 이미 끝났습니다 (status={state.status}). "
                 "새로 시작하려면 `duet run` 을 쓰세요."
@@ -179,6 +182,10 @@ class Orchestrator:
             lock.set_run(run_dir.name)
             register_quietly(workdir)
             state.config["max_review"] = cfg.max_review
+            if state.stop_reason == "stalled":
+                # 사람이 계속하라고 했으니 수렴 판단은 지금부터 다시 센다
+                state.stall_baseline_round = state.round
+                state.stop_reason = None
             with self._console_to(run_dir):
                 self.log(f"이어하기: {state.run_id}  (이전 status={state.status}, phase={state.phase}, "
                          f"step={state.step}, round={state.round})"
@@ -239,6 +246,9 @@ class Orchestrator:
 
         if approved:
             self.log("✅ 리뷰 승인으로 종료")
+        elif state.stop_reason == "stalled":
+            self.log(f"계속하려면: duet resume --workdir {workdir}"
+                     + (f" --max-review {min(cfg.max_review + 1, 10)}" if state.round >= cfg.max_review else ""))
         else:
             self.log(f"⚠️ {cfg.max_review}회 안에 승인되지 않음. 마지막 리뷰를 확인하세요: "
                      f"{run_dir / (state.last_review or '')}")
@@ -279,6 +289,8 @@ class Orchestrator:
             "debate_rounds": cfg.debate_rounds, "max_review": cfg.max_review,
             "claude.model": cfg.claude.model, "claude.effort": cfg.claude.effort,
             "codex.model": cfg.codex.model, "codex.effort": cfg.codex.effort,
+            "test_command": cfg.test_command, "block_severity": cfg.block_severity,
+            "stall_rounds": cfg.stall_rounds, "require_tests_pass": cfg.require_tests_pass,
             "design_only": opts.design_only, "skip_design": opts.skip_design, "mock": opts.mock,
         }
 

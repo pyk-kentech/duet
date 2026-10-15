@@ -14,6 +14,7 @@ from typing import Any, Mapping
 AGENT_NAMES = ("claude", "codex")
 
 MAX_DEBATE_ROUNDS = 5
+SEVERITIES = ("P1", "P2", "P3")
 MAX_REVIEW_ROUNDS = 10
 
 # 한도 도달 감지용 정규식(대소문자 무시). stdout/stderr/응답 본문에 적용.
@@ -96,6 +97,12 @@ class Config:
     prompt_arg_max_bytes: int = 100_000
     # 리뷰 diff 에서 뺄 경로(glob). 잠금 파일은 크고 이름순으로 앞에 와서 실제 코드를 밀어낸다.
     diff_excludes: list[str] = field(default_factory=lambda: list(DEFAULT_DIFF_EXCLUDES))
+    # 구현 후 duet 가 직접 돌릴 테스트 명령. "auto" 면 작업 폴더의 duet.toml(test_command) → 자동 감지, "none" 이면 끔
+    test_command: str = "auto"
+    test_timeout_sec: int = 600
+    require_tests_pass: bool = True     # 테스트가 실패하면 리뷰어가 승인해도 승인하지 않음
+    block_severity: str = "P2"          # 이 심각도 이상(P1..P2)의 지적이 남아 있으면 반려
+    stall_rounds: int = 2               # 막는 지적 수가 N 라운드 연속 최저치를 못 갱신하면 멈춤 (0=끔)
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
     claude: AgentConfig = field(default_factory=_default_claude)
     codex: AgentConfig = field(default_factory=_default_codex)
@@ -130,6 +137,16 @@ class Config:
             raise ConfigError(f"prompt_arg_max_bytes는 1~120000 사이여야 합니다: {self.prompt_arg_max_bytes}")
         if not isinstance(self.diff_excludes, list) or not all(isinstance(x, str) for x in self.diff_excludes):
             raise ConfigError("diff_excludes는 문자열 리스트여야 합니다")
+        if not isinstance(self.test_command, str) or len(self.test_command) > 500 or "\n" in self.test_command:
+            raise ConfigError("test_command 는 한 줄 명령(500자 이하)이어야 합니다")
+        if not isinstance(self.test_timeout_sec, int) or self.test_timeout_sec <= 0:
+            raise ConfigError(f"test_timeout_sec는 양수여야 합니다: {self.test_timeout_sec}")
+        if not isinstance(self.require_tests_pass, bool):
+            raise ConfigError("require_tests_pass 는 true/false 여야 합니다")
+        if self.block_severity not in SEVERITIES:
+            raise ConfigError(f"block_severity 는 {', '.join(SEVERITIES)} 중 하나여야 합니다: {self.block_severity!r}")
+        if not isinstance(self.stall_rounds, int) or not 0 <= self.stall_rounds <= MAX_REVIEW_ROUNDS:
+            raise ConfigError(f"stall_rounds 는 0~{MAX_REVIEW_ROUNDS} 사이여야 합니다: {self.stall_rounds}")
         for name in AGENT_NAMES:
             ac = self.agent(name)
             if not ac.bin:

@@ -60,6 +60,10 @@ class RunState:
     last_review: str | None = None
     last_verdict: str | None = None
     done: list[str] = field(default_factory=list)             # 완료한 스텝 키
+    tests: dict[str, dict] = field(default_factory=dict)      # round → duet 가 돌린 테스트 결과
+    review_history: list[dict] = field(default_factory=list)  # 라운드별 판정·막는 지적 수
+    stop_reason: str | None = None                            # "max_review" | "stalled"
+    stall_baseline_round: int = 0                             # resume 때 수렴 판단을 이 라운드부터 다시
     calls: list[CallRecord] = field(default_factory=list)
     error: str | None = None
     created_at: str = field(default_factory=lambda: dt.datetime.now().isoformat(timespec="seconds"))

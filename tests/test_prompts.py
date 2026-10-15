@@ -16,8 +16,8 @@ def test_render_task():
 
 
 def test_review_template_has_verdict_block():
-    out = render("review", task="t", diff="d", implementer_name="claude")
-    assert "<verdict>" in out and "must_fix" in out
+    out = render("review", task="t", diff="d", implementer_name="claude", tests="T", previous_review="P")
+    assert "<verdict>" in out and "must_fix" in out and "p3:" in out and "[P1]" in out
 
 
 def test_missing_placeholder_raises():

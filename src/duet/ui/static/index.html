@@ -104,7 +104,19 @@
             <span class="field-label">리뷰 최대 <em>1–10</em></span>
             <input name="max_review" type="number" min="1" max="10" value="3">
           </label>
+          <label class="field">
+            <span class="field-label">반려 기준</span>
+            <select name="block_severity">
+              <option value="P1">P1 만</option>
+              <option value="P2">P1·P2</option>
+              <option value="P3">P1·P2·P3</option>
+            </select>
+          </label>
         </div>
+        <label class="field">
+          <span class="field-label">테스트 명령 <em>비우면 설정값(기본: 자동 감지) · none 이면 끔</em></span>
+          <input name="test_command" type="text" placeholder="자동 감지 (예: python3 -m pytest -q)" autocomplete="off" spellcheck="false">
+        </label>
         <fieldset class="checks">
           <label><input type="checkbox" name="design_only"> 설계만 <small>토론 후 DESIGN.md만 만들고 끝냄</small></label>
           <label><input type="checkbox" name="skip_design"> 설계 생략 <small>기존 DESIGN.md로 바로 구현</small></label>

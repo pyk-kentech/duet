@@ -399,6 +399,10 @@ write_args = ["--sandbox", "workspace-write"]
 - `remote.py`(duet.pyz 배포, ssh, `duet _api`), 작업 기록 파일화(`duet _job`)
 - ✅ 가짜 ssh 로 배포 → 원격 mock 실행 → 원격 기록 조회까지, 헤드리스 브라우저로 화면 확인
 
+### M10. 반려 핑퐁 방지 + duet 테스트 (2026-10-15 사용자 요청으로 추가)
+- `policy.py`(승인 판단·수렴 감지), `testing.py`(테스트 명령 결정·실행), 리뷰·수정·구현 템플릿 개정
+- ✅ 심각도 판정·수렴 감지·테스트 상태 단위 테스트, build 단계 통합(테스트 실패 시 승인 보류, 부산물 정리, duet.toml 명령, 이전 리뷰 전달, 수렴 안 됨 → resume)
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -489,4 +493,29 @@ UI 의 실행 버튼은 셸 권한이 있는 에이전트를 띄우므로, 다�
 - UI 는 모든 화면·주소가 머신을 구분한다(`#/m/<id>/p/<경로>/r/<run>`). 프로젝트 목록은 머신별로 묶고, 원격 목록은 8초 캐시.
 - 설치·로그인 동작은 `ssh -tt <머신> '<명령>'` 으로 같은 터미널 화면에서 한다.
 - UI 가 시작한 작업은 `~/.duet/jobs/*.json` 에 기록하고, `duet _job` 래퍼가 끝날 때 종료 코드를 `.rc` 에 남긴다(UI 를 다시 켜거나 원격에서도 결과를 안다).
+
+---
+
+## 16. 반려 핑퐁 방지와 duet 테스트
+
+memo-cli 실험에서 리뷰 4라운드가 모두 반려됐다(반드시 고칠 것 3 → 1 → 2 → 1). 구현자가 지적된 예외만 좁게 막고, 리뷰어가 매번 더 극단적인 입력을 새로 찾았다. 또 리뷰어는 읽기 전용이라 파일을 만드는 테스트를 돌리지 못했다.
+
+### 테스트 단계 (build: impl 커밋 → **test** → review)
+- 명령 결정: 명시값(`--test-command`, 설정의 `test_command`, "auto" 가 아닌 것) → 작업 폴더 `duet.toml` 의 `test_command`(구현 프롬프트가 구현자에게 적게 한다) → 자동 감지(pyproject/setup.py + tests → `uv run pytest -q`(uv.lock 있을 때) 또는 `python3 -m pytest -q`, package.json test 스크립트 → `npm test --silent`, Cargo → `cargo test --quiet`, go.mod → `go test ./...`, Makefile test → `make test`). `none` 이면 끔.
+- 결과 상태: passed / failed / timeout / error(명령 없음 126·127, pytest 수집 0개=5). 기록 `NN_test{i}.md`(agent: duet), `run.json` 의 `tests[i]`.
+- 테스트가 만든 부산물은 커밋하지 않는다(테스트 후 작업 트리를 커밋 상태로 되돌림).
+- 결과는 리뷰 프롬프트와 다음 수정 프롬프트에 들어간다. `require_tests_pass`(기본 true)면 failed/timeout 일 때 리뷰어가 승인해도 승인하지 않는다. error 는 환경 문제일 수 있어 막지 않는다.
+
+### 심각도와 승인 판단 (`policy.decide`)
+- 리뷰 템플릿: 지적마다 [P1] 핵심 동작·데이터 손실·보안·테스트 실패, [P2] 설계 위반·일반 입력 오류, [P3] 드문 입력·극단적 경계 사례·취향. 판정 블록에 `p1/p2/p3` 개수.
+- 막는 지적 수 = `block_severity`(기본 P2) 이하 심각도 개수의 합. 심각도가 있으면 duet 가 이 수로 판단한다(0 이면 리뷰어가 반려해도 승인, 0 이 아니면 리뷰어가 승인해도 반려). 심각도가 없으면 예전 규칙(must_fix, 모순 처리).
+- 리뷰어에게 이전 리뷰의 '반드시 고칠 것'을 보여주고, 해결 여부를 먼저 확인하게 하며 새 지적에는 [새] 를 붙이게 한다.
+- `run.json` 의 `review_history`: 라운드별 리뷰어 판정, duet 판단, 막는 지적 수, 심각도, 테스트 상태, 이유.
+
+### 수렴 실패 감지 (`policy.stalled`)
+- 막는 지적 수가 `stall_rounds`(기본 2) 라운드 연속으로 그 전까지의 최저치보다 낮아지지 않으면 멈춘다: `done_unapproved`, `stop_reason: "stalled"`. 상한까지 가서 멈추면 `stop_reason: "max_review"`.
+- 수렴 안 됨으로 일찍 멈춘 실행은 `--max-review` 없이 resume 할 수 있고, 이때 수렴 판단은 그 라운드부터 다시 센다(`stall_baseline_round`).
+
+### 설정
+`test_command = "auto"`, `test_timeout_sec = 600`, `require_tests_pass = true`, `block_severity = "P2"`, `stall_rounds = 2`. CLI: `--test-command`, `--block-severity`, `--stall-rounds`. 실행 상태에 저장해 resume 때 같은 규칙을 쓴다. UI 의 새 실행 창·설정 화면에서도 고른다.
 

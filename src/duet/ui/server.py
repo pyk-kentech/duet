@@ -441,7 +441,13 @@ def _clean_defaults(d: Any) -> dict[str, Any]:
     for k in ("implementer", "reviewer", "synth"):
         if d.get(k):
             out[k] = str(d[k])
-    for k in ("debate_rounds", "max_review", "timeout_sec"):
+    if str(d.get("test_command") or "").strip():
+        out["test_command"] = str(d["test_command"]).strip()
+    if d.get("block_severity"):
+        out["block_severity"] = str(d["block_severity"])
+    if isinstance(d.get("require_tests_pass"), bool):
+        out["require_tests_pass"] = d["require_tests_pass"]
+    for k in ("debate_rounds", "max_review", "timeout_sec", "stall_rounds"):
         if d.get(k) not in (None, ""):
             try:
                 out[k] = int(d[k])

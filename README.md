@@ -140,6 +140,16 @@ duet run "..." --workdir ./x --claude-model opus --claude-effort high --codex-mo
 비우면 각 CLI의 기본 모델을 씁니다. 매번 쓰기 번거로우면 UI의 **설정 > 기본 실행 설정**에 저장하세요(`~/.duet/settings.json`).
 우선순위는 CLI 인자 > 작업 폴더의 `duet.toml` > 전역 설정 > 기본값입니다.
 
+## 리뷰 규칙과 테스트
+
+- **duet가 직접 테스트**: 구현이 커밋되면 duet가 테스트를 돌리고 결과를 리뷰어와 구현자에게 보여줍니다. 명령은 `--test-command`, 구현자가 `duet.toml`에 적은 `test_command`, 자동 감지(pytest·npm·cargo·go·make) 순으로 정합니다. 테스트가 실패하면 리뷰어가 승인해도 승인하지 않습니다.
+- **심각도 기준**: 리뷰어가 지적마다 P1(핵심 동작·보안)·P2(설계 위반·일반 입력 오류)·P3(드문 경계 사례)를 붙입니다. 기본은 P1·P2가 없으면 승인합니다(`--block-severity P3`면 P3까지 막음).
+- **수렴 안 됨**: 막는 지적 수가 2라운드 연속 줄지 않으면 멈추고 사람에게 넘깁니다(`--stall-rounds`, 0이면 끔). `duet resume`으로 이어갈 수 있습니다.
+
+```bash
+duet run "..." --workdir ./x --test-command "uv run pytest -q" --block-severity P2 --stall-rounds 2
+```
+
 ## 관리자 UI
 
 ```bash
@@ -202,6 +212,11 @@ synth = "codex"                  # 생략 시 reviewer
 debate_rounds = 1                # 0~5
 max_review = 3                   # 1~10
 timeout_sec = 1200               # 호출 1회 제한
+test_command = "auto"            # duet 가 돌릴 테스트 (auto: duet.toml → 자동 감지, none: 끔)
+test_timeout_sec = 600
+require_tests_pass = true        # 테스트 실패면 승인 안 함
+block_severity = "P2"            # 이 심각도 이상 지적이 남으면 반려 (P1|P2|P3)
+stall_rounds = 2                 # 막는 지적 수가 N 라운드 연속 안 줄면 멈춤 (0=끔)
 max_diff_chars = 60000           # 리뷰 프롬프트에 넣을 diff 최대 길이
 prompt_arg_max_bytes = 100000    # UTF-8 바이트. 넘으면 프롬프트를 stdin으로 전달
 diff_excludes = ["package-lock.json", "yarn.lock", "uv.lock", "poetry.lock", "Cargo.lock", "go.sum", "..."]  # 리뷰 diff 에서 뺄 잠금 파일 (기본값 일부)
