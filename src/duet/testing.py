@@ -99,7 +99,8 @@ def detect_command(wd: Path) -> str | None:
 
 def run_tests(workdir: Path, command: str, source: str, timeout_sec: int) -> TestResult:
     r = run_process(["sh", "-c", command], cwd=workdir, timeout_sec=timeout_sec, env={"CI": "1", "PYTHONDONTWRITEBYTECODE": "1"})
-    out = (r.stdout + ("\n" + r.stderr if r.stderr.strip() else "")).strip()
+    # 도구의 안내(uv 의 설치 메시지 등)는 보통 stderr 로 나오므로 앞에 두고, 결과 요약은 stdout 끝에서 찾는다
+    out = ((r.stderr.strip() + "\n") if r.stderr.strip() else "") + r.stdout.strip()
     if r.timed_out:
         status = "timeout"
     elif r.exit_code == 0:
@@ -108,7 +109,9 @@ def run_tests(workdir: Path, command: str, source: str, timeout_sec: int) -> Tes
         status = "error"
     else:
         status = "failed"
-    lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    lines = [ln.strip() for ln in (r.stdout.splitlines() or r.stderr.splitlines()) if ln.strip()]
+    if not lines:
+        lines = [ln.strip() for ln in r.stderr.splitlines() if ln.strip()]
     summary = lines[-1][:200] if lines else ""
     return TestResult(command=command, source=source, status=status, exit_code=r.exit_code,
                       duration_sec=round(r.duration_sec, 1), summary=summary, output_tail=out[-OUTPUT_TAIL:])

@@ -266,3 +266,30 @@ def test_cli_policy_flags_saved(tmp_path: Path):
     assert (c["test_command"], c["block_severity"], c["stall_rounds"], c["require_tests_pass"]) == ("none", "P1", 0, True)
     with pytest.raises(SystemExit):
         main(["run", "t", "--workdir", str(tmp_path / "y"), "--mock", "--block-severity", "P9"])
+
+
+def test_resume_old_run_does_not_retest_reviewed_rounds(tmp_path: Path):
+    """테스트 단계가 없던 예전 실행을 이어가면, 이미 리뷰가 끝난 라운드는 테스트하지 않는다."""
+    ctx = prep(tmp_path, {"claude": MockAdapter(label="claude"),
+                          "codex": MockAdapter(label="codex", responder=lambda r, n: vblock("APPROVED", 0, 0, 0, 0))},
+               test_command="echo ok", max_review=3)
+    ws = Workspace(tmp_path)
+    ws.ensure_repo()
+    st = ctx.state
+    st.base_commit = ws.commit_all("duet: design")
+    (tmp_path / "main.py").write_text("v1\n", encoding="utf-8")
+    ws.commit_all("duet: impl round 1")
+    for k in ("build:base", "impl:1:called", "impl:1", "review:1"):   # 예전 실행: test:1 키가 없음
+        st.mark_done(k)
+    st.last_review = "x.md"
+    ctx.transcript.save("review1_codex", "## 반드시 고칠 것\n- a\n", {"step": "review", "agent": "codex", "ok": True, "exit_code": 0})
+    st.last_review = "01_review1_codex.md"
+    assert BuildPhase(ctx).run()
+    assert "1" not in st.tests and st.tests["2"]["status"] == "passed"
+
+
+def test_test_summary_prefers_stdout(tmp_path: Path):
+    r = run_tests(tmp_path, "echo '95 passed in 5.9s'; echo 'Installed 1 package in 2ms' >&2", "설정", 30)
+    assert r.summary == "95 passed in 5.9s" and r.output_tail.endswith("95 passed in 5.9s")
+    r = run_tests(tmp_path, "echo 'only stderr' >&2; exit 1", "설정", 30)
+    assert r.summary == "only stderr"

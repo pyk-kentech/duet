@@ -112,7 +112,9 @@ class BuildPhase:
                 ctx.save()
 
             test_key = f"test:{i}"
-            if not st.is_done(test_key):
+            # 테스트는 그 라운드 리뷰 전에만 의미가 있다. 리뷰가 끝난 라운드(예: 테스트 단계가 없던
+            # 예전 실행을 이어갈 때)는 지금 코드로 돌려 봐야 그 라운드 기록이 틀려진다.
+            if not st.is_done(test_key) and not st.is_done(review_key):
                 ctx.set_position(PHASE_BUILD, "test", i)
                 ctx.save()
                 self._run_tests(i)
