@@ -180,7 +180,7 @@ const TIPS = {
   synth: '두 AI 의 설계안을 하나의 최종 설계(DESIGN.md)로 합치는 AI 입니다. 기본은 리뷰 담당이 합칩니다.',
   claude_model: 'Claude 의 어떤 모델을 쓸지 정합니다. 비워 두면 Claude 가 평소 쓰는 기본 모델입니다.',
   codex_model: 'Codex(ChatGPT)의 어떤 모델을 쓸지 정합니다. 비워 두면 기본 모델입니다.',
-  effort: 'AI 가 얼마나 깊게 생각할지입니다. 높을수록 꼼꼼하지만 느리고 사용량을 더 씁니다. 비워 두면 기본값입니다.',
+  effort: 'AI 가 얼마나 깊게 생각할지입니다. 높을수록 꼼꼼하지만 느리고 사용량을 더 씁니다. 기본값(단계별)은 단계마다 정해진 강도를 씁니다(Codex: 설계 종합·첫 리뷰 high, 나머지 medium). 값을 고르면 모든 단계에 그 값을 씁니다.',
   debate_rounds: '두 AI 가 서로의 설계안을 비판하고 고치는 횟수입니다. 0 이면 비판 없이 바로 합칩니다. 1 늘릴 때마다 AI 호출이 2번 늘어납니다.',
   max_review: '"구현 → 리뷰"를 최대 몇 번 반복할지입니다. 그 전에 승인되면 바로 끝납니다.',
   stall_rounds: '리뷰에서 고칠 것이 이 횟수만큼 연속으로 줄지 않으면 멈추고 사람에게 넘깁니다. 끝없이 반려만 반복되는 걸 막습니다. 0 이면 이 기능을 끕니다.',
@@ -244,6 +244,7 @@ const TIPS = {
   'tool.uv': 'Python 도구 설치 프로그램입니다. 다른 컴퓨터에 Python 을 설치할 때 씁니다. 없어도 됩니다.',
   'tool.claude': 'Claude 를 터미널에서 쓰는 공식 프로그램입니다. Claude 구독 계정으로 로그인해야 합니다.',
   'tool.codex': 'ChatGPT(Codex)를 터미널에서 쓰는 공식 프로그램입니다. ChatGPT 계정으로 로그인해야 합니다.',
+  'tool.api_keys': '이 변수가 있으면 Claude·Codex 가 구독 대신 API 요금으로 계산할 수 있습니다. duet 는 기본으로 빼고 넘깁니다.',
   recheck: '설치·로그인 상태를 다시 확인합니다.',
   term_input: '로그인 코드나 질문의 답을 여기에 붙여 넣고 Enter 를 누르세요.',
   term_secret: '비밀번호처럼 화면에 보이면 안 되는 값을 입력할 때 켜세요.',
@@ -1382,7 +1383,7 @@ function effortSelect(name, agent, value, sugg, model) {
     const m = sugg.codex.models.find(x => x.id === model);
     if (m && m.efforts && m.efforts.length) levels = m.efforts;
   }
-  const sel = h('select', { name }, h('option', { value: '' }, '기본값'), levels.map(l => h('option', { value: l }, l)));
+  const sel = h('select', { name }, h('option', { value: '' }, '기본값(단계별)'), levels.map(l => h('option', { value: l }, l)));
   if (value && !levels.includes(value)) sel.append(h('option', { value }, value));
   sel.value = value || '';
   return sel;

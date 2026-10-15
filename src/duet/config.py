@@ -44,6 +44,19 @@ EFFORT_SUGGESTIONS = {
     "claude": ["low", "medium", "high", "xhigh", "max"],
     "codex": ["minimal", "low", "medium", "high", "xhigh", "max"],
 }
+# step_effort 의 키. "rereview" 는 2라운드부터의 리뷰 (DESIGN.md 18.1)
+EFFORT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "rereview")
+
+# 에이전트·테스트 자식 프로세스에서 뺄 환경 변수 이름(glob, 대소문자 무시) (DESIGN.md 18.2)
+DEFAULT_ENV_STRIP = [
+    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY",
+    "*_API_KEY", "*_TOKEN", "*_SECRET", "*_SECRET_*", "*_PASSWORD",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS", "SSH_AUTH_SOCK",
+]
+# 패턴에 걸려도 남길 이름. Claude 구독 인증 토큰이라 빼면 로그인이 풀린다.
+DEFAULT_ENV_KEEP = ["CLAUDE_CODE_OAUTH_TOKEN"]
+
 CLAUDE_MODEL_SUGGESTIONS = ["fable", "opus", "sonnet", "haiku",
                             "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
 
@@ -60,6 +73,13 @@ class AgentConfig:
     write_args: list[str] = field(default_factory=list)
     model: str = ""     # 비우면 CLI 기본 모델
     effort: str = ""    # 추론 강도. 비우면 CLI 기본값
+    # 단계별 추론 강도 {단계: 강도}. 없는 단계는 effort (DESIGN.md 18.1)
+    step_effort: dict[str, str] = field(default_factory=dict)
+
+    def effort_for(self, step: str, round_: int = 0) -> str:
+        """이 호출에 쓸 추론 강도. 리뷰는 2라운드부터 "rereview" 키를 본다."""
+        key = "rereview" if step == "review" and round_ >= 2 else step
+        return self.step_effort.get(key) or self.effort
 
 
 def _default_claude() -> AgentConfig:
@@ -80,6 +100,9 @@ def _default_codex() -> AgentConfig:
         base_args=["exec", "--skip-git-repo-check"],
         read_args=["--sandbox", "read-only"],
         write_args=["--sandbox", "workspace-write"],
+        # 추론 출력은 입력보다 요율이 훨씬 높다. 설계 종합과 첫 리뷰만 high (DESIGN.md 18.1)
+        effort="medium",
+        step_effort={"synthesize": "high", "review": "high"},
     )
 
 
@@ -106,6 +129,8 @@ class Config:
     review_diff: str = "incremental"    # 2라운드부터 지난 리뷰 이후 바뀐 부분만 diff 로 (full: 매번 전체)
     repro_tests: bool = True            # 리뷰어의 <repro> 재현 테스트를 저장·실행
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
+    env_strip: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_STRIP))
+    env_keep: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_KEEP))
     claude: AgentConfig = field(default_factory=_default_claude)
     codex: AgentConfig = field(default_factory=_default_codex)
 
@@ -153,6 +178,10 @@ class Config:
             raise ConfigError("repro_tests 는 true/false 여야 합니다")
         if not isinstance(self.stall_rounds, int) or not 0 <= self.stall_rounds <= MAX_REVIEW_ROUNDS:
             raise ConfigError(f"stall_rounds 는 0~{MAX_REVIEW_ROUNDS} 사이여야 합니다: {self.stall_rounds}")
+        for key in ("env_strip", "env_keep"):
+            v = getattr(self, key)
+            if not isinstance(v, list) or not all(isinstance(x, str) and x for x in v):
+                raise ConfigError(f"{key}는 빈 문자열이 없는 문자열 리스트여야 합니다")
         for name in AGENT_NAMES:
             ac = self.agent(name)
             if not ac.bin:
@@ -165,6 +194,14 @@ class Config:
                 v = getattr(ac, key)
                 if not isinstance(v, str) or not _TOKEN_RE.match(v):
                     raise ConfigError(f"[{name}] {key} 값이 잘못되었습니다: {v!r} (영문·숫자·.-_:[]/ 만)")
+            if not isinstance(ac.step_effort, dict):
+                raise ConfigError(f"[{name}] step_effort 는 {{단계 = 강도}} 테이블이어야 합니다")
+            for step, v in ac.step_effort.items():
+                if step not in EFFORT_STEPS:
+                    raise ConfigError(f"[{name}] step_effort 의 단계가 잘못되었습니다: {step!r} "
+                                      f"(가능: {', '.join(EFFORT_STEPS)})")
+                if not isinstance(v, str) or not v or not _TOKEN_RE.match(v):
+                    raise ConfigError(f"[{name}] step_effort.{step} 값이 잘못되었습니다: {v!r}")
 
 
 CONFIG_FILENAME = "duet.toml"
@@ -221,7 +258,13 @@ def _apply(cfg: Config, data: Mapping[str, Any], *, source: str) -> Config:
             unknown = set(value) - _AGENT_KEYS
             if unknown:
                 raise ConfigError(f"{source}: [{key}] 에 알 수 없는 키: {', '.join(sorted(unknown))}")
-            top[key] = replace(cfg.agent(key), **dict(value))
+            value = dict(value)
+            if "effort" in value and "step_effort" not in value:
+                # effort 만 정한 층은 '모든 단계 같은 강도' (DESIGN.md 18.1 층 규칙)
+                value["step_effort"] = {}
+            if isinstance(value.get("step_effort"), Mapping):
+                value["step_effort"] = dict(value["step_effort"])
+            top[key] = replace(cfg.agent(key), **value)
         elif key in _TOP_LEVEL_KEYS:
             top[key] = value
         else:
@@ -244,3 +287,29 @@ def _nest(flat: Mapping[str, Any]) -> dict[str, Any]:
             else:
                 out[k] = v
     return out
+
+
+def parse_step_effort(text: str) -> dict[str, str]:
+    """CLI 의 "review=high,fix=low" → {"review": "high", "fix": "low"}. 검증은 Config.validate 가 한다."""
+    out: dict[str, str] = {}
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        step, sep, level = part.partition("=")
+        if not sep or not step.strip() or not level.strip():
+            raise ConfigError(f"단계별 추론 강도 형식이 잘못되었습니다: {part!r} (예: review=high,fix=low)")
+        out[step.strip()] = level.strip()
+    return out
+
+
+def describe_effort(ac: AgentConfig) -> str:
+    """시작 로그용: "medium; synthesize·review=high" """
+    groups: dict[str, list[str]] = {}
+    for step in EFFORT_STEPS:
+        level = ac.step_effort.get(step)
+        if level and level != ac.effort:
+            groups.setdefault(level, []).append(step)
+    parts = [ac.effort] if ac.effort else (["기본"] if groups else [])
+    rest = ", ".join(f"{'·'.join(steps)}={level}" for level, steps in groups.items())
+    return "; ".join(p for p in (", ".join(parts), rest) if p)

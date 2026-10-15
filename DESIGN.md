@@ -326,6 +326,12 @@ bin = "codex"
 base_args = ["exec", "--skip-git-repo-check"]
 read_args = ["--sandbox", "read-only"]
 write_args = ["--sandbox", "workspace-write"]
+effort = "medium"                                         # 18장
+step_effort = { synthesize = "high", review = "high" }
+
+# 에이전트·테스트 자식 프로세스에서 뺄 환경 변수(glob)와 예외 (18장)
+env_strip = ["ANTHROPIC_API_KEY", "*_API_KEY", "*_TOKEN", "..."]
+env_keep = ["CLAUDE_CODE_OAUTH_TOKEN"]
 ```
 
 - 범위를 벗어난 값(`debate_rounds` 0~5, `max_review` 1~10, implementer == reviewer 등)은 조용히 보정하지 않고 에러로 거부한다.
@@ -407,6 +413,10 @@ write_args = ["--sandbox", "workspace-write"]
 - 증분 리뷰 diff, 테스트 재실행 안내, `repro.py`, `activity.py`, UI 실시간 작업 보기
 - ✅ 재현 테스트 파싱·흐름, 증분 diff(예전 실행 대비), 두 CLI 세션 기록 파싱, 헤드리스 브라우저 확인
 
+### M12. 단계별 추론 강도 + 자식 환경 변수 정리 (2026-10-15 사용자 요청으로 추가)
+- `AgentConfig.step_effort`, `--{agent}-step-effort`, Codex 기본 `medium`(종합·첫 리뷰 `high`), `env_strip`/`env_keep`, `doctor` 의 API 키 점검 (18장)
+- ✅ 단계·라운드별 effort 결정, 설정 층 규칙(effort 만 정한 층은 단계별을 비움), resume 보존·예전 run 호환, 가짜 CLI 로 단계별 플래그와 자식 환경(비밀 변수 제거·keep 예외·테스트 명령) 검증
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -476,6 +486,7 @@ UI 의 실행 버튼은 셸 권한이 있는 에이전트를 띄우므로, 다�
 - `[claude] model/effort` → `claude --model X --effort Y`, `[codex] model/effort` → `codex exec -m X -c model_reasoning_effort="Y"`. 비우면 각 CLI 의 기본값.
 - CLI: `duet run ... --claude-model opus --claude-effort high --codex-model gpt-6.1-sol --codex-effort xhigh`.
 - 실행 상태(`run.json` config)에 저장해 resume 때 처음과 같은 모델을 쓴다.
+- 단계마다 다른 추론 강도는 `step_effort`(18장). duet 는 Codex 의 기본 강도를 `medium` 으로 명시하므로 `~/.codex/config.toml` 의 `model_reasoning_effort` 보다 우선한다.
 - UI 후보: Claude 는 별칭(fable/opus/sonnet/haiku)과 전체 이름, Codex 는 `~/.codex/models_cache.json` 의 모델과 모델별 지원 추론 강도.
 
 ### 사용량 (로컬 파일만 읽음, 구독을 쓰지 않음)
@@ -545,3 +556,29 @@ memo-cli 실측(Codex 세션 기록): 설계 단계 호출은 입력 약 2만 �
 - 호출 방식은 그대로 두고, 두 CLI 가 실시간으로 쓰는 세션 기록을 읽는다(`activity.py`). Claude: `~/.claude/projects/<cwd 의 영숫자 외 문자를 '-' 로>/*.jsonl`(없으면 최근 기록 중 cwd 일치), Codex: 세션 기록 중 cwd 일치. 지금 호출 시작 이후의 파일 읽기·수정·명령·검색·메시지를 뽑는다.
 - `GET /api/activity` (원격 머신도 같은 API). UI 는 실행 중이면 타임라인의 '진행 중' 항목을 자동으로 열어 2초마다 갱신한다.
 
+
+---
+
+## 18. 단계별 추론 강도와 자식 환경 변수
+
+근거: `reports/AI 에이전트 오케스트레이션 고급 조사.md`(로컬 조사 보고서) 개선 후보 1·2번. Codex 요금표에서 출력(추론 포함)은 미캐시 입력의 5배, 캐시 입력의 50배 요율이라, 모든 단계를 xhigh 로 도는 것이 가장 큰 회피 가능 비용이다. OpenAI 가이드는 medium 을 일상 기본으로 둔다. 또 `claude -p` 는 `ANTHROPIC_API_KEY` 가 있으면 구독 대신 API 과금으로 조용히 바뀐다.
+
+### 18.1 단계별 추론 강도 (`step_effort`)
+- `[claude]`·`[codex]` 에 `step_effort = { 단계 = 강도 }`. 단계 키: `propose`, `critique`, `synthesize`, `implement`, `fix`, `review`(1라운드 리뷰), `rereview`(2라운드부터의 리뷰).
+- 호출의 강도 = `step_effort[단계]` → 없으면 `effort` → 비어 있으면 강도 플래그를 붙이지 않음(CLI 기본값). 키마다 독립이다(`rereview` 가 없으면 `review` 가 아니라 `effort` 로 간다).
+- 기본값: Codex `effort = "medium"`, `step_effort = { synthesize = "high", review = "high" }`. 즉 설계 종합과 첫 리뷰만 high, 증분 재리뷰와 나머지는 medium, xhigh 는 사용자가 고를 때만. Claude 는 비워 둔다(CLI 기본값).
+- **층 규칙**: 한 설정 층(전역 설정 defaults, `duet.toml`, CLI 인자)이 `effort` 만 정하고 `step_effort` 를 정하지 않으면 그 층이 `step_effort` 를 비운다 = "모든 단계 같은 강도". 둘 다 정하면 둘 다 적용한다. `step_effort` 는 층마다 통째로 바뀐다(키 단위 병합 안 함).
+  - 그래서 `--codex-effort xhigh` 는 예전처럼 모든 단계 xhigh, `effort = ""` 는 예전처럼 CLI 기본값(`~/.codex/config.toml`)을 쓴다.
+- CLI: `--{agent}-step-effort review=high,fix=low` (같은 실행에 `--{agent}-effort` 를 함께 주면 나머지 단계는 그 값).
+- `run.json` config 에 `{agent}.step_effort` 를 저장해 resume 때 같은 규칙을 쓴다. 이 키가 없는 예전 실행은 저장된 단일 `effort` 로 모든 단계를 돈다(예전과 같음).
+- 기록 메타와 사용량의 `effort` 는 그 호출에 실제로 쓴 값. 시작 로그: `codex gpt-6.1-sol(medium; synthesize·review=high)`.
+- UI: 새 실행 창의 추론 '기본값(단계별)'은 아무 플래그도 넘기지 않아 단계별 기본이 유지된다. 값을 고르면 모든 단계 그 값.
+
+### 18.2 자식 프로세스 환경 변수 (`env_strip`, `env_keep`)
+- claude/codex 호출과 duet 가 돌리는 테스트 명령의 자식 프로세스에서, 이름이 `env_strip`(glob, 대소문자 무시)에 맞는 환경 변수를 뺀다. 단 `env_keep` 에 있는 이름은 남긴다.
+  - 기본 `env_strip`: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `CODEX_API_KEY`, `*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*_SECRET_*`, `*_PASSWORD`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `GOOGLE_APPLICATION_CREDENTIALS`, `SSH_AUTH_SOCK`.
+  - 기본 `env_keep`: `CLAUDE_CODE_OAUTH_TOKEN`(Claude 구독 인증 토큰이라 빼면 로그인이 풀린다).
+  - `env_strip = []` 이면 예전처럼 전부 넘긴다.
+- git, `doctor`, ssh(원격), UI 가 띄우는 duet 는 그대로 둔다. ssh 는 `SSH_AUTH_SOCK` 이 필요하고, UI 가 띄운 duet 는 자기 자식에게 같은 규칙을 다시 적용한다.
+- duet 가 정한 변수(테스트의 `CI=1` 등)는 빼지 않는다. 실행 시작 로그에 뺀 변수 **이름**만 한 줄 남긴다(값은 남기지 않음).
+- `duet doctor`: 셸에 `ANTHROPIC_API_KEY`·`ANTHROPIC_AUTH_TOKEN`·`OPENAI_API_KEY`·`CODEX_API_KEY` 가 있으면 경고 항목을 띄운다. duet 설정이 그 변수를 빼면 "duet 는 빼고 넘김(직접 `claude -p` 를 돌리면 API 과금)", 안 빼면 "구독 대신 API 로 과금될 수 있음".

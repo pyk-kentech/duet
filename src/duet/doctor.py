@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import re
 import sys
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from duet import __version__
-from duet.runner import ExecutableNotFound, run_process
+from duet.runner import ExecutableNotFound, env_drops, run_process
 
 PATH_PREFIX = 'export PATH="$PATH:$HOME/.local/bin:$HOME/.duet/bin"; '  # 사용자 PATH 를 우선
 
@@ -131,7 +132,35 @@ def run_checks() -> list[dict[str, Any]]:
 
     checks.append(_claude_check())
     checks.append(_codex_check())
+    keys = _api_key_check()
+    if keys is not None:
+        checks.append(keys)
     return [asdict(c) for c in checks]
+
+
+# 있으면 CLI 가 구독 대신 API 로 과금할 수 있는 변수 (DESIGN.md 18.2)
+API_KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY")
+
+
+def _api_key_check() -> Check | None:
+    present = [k for k in API_KEY_VARS if os.environ.get(k)]
+    if not present:
+        return None
+    from duet.config import Config, ConfigError, load_config
+
+    try:
+        cfg = load_config(None)
+    except ConfigError:
+        cfg = Config()
+    dropped = set(env_drops(cfg.env_strip, cfg.env_keep, {k: "" for k in present}))
+    passed = [k for k in present if k not in dropped]
+    if passed:
+        detail = (f"{', '.join(passed)} 가 에이전트에 그대로 넘어갑니다. 구독 대신 API 로 과금될 수 있습니다 "
+                  "(설정 env_strip 확인).")
+    else:
+        detail = (f"{', '.join(present)} 가 셸에 있습니다. duet 는 빼고 넘기지만, "
+                  "직접 `claude -p`·`codex exec` 를 돌리면 API 로 과금될 수 있습니다.")
+    return Check("api_keys", "API 키 변수", "warn", detail=detail, extra={"present": present, "passed": passed})
 
 
 def _claude_check() -> Check:

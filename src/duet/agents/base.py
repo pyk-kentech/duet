@@ -27,6 +27,7 @@ class AgentRequest:
     # 어떤 단계의 호출인지("propose", "critique", "synthesize", "implement", "fix", "review").
     # 로그/기록용이며 MockAdapter가 응답을 고를 때도 쓴다.
     step: str = ""
+    round: int = 0   # 구현·리뷰 라운드(1부터, 토론은 비판 라운드). 단계별 추론 강도에 쓴다
 
 
 @dataclass

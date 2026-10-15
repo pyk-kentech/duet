@@ -18,7 +18,7 @@ def dump(argv, stdin_text):
         return
     with open(path, "w", encoding="utf-8") as f:
         json.dump(
-            {"argv": argv, "stdin": stdin_text, "cwd": os.getcwd()},
+            {"argv": argv, "stdin": stdin_text, "cwd": os.getcwd(), "env": dict(os.environ)},
             f, ensure_ascii=False, indent=1,
         )
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Sequence
 
 from duet import __version__
+from duet.config import ConfigError, parse_step_effort
 from duet.orchestrator import Orchestrator, OrchestratorError, RunOptions
 from duet.state import RunState, latest_run_dir, list_run_dirs
 from duet.transcript import Transcript
@@ -49,7 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
                        help="막는 지적 수가 N 라운드 연속 줄지 않으면 멈춤 (기본: 2, 0=끔)")
     for agent, example in (("claude", "opus, sonnet, claude-opus-5-5"), ("codex", "gpt-6.1-sol")):
         p_run.add_argument(f"--{agent}-model", metavar="MODEL", help=f"{agent} 모델 (예: {example}). 기본: CLI 기본값")
-        p_run.add_argument(f"--{agent}-effort", metavar="LEVEL", help=f"{agent} 추론 강도 (예: low, medium, high, xhigh)")
+        p_run.add_argument(f"--{agent}-effort", metavar="LEVEL",
+                           help=f"{agent} 추론 강도, 모든 단계에 적용 (예: low, medium, high, xhigh)")
+        p_run.add_argument(f"--{agent}-step-effort", metavar="STEP=LEVEL,...",
+                           help=f"{agent} 단계별 추론 강도 (예: review=high,fix=low). "
+                                "단계: propose, critique, synthesize, implement, fix, review, rereview(2라운드부터 리뷰)"),
     p_run.set_defaults(func=cmd_run)
 
     p_resume = sub.add_parser("resume", help="중단된 마지막 실행을 이어서 진행")
@@ -120,11 +125,22 @@ def cmd_run(args: argparse.Namespace) -> int:
             "debate_rounds": args.debate_rounds, "max_review": args.max_review,
             "claude.model": args.claude_model, "claude.effort": args.claude_effort,
             "codex.model": args.codex_model, "codex.effort": args.codex_effort,
+            "claude.step_effort": _step_effort(args.claude_step_effort),
+            "codex.step_effort": _step_effort(args.codex_step_effort),
             "test_command": args.test_command, "block_severity": args.block_severity,
             "stall_rounds": args.stall_rounds,
         },
     )
     return Orchestrator().run(opts).exit_code
+
+
+def _step_effort(text: str | None) -> dict[str, str] | None:
+    if text is None:
+        return None
+    try:
+        return parse_step_effort(text)
+    except ConfigError as e:
+        raise OrchestratorError(f"설정 오류: {e}") from e
 
 
 def cmd_resume(args: argparse.Namespace) -> int:

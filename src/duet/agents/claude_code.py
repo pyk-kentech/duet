@@ -22,7 +22,7 @@ from duet.agents.base import (
     compile_rate_limit_patterns,
 )
 from duet.config import AgentConfig, Config
-from duet.runner import ExecutableNotFound, run_process
+from duet.runner import ExecutableNotFound, env_drops, run_process
 from duet.usage import claude_call_usage
 
 
@@ -54,24 +54,28 @@ class ClaudeCodeAdapter:
     def build_command(self, req: AgentRequest) -> tuple[list[str], str | None]:
         """(명령어, stdin 텍스트)를 돌려준다. 프롬프트가 길면 stdin으로 넘긴다."""
         mode_args = self.agent_cfg.read_args if req.mode is Mode.READ else self.agent_cfg.write_args
-        cmd = [self.agent_cfg.bin, *self.agent_cfg.base_args, *self.model_args(), *mode_args]
+        effort = self.agent_cfg.effort_for(req.step, req.round)
+        cmd = [self.agent_cfg.bin, *self.agent_cfg.base_args, *self.model_args(effort), *mode_args]
         if len(req.prompt.encode("utf-8")) > self.cfg.prompt_arg_max_bytes:
             return cmd, req.prompt
         # `--allowedTools <tools...>` 같은 가변 인자 옵션이 프롬프트를 삼키지 않도록 옵션 종료자를 넣는다
         return [*cmd, "--", req.prompt], None
 
-    def model_args(self) -> list[str]:
+    def model_args(self, effort: str | None = None) -> list[str]:
+        """effort 가 None 이면 단계 구분 없는 기본 강도(agent_cfg.effort)."""
+        effort = self.agent_cfg.effort if effort is None else effort
         args: list[str] = []
         if self.agent_cfg.model:
             args += ["--model", self.agent_cfg.model]
-        if self.agent_cfg.effort:
-            args += ["--effort", self.agent_cfg.effort]
+        if effort:
+            args += ["--effort", effort]
         return args
 
     # ---------------------------------------------------------------- ask
     def ask(self, req: AgentRequest) -> AgentResult:
         cmd, stdin_text = self.build_command(req)
-        r = run_process(cmd, cwd=req.cwd, timeout_sec=req.timeout_sec, stdin_text=stdin_text)
+        r = run_process(cmd, cwd=req.cwd, timeout_sec=req.timeout_sec, stdin_text=stdin_text,
+                        drop_env=env_drops(self.cfg.env_strip, self.cfg.env_keep))
         text, is_error = self.parse_output_full(r.stdout)
         usage = None
         try:
@@ -80,8 +84,9 @@ class ClaudeCodeAdapter:
                 usage = claude_call_usage(data)
         except ValueError:
             pass
-        if usage is not None and self.agent_cfg.effort:
-            usage["effort"] = self.agent_cfg.effort
+        effort = self.agent_cfg.effort_for(req.step, req.round)
+        if usage is not None and effort:
+            usage["effort"] = effort
         exit_code = r.exit_code
         if is_error and exit_code == 0:
             exit_code = 1  # JSON 이 is_error 를 알리면 exit 0 이어도 실패로 본다

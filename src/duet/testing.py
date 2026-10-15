@@ -12,6 +12,7 @@ import shutil
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Collection
 
 from duet.runner import augmented_path, run_process
 import os
@@ -97,8 +98,11 @@ def detect_command(wd: Path) -> str | None:
     return None
 
 
-def run_tests(workdir: Path, command: str, source: str, timeout_sec: int) -> TestResult:
-    r = run_process(["sh", "-c", command], cwd=workdir, timeout_sec=timeout_sec, env={"CI": "1", "PYTHONDONTWRITEBYTECODE": "1"})
+def run_tests(workdir: Path, command: str, source: str, timeout_sec: int,
+              drop_env: Collection[str] = ()) -> TestResult:
+    """drop_env: 상속 환경에서 뺄 변수 이름 (에이전트가 쓴 코드를 돌리므로 비밀 변수를 넘기지 않는다)."""
+    r = run_process(["sh", "-c", command], cwd=workdir, timeout_sec=timeout_sec,
+                    env={"CI": "1", "PYTHONDONTWRITEBYTECODE": "1"}, drop_env=drop_env)
     # 도구의 안내(uv 의 설치 메시지 등)는 보통 stderr 로 나오므로 앞에 두고, 결과 요약은 stdout 끝에서 찾는다
     out = ((r.stderr.strip() + "\n") if r.stderr.strip() else "") + r.stdout.strip()
     if r.timed_out:

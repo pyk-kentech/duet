@@ -23,7 +23,7 @@ from duet.agents.base import (
     compile_rate_limit_patterns,
 )
 from duet.config import AgentConfig, Config
-from duet.runner import ExecutableNotFound, run_process
+from duet.runner import ExecutableNotFound, env_drops, run_process
 from duet.usage import codex_call_usage
 
 STDIN_MARKER = "-"
@@ -61,7 +61,7 @@ class CodexAdapter:
         cmd = [
             self.agent_cfg.bin,
             *self.agent_cfg.base_args,
-            *self.model_args(),
+            *self.model_args(self.agent_cfg.effort_for(req.step, req.round)),
             "-C", str(req.cwd),
             *mode_args,
             "--output-last-message", str(last_message_path),
@@ -71,13 +71,15 @@ class CodexAdapter:
         # '-' 로 시작하는 프롬프트가 옵션으로 읽히지 않게 (codex-cli 0.162.1 에서 `--` 동작 확인)
         return [*cmd, "--", req.prompt], None
 
-    def model_args(self) -> list[str]:
+    def model_args(self, effort: str | None = None) -> list[str]:
+        """effort 가 None 이면 단계 구분 없는 기본 강도(agent_cfg.effort)."""
+        effort = self.agent_cfg.effort if effort is None else effort
         args: list[str] = []
         if self.agent_cfg.model:
             args += ["-m", self.agent_cfg.model]
-        if self.agent_cfg.effort:
+        if effort:
             # ~/.codex/config.toml 의 model_reasoning_effort 를 이 호출에서만 덮어쓴다
-            args += ["-c", f'model_reasoning_effort="{self.agent_cfg.effort}"']
+            args += ["-c", f'model_reasoning_effort="{effort}"']
         return args
 
     # ---------------------------------------------------------------- ask
@@ -88,7 +90,8 @@ class CodexAdapter:
         last_message_path = Path(tmp)
         try:
             cmd, stdin_text = self.build_command(req, last_message_path)
-            r = run_process(cmd, cwd=req.cwd, timeout_sec=req.timeout_sec, stdin_text=stdin_text)
+            r = run_process(cmd, cwd=req.cwd, timeout_sec=req.timeout_sec, stdin_text=stdin_text,
+                            drop_env=env_drops(self.cfg.env_strip, self.cfg.env_keep))
             text = self.read_last_message(last_message_path)
             if not text:
                 text = r.stdout.strip()

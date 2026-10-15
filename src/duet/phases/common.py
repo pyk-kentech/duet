@@ -82,7 +82,7 @@ class PhaseContext:
         """에이전트를 호출하고 기록·상태를 갱신한다. 실패 정책을 적용한다."""
         agent = self.agents[agent_name]
         req = AgentRequest(prompt=prompt, cwd=self.workdir, mode=mode,
-                           timeout_sec=self.cfg.timeout_sec, step=step)
+                           timeout_sec=self.cfg.timeout_sec, step=step, round=round_)
         attempt = 0
         while True:
             attempt += 1

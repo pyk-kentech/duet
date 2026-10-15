@@ -150,6 +150,7 @@ class TestCodex:
         assert cmd[0].endswith("fake_bin/codex")
         assert cmd[1:] == [
             "exec", "--skip-git-repo-check",
+            "-c", 'model_reasoning_effort="medium"',  # Codex 기본 강도 (DESIGN.md 18.1)
             "-C", str(tmp_path),
             "--sandbox", "read-only",
             "--output-last-message", "/tmp/last.md",

@@ -29,6 +29,7 @@ from duet.phases.debate import DESIGN_FILENAME
 from duet.policy import decide, stalled
 from duet.prompts import render
 from duet.repro import parse_repros, write_repros
+from duet.runner import env_drops
 from duet.testing import STATUS_KO, describe_for_prompt, resolve_command, run_tests
 from duet.state import DONE_APPROVED, DONE_UNAPPROVED, PHASE_BUILD, PHASE_DONE
 from duet.verdict import parse_verdict
@@ -180,6 +181,9 @@ class BuildPhase:
         return False
 
     # ---------------------------------------------------------------- tests
+    def _env_drops(self) -> list[str]:
+        return env_drops(self.cfg.env_strip, self.cfg.env_keep)
+
     def _run_tests(self, i: int) -> None:
         ctx, st = self.ctx, self.state
         resolved = resolve_command(ctx.workdir, self.cfg.test_command)
@@ -188,7 +192,7 @@ class BuildPhase:
             return
         command, source = resolved
         ctx.log(f"[{i}/{self.max_review}] 테스트: {command} ({source})")
-        result = run_tests(ctx.workdir, command, source, self.cfg.test_timeout_sec)
+        result = run_tests(ctx.workdir, command, source, self.cfg.test_timeout_sec, drop_env=self._env_drops())
         # 테스트가 만든 부산물(캐시·임시 파일)은 커밋하지 않는다. 구현은 이미 커밋돼 있다.
         if self.ws.dirty():
             self.ws.restore_clean()
@@ -263,7 +267,8 @@ class BuildPhase:
                 record["status"] = "not_run"
                 lines.append("테스트 명령이 없어 실행하지 못했다.")
             else:
-                result = run_tests(ctx.workdir, resolved[0], resolved[1], self.cfg.test_timeout_sec)
+                result = run_tests(ctx.workdir, resolved[0], resolved[1], self.cfg.test_timeout_sec,
+                                   drop_env=self._env_drops())
                 if self.ws.dirty():
                     self.ws.restore_clean()
                 record.update(status=result.status, summary=result.summary, command=result.command)

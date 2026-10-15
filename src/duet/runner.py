@@ -9,6 +9,7 @@ duet 안의 모든 외부 프로세스 실행(claude, codex, git, UI가 띄우�
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import os
 import signal
@@ -17,7 +18,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO, Mapping, Sequence
+from typing import IO, Collection, Iterable, Mapping, Sequence
 
 log = logging.getLogger("duet.runner")
 
@@ -71,8 +72,19 @@ def augmented_path(path: str | None) -> str:
     return os.pathsep.join(parts)
 
 
-def _merged_env(env: Mapping[str, str] | None) -> dict[str, str]:
-    full = dict(os.environ)
+def env_drops(strip: Iterable[str], keep: Iterable[str] = (),
+              environ: Mapping[str, str] | None = None) -> list[str]:
+    """environ(기본 os.environ)에서 strip 패턴(glob, 대소문자 무시)에 맞고 keep 에 없는 변수 이름."""
+    environ = os.environ if environ is None else environ
+    patterns = [p.upper() for p in strip]
+    kept = {k.upper() for k in keep}
+    return sorted(name for name in environ
+                  if name.upper() not in kept
+                  and any(fnmatch.fnmatchcase(name.upper(), p) for p in patterns))
+
+
+def _merged_env(env: Mapping[str, str] | None, drop: Collection[str] = ()) -> dict[str, str]:
+    full = {k: v for k, v in os.environ.items() if k not in drop}
     if env:
         full.update(env)
     full["PATH"] = augmented_path(full.get("PATH"))
@@ -86,6 +98,7 @@ def run_process(
     timeout_sec: int | float | None = None,
     stdin_text: str | None = None,
     env: Mapping[str, str] | None = None,
+    drop_env: Collection[str] = (),
 ) -> ProcessResult:
     """외부 명령을 실행하고 결과를 돌려준다.
 
@@ -93,6 +106,7 @@ def run_process(
     - 타임아웃이 지나면 프로세스 그룹을 죽이고 timed_out=True 로 반환한다(예외 아님).
     - KeyboardInterrupt 등 예외가 나면 프로세스 그룹을 죽이고 예외를 다시 던진다.
     - 실행 파일이 없으면 ExecutableNotFound 를 던진다.
+    - drop_env 의 이름은 상속 환경에서 뺀다(env 로 직접 준 값은 남김). 비밀 변수 정리용 (env_drops).
     """
     cmd = [str(c) for c in cmd]
     log.debug("run: %s (cwd=%s, timeout=%s)", _fmt_cmd(cmd), cwd, timeout_sec)
@@ -107,7 +121,7 @@ def run_process(
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=_merged_env(env),
+            env=_merged_env(env, set(drop_env)),
             start_new_session=True,
         )
     except FileNotFoundError as e:

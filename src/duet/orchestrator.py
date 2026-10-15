@@ -18,12 +18,13 @@ from pathlib import Path
 from typing import IO, Any, Callable, Mapping
 
 from duet.agents import AgentAdapter, AgentNotAvailable, make_agents
-from duet.config import Config, ConfigError, load_config
+from duet.config import Config, ConfigError, describe_effort, load_config
 from duet.lock import LockBusy, RunLock
 from duet.phases.build import BuildPhase
 from duet.phases.common import PhaseContext, PhaseStop
 from duet.phases.debate import DESIGN_FILENAME, DebatePhase
 from duet.registry import register_quietly
+from duet.runner import env_drops
 from duet.state import (
     DONE_APPROVED,
     DONE_DESIGN,
@@ -45,6 +46,7 @@ Printer = Callable[[str], None]
 
 CONFIG_KEYS = ("implementer", "reviewer", "synth", "debate_rounds", "max_review",
                "claude.model", "claude.effort", "codex.model", "codex.effort",
+               "claude.step_effort", "codex.step_effort",
                "test_command", "block_severity", "stall_rounds", "require_tests_pass",
                "review_diff", "repro_tests")
 CONSOLE_LOG = "console.log"
@@ -143,8 +145,10 @@ class Orchestrator:
                     f"구현: {cfg.implementer} / 리뷰: {cfg.reviewer} / 리뷰 최대 {cfg.max_review}회"
                 self.log(f"{design} / {build}" + (" / mock" if opts.mock else ""))
                 self.log("모델: " + " / ".join(
-                    f"{n} {getattr(cfg, n).model or '기본'}" + (f"({getattr(cfg, n).effort})" if getattr(cfg, n).effort else "")
+                    f"{n} {getattr(cfg, n).model or '기본'}"
+                    + (f"({describe_effort(getattr(cfg, n))})" if describe_effort(getattr(cfg, n)) else "")
                     for n in ("claude", "codex")))
+                self._log_env_drops(cfg, opts.mock)
                 return self._execute(workdir, run_dir, cfg, agents, state)
 
     # ---------------------------------------------------------------- resume
@@ -191,6 +195,7 @@ class Orchestrator:
                 self.log(f"이어하기: {state.run_id}  (이전 status={state.status}, phase={state.phase}, "
                          f"step={state.step}, round={state.round})"
                          + (f" / 리뷰 상한 {prev_max} → {cfg.max_review}회" if cfg.max_review != prev_max else ""))
+                self._log_env_drops(cfg, mock)
                 state.status = RUNNING
                 state.error = None
                 state.save(run_dir)
@@ -283,6 +288,11 @@ class Orchestrator:
                 raise OrchestratorError(str(e)) from e
         return agents
 
+    def _log_env_drops(self, cfg: Config, mock: bool) -> None:
+        dropped = [] if mock else env_drops(cfg.env_strip, cfg.env_keep)
+        if dropped:  # 이름만 남긴다(값은 남기지 않음)
+            self.log("에이전트·테스트에 넘기지 않는 환경 변수: " + ", ".join(dropped))
+
     @staticmethod
     def _snapshot(cfg: Config, opts: RunOptions) -> dict[str, Any]:
         return {
@@ -290,6 +300,7 @@ class Orchestrator:
             "debate_rounds": cfg.debate_rounds, "max_review": cfg.max_review,
             "claude.model": cfg.claude.model, "claude.effort": cfg.claude.effort,
             "codex.model": cfg.codex.model, "codex.effort": cfg.codex.effort,
+            "claude.step_effort": dict(cfg.claude.step_effort), "codex.step_effort": dict(cfg.codex.step_effort),
             "test_command": cfg.test_command, "block_severity": cfg.block_severity,
             "stall_rounds": cfg.stall_rounds, "require_tests_pass": cfg.require_tests_pass,
             "review_diff": cfg.review_diff, "repro_tests": cfg.repro_tests,

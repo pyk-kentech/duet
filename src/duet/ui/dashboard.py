@@ -21,7 +21,7 @@ from subprocess import Popen
 from typing import Any
 
 from duet.activity import agent_activity, call_start_epoch
-from duet.config import AGENT_NAMES, ConfigError, MAX_DEBATE_ROUNDS, MAX_REVIEW_ROUNDS, load_config
+from duet.config import AGENT_NAMES, ConfigError, MAX_DEBATE_ROUNDS, MAX_REVIEW_ROUNDS, describe_effort, load_config
 from duet.lock import read_lock
 from duet.orchestrator import CONSOLE_LOG
 from duet.phases.build import build_review_diff
@@ -472,8 +472,10 @@ class Dashboard:
             return {"error": str(e)}
         return {"implementer": cfg.implementer, "reviewer": cfg.reviewer, "synth": cfg.synth_name,
                 "debate_rounds": cfg.debate_rounds, "max_review": cfg.max_review,
-                "claude": {"model": cfg.claude.model, "effort": cfg.claude.effort},
-                "codex": {"model": cfg.codex.model, "effort": cfg.codex.effort},
+                # 단계별 강도가 있으면 effort 를 비워 둔다: 화면이 그 값을 다시 넘기면 단계별 설정이 지워진다
+                **{n: {"model": getattr(cfg, n).model,
+                       "effort": "" if getattr(cfg, n).step_effort else getattr(cfg, n).effort,
+                       "effort_label": describe_effort(getattr(cfg, n))} for n in ("claude", "codex")},
                 "test_command": cfg.test_command, "block_severity": cfg.block_severity,
                 "stall_rounds": cfg.stall_rounds, "require_tests_pass": cfg.require_tests_pass,
                 "review_diff": cfg.review_diff, "repro_tests": cfg.repro_tests,
