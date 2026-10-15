@@ -8,7 +8,9 @@ from typing import Iterable, Sequence
 from duet.runner import ExecutableNotFound, run_process
 from duet.state import DUET_DIR
 
-GIT_IDENTITY = ["-c", "user.name=duet", "-c", "user.email=duet@local"]
+GIT_IDENTITY = ["-c", "user.name=duet", "-c", "user.email=duet@local",
+                # 한글 등 비ASCII 파일 이름을 "\355\225..." 로 이스케이프하지 않게
+                "-c", "core.quotepath=off"]
 GITIGNORE_LINE = f"{DUET_DIR}/"
 
 
@@ -65,7 +67,13 @@ class Workspace:
         return [ln for ln in out.splitlines() if ln.strip()]
 
     def dirty_files(self) -> list[str]:
-        return [ln[3:] for ln in self.status_lines()]
+        files = []
+        for ln in self.status_lines():
+            path = ln[3:]
+            if " -> " in path:  # rename: "old -> new"
+                path = path.split(" -> ", 1)[1]
+            files.append(path.strip('"'))
+        return files
 
     def dirty(self) -> bool:
         return bool(self.status_lines())
@@ -100,8 +108,12 @@ class Workspace:
 
 
 # -------------------------------------------------------------------- guard
-def check_workdir(workdir: Path, *, force: bool = False) -> Path:
-    """작업 폴더 가드. 문제가 있으면 WorkdirRefused."""
+def check_workdir(workdir: Path, *, force: bool = False, allow: Sequence[str] = ()) -> Path:
+    """작업 폴더 가드. 문제가 있으면 WorkdirRefused.
+
+    `.duet/` 아래 변경은 항상 무시한다(이전 실행의 기록). allow 에 든 경로(예: --skip-design 의
+    DESIGN.md)도 무시한다.
+    """
     wd = Path(workdir).expanduser().resolve()
     home = Path.home().resolve()
     if wd == Path(wd.anchor):
@@ -112,8 +124,10 @@ def check_workdir(workdir: Path, *, force: bool = False) -> Path:
         raise WorkdirRefused(f"작업 폴더가 디렉터리가 아닙니다: {wd}")
     if wd.is_dir() and not force:
         ws = Workspace(wd)
-        if ws.is_repo() and ws.dirty():
-            files = ws.dirty_files()
+        ignored = {*allow}
+        files = [f for f in ws.dirty_files() if not f.startswith(GITIGNORE_LINE) and f not in ignored] \
+            if ws.is_repo() else []
+        if files:
             shown = "\n".join(f"  {f}" for f in files[:10]) + ("\n  ..." if len(files) > 10 else "")
             raise WorkdirRefused(
                 f"작업 폴더에 커밋되지 않은 변경이 있습니다 ({len(files)}개):\n{shown}\n"

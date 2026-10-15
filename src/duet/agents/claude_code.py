@@ -18,8 +18,8 @@ from duet.agents.base import (
     AgentRequest,
     AgentResult,
     Mode,
+    classify_rate_limit,
     compile_rate_limit_patterns,
-    detect_rate_limit,
 )
 from duet.config import AgentConfig, Config
 from duet.runner import ExecutableNotFound, run_process
@@ -73,7 +73,10 @@ class ClaudeCodeAdapter:
             raw_stderr=r.stderr,
             exit_code=exit_code,
             duration_sec=r.duration_sec,
-            rate_limited=detect_rate_limit((r.stderr, r.stdout), self._rl_patterns),
+            rate_limited=classify_rate_limit(
+                failed=exit_code != 0, text=text,
+                diagnostics=(r.stderr, r.stdout), patterns=self._rl_patterns,
+            ),
             timed_out=r.timed_out,
             command=cmd,
         )

@@ -17,6 +17,7 @@ from duet.prompts import render
 from duet.state import PHASE_DEBATE
 
 DESIGN_FILENAME = "DESIGN.md"
+BACKUP_FILENAME = "DESIGN.prev.md"
 REVISION_HEADER_RE = re.compile(r"^##\s*개정안\s*$", re.MULTILINE)
 CRITIQUE_HEADER_RE = re.compile(r"^##\s*상대 안 비판\s*$", re.MULTILINE)
 
@@ -98,6 +99,12 @@ class DebatePhase:
 
         final = ctx.transcript.read(st.final_design)  # type: ignore[arg-type]
         design_path = ctx.workdir / DESIGN_FILENAME
+        if design_path.is_file():
+            old = design_path.read_text(encoding="utf-8")
+            if old != final:
+                backup = ctx.run_dir / BACKUP_FILENAME
+                backup.write_text(old, encoding="utf-8")
+                ctx.log(f"기존 {DESIGN_FILENAME} 를 덮어씁니다 (백업: {backup})")
         design_path.write_text(final, encoding="utf-8")
         ctx.log(f"{DESIGN_FILENAME} 저장 완료")
         return final

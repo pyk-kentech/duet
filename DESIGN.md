@@ -58,7 +58,7 @@ duet run "..." --workdir ./x --mock
 
 실행 중 터미널에는 단계별 진행 상황(누가 무엇을 하는 중인지, 소요 시간, 판정)이 한 줄씩 찍힌다.
 
-종료 코드: 0 승인 완료/설계만 완료, 1 미승인 종료, 2 사용 오류, 3 중단(한도·반복 실패 → `resume`).
+종료 코드: 0 승인 완료/설계만 완료, 1 미승인 종료, 2 사용 오류, 3 중단(한도·반복 실패 → `resume`), 130 사용자 중단(Ctrl-C 또는 SIGTERM → `resume`).
 
 ---
 
@@ -194,7 +194,9 @@ class AgentAdapter(Protocol):
 - **Claude 는 프롬프트 앞에 `--` 가 필수**: `--allowedTools <tools...>` 가 공백 구분 가변 인자라서 뒤따르는 프롬프트를 도구 이름으로 삼킨다(첫 실제 실행에서 "Input must be provided..." 로 발견). `--` 를 넣으면 파싱을 통과함을 잘못된 API 키 + `--bare` 로 확인(인증 단계에서 실패하므로 사용량 소모 없음). JSON 의 `is_error: true` 는 exit 0 이어도 실패로 본다.
 - `--help` 검증에서 확인한 추가 사실: Claude의 `--permission-mode`는 `acceptEdits|auto|bypassPermissions|manual|dontAsk|plan`, Codex의 `--sandbox`는 `read-only|workspace-write|danger-full-access`. 표의 값은 모두 유효하다.
 - 명령어의 고정 부분(`-p --output-format json`, `exec --skip-git-repo-check`)도 `base_args`로 설정에 노출해 버전 차이에 대응한다.
-- **한도 감지**: stderr/stdout에서 rate limit, usage limit 류 문구를 정규식으로 감지 → `rate_limited=True`. Orchestrator는 상태 저장 후 "한도 도달, 나중에 `duet resume`" 안내하며 종료(자동 대기는 하지 않음).
+- **한도 감지**: rate limit, usage limit 류 문구를 정규식으로 감지 → `rate_limited=True`. Orchestrator는 상태 저장 후 "한도 도달, 나중에 `duet resume`" 안내하며 종료(자동 대기는 하지 않음).
+  - 호출이 **실패**했을 때만 stderr/stdout 끝부분(2000자)과 본문을 검사한다.
+  - 호출이 성공했으면 본문이 **400자 이하**일 때만 검사한다(한도 안내문 자체가 응답인 경우). 정상 리뷰가 "rate limit"이나 "429"를 언급했다고 멈추던 오탐을 막는다.
 
 ### 5.3 판정 형식
 
@@ -257,6 +259,10 @@ BuildPhase
 - 실패한 호출도 `NN_label_failed.md` 로 남긴다(stderr 포함).
 - `done` 은 완료한 스텝 키 목록. resume 은 이 목록에 없는 스텝부터 실행하며, 필요한 텍스트는 기록 파일에서 다시 읽는다.
 - `done_design` 은 `--design-only` 로 설계만 끝낸 상태(끝난 실행이므로 resume 불가).
+- `stopped_user` 는 Ctrl-C 또는 SIGTERM(관리자 UI 의 중지)으로 멈춘 상태. 진행 중이던 호출은 버리고 resume 때 그 스텝부터 다시 한다.
+- `console.log`: 터미널에 찍히는 진행 로그를 그대로 run 디렉터리에도 남긴다(UI 가 실시간으로 읽는다).
+- `DESIGN.prev.md`: 설계 토론이 기존 `DESIGN.md` 를 덮어쓸 때, 내용이 다르면 원본을 여기 백업한다.
+- `<workdir>/.duet/lock.json`: 실행 중인 duet 의 pid 와 run_id. 같은 작업 폴더에서 run/resume 이 동시에 돌지 못하게 막고, 죽은 프로세스가 남긴 잠금은 무시한다.
 
 ```json
 {
@@ -270,7 +276,7 @@ BuildPhase
   "base_commit": "5da7bc7",
   "proposals": { "claude": "01_propose_claude.md", "codex": "02_propose_codex.md" },
   "last_review": "07_review1_codex.md",
-  "status": "running | done_approved | done_unapproved | done_design | stopped_rate_limit | failed",
+  "status": "running | done_approved | done_unapproved | done_design | stopped_rate_limit | stopped_user | failed",
   "done": ["propose:claude", "propose:codex", "critique:1:claude", "..."],
   "calls": [ { "agent": "claude", "step": "propose", "sec": 41.2, "exit": 0 } ]
 }
@@ -323,7 +329,9 @@ write_args = ["--sandbox", "workspace-write"]
 
 ## 9. 안전장치
 
-- **작업 폴더 가드**: workdir이 홈 디렉터리 자체이거나 `/`이면 거부. 기존 git 저장소인데 커밋 안 된 변경이 있으면 거부(`--force`로 무시 가능).
+- **작업 폴더 가드**: workdir이 홈 디렉터리 자체이거나 `/`이면 거부. 기존 git 저장소인데 커밋 안 된 변경이 있으면 거부(`--force`로 무시 가능). 단 `.duet/` 아래 변경은 항상 무시하고, `--skip-design` 일 때는 `DESIGN.md` 변경도 무시한다(설계만 → 사람이 수정 → 구현 흐름).
+- **프로세스 정리**: claude/codex 는 새 프로세스 그룹으로 띄우고, 타임아웃·중단 시 그룹 전체를 SIGTERM → SIGKILL 한다. 에이전트가 띄운 테스트나 셸 명령이 남지 않는다.
+- **동시 실행 방지**: `.duet/lock.json` 잠금.
 - **반복 상한**: `debate_rounds`, `max_review` 상한을 각각 5, 10으로 강제.
 - **리뷰어 쓰기 차단**: READ 모드 + 리뷰 후 `git status` 검사 → 변경 있으면 경고 후 `checkout`/`clean`으로 되돌림(`.duet/` 제외).
 - **타임아웃**: 호출별 `timeout_sec`. 초과 시 프로세스 종료 후 실패 처리.

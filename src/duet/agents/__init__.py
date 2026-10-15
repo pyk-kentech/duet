@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from duet.agents.base import (
     AgentAdapter,
     AgentError,
@@ -17,9 +19,16 @@ from duet.config import AGENT_NAMES, Config
 
 
 def make_agents(cfg: Config, *, mock: bool = False) -> dict[str, AgentAdapter]:
-    """이름("claude", "codex") → 어댑터 매핑을 만든다."""
+    """이름("claude", "codex") → 어댑터 매핑을 만든다.
+
+    mock 일 때 환경변수 DUET_MOCK_DELAY(초)를 주면 호출마다 그만큼 쉰다(UI 확인·중지 테스트용).
+    """
     if mock:
-        return dict(mock_pair())
+        try:
+            delay = float(os.environ.get("DUET_MOCK_DELAY", "0") or 0)
+        except ValueError:
+            delay = 0.0
+        return dict(mock_pair(delay_sec=delay))
     return {
         "claude": ClaudeCodeAdapter(cfg),
         "codex": CodexAdapter(cfg),

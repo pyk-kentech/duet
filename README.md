@@ -89,6 +89,7 @@ duet run "..." --workdir ./x --mock
 | 1 | `max_review` 안에 승인되지 않음 (마지막 리뷰 파일 경로를 출력). `resume --max-review N`으로 이어갈 수 있음 |
 | 2 | 사용 오류 (설정 값, 작업 폴더 가드, CLI 미설치 등) |
 | 3 | 중단됨 (구독 한도 도달 또는 에이전트 반복 실패) → `duet resume` |
+| 130 | 사용자가 멈춤 (Ctrl-C, 또는 관리자 UI의 중지) → `duet resume` |
 
 ## 기록과 상태
 
@@ -108,6 +109,8 @@ duet run "..." --workdir ./x --mock
 - 각 기록 파일 상단에는 에이전트, 단계, 모드, 소요 시간, exit code가 HTML 주석으로 들어 있습니다.
 - 호출이 실패하면 `..._failed.md` 로 stderr까지 남깁니다.
 - `.duet/`는 자동으로 `.gitignore`에 추가됩니다.
+- 진행 로그는 터미널과 함께 `console.log`에도 남습니다. 기존 `DESIGN.md`를 덮어쓸 때는 `DESIGN.prev.md`로 백업합니다.
+- 같은 작업 폴더에서 duet를 동시에 두 개 돌릴 수 없습니다(`.duet/lock.json`).
 - 커밋: `duet: design`(기준) → `duet: impl round 1` → `duet: impl round 2` → ...
 
 ## 설정 (`<workdir>/duet.toml`)

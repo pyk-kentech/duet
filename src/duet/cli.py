@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import signal
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -165,9 +166,20 @@ def _one_line(text: str, limit: int = 60) -> str:
 
 
 # ---------------------------------------------------------------------- main
+def _sigterm_as_interrupt(signum: int, frame: object) -> None:
+    # UI 의 '중지' 는 SIGTERM 을 보낸다. Ctrl-C 와 같은 경로(KeyboardInterrupt)로 처리해
+    # 진행 중인 claude/codex 프로세스 그룹을 정리하고 상태를 stopped_user 로 저장한다.
+    raise KeyboardInterrupt
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    previous = None
+    try:
+        previous = signal.signal(signal.SIGTERM, _sigterm_as_interrupt)
+    except ValueError:  # 메인 스레드가 아님
+        previous = None
     try:
         return args.func(args)
     except OrchestratorError as e:
@@ -176,6 +188,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\n중단됨. `duet resume` 으로 이어서 실행할 수 있습니다.", file=sys.stderr)
         return 130
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGTERM, previous)
 
 
 if __name__ == "__main__":

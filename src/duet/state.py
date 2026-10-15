@@ -19,6 +19,7 @@ DONE_APPROVED = "done_approved"
 DONE_UNAPPROVED = "done_unapproved"
 DONE_DESIGN = "done_design"          # --design-only 로 설계만 끝냄
 STOPPED_RATE_LIMIT = "stopped_rate_limit"
+STOPPED_USER = "stopped_user"        # Ctrl-C 또는 UI 의 중지(SIGTERM)
 FAILED = "failed"
 FINAL_STATUSES = frozenset({DONE_APPROVED, DONE_UNAPPROVED, DONE_DESIGN})
 
@@ -84,7 +85,7 @@ class RunState:
     @property
     def resumable(self) -> bool:
         """그대로 이어갈 수 있는 상태. done_unapproved 는 max_review 를 늘리면 이어갈 수 있다(Orchestrator 가 판단)."""
-        return self.status in (RUNNING, STOPPED_RATE_LIMIT, FAILED)
+        return self.status in (RUNNING, STOPPED_RATE_LIMIT, STOPPED_USER, FAILED)
 
     # ---------------------------------------------------------------- io
     def to_dict(self) -> dict[str, Any]:

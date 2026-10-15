@@ -80,6 +80,7 @@ def compile_rate_limit_patterns(patterns: Iterable[str]) -> list[re.Pattern[str]
 
 def detect_rate_limit(texts: Iterable[str], patterns: Iterable[re.Pattern[str]]) -> bool:
     """출력 텍스트들에서 한도 도달 문구가 보이면 True."""
+    patterns = list(patterns)
     for text in texts:
         if not text:
             continue
@@ -87,3 +88,31 @@ def detect_rate_limit(texts: Iterable[str], patterns: Iterable[re.Pattern[str]])
             if pat.search(text):
                 return True
     return False
+
+
+# 성공한 호출에서 본문만으로 한도를 판단할 때의 최대 길이.
+# 정상 응답(설계안, 리뷰)은 이보다 훨씬 길다. 본문이 "rate limit" 을 '언급'만 해도 멈추던 오탐 방지.
+SHORT_TEXT_LIMIT = 400
+# 실패한 호출에서 진단에 쓰는 stdout/stderr 끝부분 길이 (Codex stdout 에는 대화 전체가 섞인다)
+DIAG_TAIL_CHARS = 2000
+
+
+def classify_rate_limit(
+    *,
+    failed: bool,
+    text: str,
+    diagnostics: Iterable[str],
+    patterns: Iterable[re.Pattern[str]],
+) -> bool:
+    """한도 도달 여부.
+
+    - 호출이 실패했으면: stderr/stdout 끝부분과 본문에서 한도 문구를 찾는다.
+    - 성공했으면: 본문이 짧을 때만(한도 안내문 자체가 응답인 경우) 본문에서 찾는다.
+    """
+    patterns = list(patterns)
+    if failed:
+        tails = [d[-DIAG_TAIL_CHARS:] for d in diagnostics if d]
+        if detect_rate_limit([*tails, text[-DIAG_TAIL_CHARS:]], patterns):
+            return True
+    stripped = text.strip()
+    return 0 < len(stripped) <= SHORT_TEXT_LIMIT and detect_rate_limit([stripped], patterns)
