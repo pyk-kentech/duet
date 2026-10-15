@@ -418,6 +418,7 @@ class Handler(BaseHTTPRequestHandler):
         ("GET", "/api/activity"): "activity",
         ("GET", "/api/doctor"): "doctor",
         ("GET", "/api/defaults"): "defaults",
+        ("GET", "/api/workflows"): "workflows",
     }
 
     def _api(self, method: str, path: str, q: dict[str, str], body: dict[str, Any]) -> Any:

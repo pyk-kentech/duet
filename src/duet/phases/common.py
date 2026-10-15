@@ -10,15 +10,20 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import TYPE_CHECKING, Callable, Mapping
 
 from duet.agents.base import AgentAdapter, AgentRequest, AgentResult, Mode
 from duet.config import Config
+from duet.prompts import render
 from duet.runner import RunnerError
 from duet.state import FAILED, STOPPED_RATE_LIMIT, RunState
 from duet.transcript import Transcript
 
+if TYPE_CHECKING:
+    from duet.workflow import Workflow
+
 Logger = Callable[[str], None]
+EXPLORE_NOTE_MAX = 20_000   # 사전 조사 결과를 프롬프트에 붙일 때 최대 길이
 
 
 class PhaseStop(Exception):
@@ -59,6 +64,40 @@ class PhaseContext:
     run_dir: Path
     log: Logger = field(default=lambda msg: None)
     retries: int = 1
+    # 워크플로 템플릿 (DESIGN.md 19장). None 이면 agents 의 키가 곧 CLI 이름(classic)
+    workflow: "Workflow | None" = None
+
+    # ---------------------------------------------------------------- roles
+    def cli_of(self, role: str) -> str:
+        """역할 → CLI 이름(claude/codex). 기록·사용량 합계는 CLI 기준."""
+        if self.workflow is not None and role in self.workflow.roles:
+            return self.workflow.roles[role].agent
+        return role
+
+    def prompt(self, role: str, step: str, **values: object) -> str:
+        """step 의 프롬프트. 역할이 템플릿을 바꿨으면 그것을 쓰고, 사전 조사·역할 지시를 붙인다."""
+        r = self.workflow.roles.get(role) if self.workflow is not None else None
+        name = r.templates.get(step, step) if r is not None else step
+        text = render(name, self.workdir, **values)
+        if step in ("propose", "implement"):
+            notes = self._explore_notes()
+            if notes:
+                text += "\n\n## 사전 조사 (duet 가 먼저 기존 코드를 조사한 결과)\n\n" + notes
+        if r is not None and r.instructions.strip():
+            text += "\n\n## 이 역할에 대한 추가 지시\n\n" + r.instructions.strip()
+        return text
+
+    def _explore_notes(self) -> str:
+        parts = []
+        for sid, file in self.state.explores.items():
+            try:
+                body = self.transcript.read(file).strip()
+            except OSError:
+                continue
+            if len(body) > EXPLORE_NOTE_MAX:
+                body = body[:EXPLORE_NOTE_MAX] + "\n... (길어서 잘림)"
+            parts.append(f"### {sid}\n{body}" if len(self.state.explores) > 1 else body)
+        return "\n\n".join(parts)
 
     # ---------------------------------------------------------------- state
     def save(self) -> None:
@@ -98,8 +137,10 @@ class PhaseContext:
                 raise AgentFailed(agent_name, step, f"실행 불가: {e}") from e
             elapsed = result.duration_sec or (time.monotonic() - started)
 
+            cli = self.cli_of(agent_name)
             meta = {
-                "agent": agent_name, "adapter": agent.name, "step": step, "mode": mode.value,
+                "agent": cli, **({"role": agent_name} if cli != agent_name else {}),
+                "adapter": agent.name, "step": step, "mode": mode.value,
                 "round": round_, "attempt": attempt,
                 "duration_sec": elapsed, "exit_code": result.exit_code,
                 "rate_limited": result.rate_limited, "timed_out": result.timed_out,
@@ -109,9 +150,10 @@ class PhaseContext:
             }
             body = result.text if result.ok else _failure_body(result)
             path = self.transcript.save(label if result.ok else f"{label}_failed", body, meta)
-            self.state.record_call(agent_name, step, elapsed, result.exit_code,
+            self.state.record_call(cli, step, elapsed, result.exit_code,
                                    rate_limited=result.rate_limited, timed_out=result.timed_out,
-                                   file=path.name, usage=result.usage)
+                                   file=path.name, usage=result.usage,
+                                   role=agent_name if cli != agent_name else None)
 
             if result.ok:
                 self.log(f"{agent_name} ← {step} 완료 ({elapsed:.0f}초) → {path.name}")

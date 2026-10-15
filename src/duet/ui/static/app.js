@@ -38,9 +38,9 @@ const STATUS = {
 };
 const STEP = {
   propose: '설계안', critique: '비판·개정', synthesize: '설계 종합', implement: '구현', fix: '리뷰 반영',
-  review: '리뷰', test: '테스트', repro: '재현 테스트', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
+  review: '리뷰', explore: '사전 조사', audit: '감사', test: '테스트', repro: '재현 테스트', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
 };
-const PHASE = { init: '준비', debate: '설계 토론', build: '구현·리뷰', done: '끝' };
+const PHASE = { init: '준비', explore: '사전 조사', debate: '설계 토론', build: '구현·리뷰', audit: '감사', done: '끝' };
 const CHECK_STATUS = { ok: '정상', warn: '확인 필요', missing: '없음', error: '오류' };
 
 function statusKey(run) { return run.stale ? 'stale' : run.status; }
@@ -48,10 +48,11 @@ function statusBadge(run, live) {
   const key = statusKey(run);
   return withTip(h('span', { class: `badge s-${key}${live ? ' live' : ''}` }, live ? '실행 중' : (STATUS[key] || key)), `status.${live ? 'running' : key}`);
 }
-function agentTag(name) {
+function agentTag(name, role) {
   if (!name) return null;
   const base = String(name).replace(/^mock-/, '');
-  return h('span', { class: `agent agent-${base === 'claude' ? 'claude' : base === 'codex' ? 'codex' : 'x'}` }, name);
+  // 워크플로 역할이 있으면 역할 이름을 보이고, 색은 CLI 기준 (DESIGN.md 19.1)
+  return h('span', { class: `agent agent-${base === 'claude' ? 'claude' : base === 'codex' ? 'codex' : 'x'}`, title: role ? `${role} (${name})` : null }, role || name);
 }
 function verdictTag(v) {
   if (!v) return null;
@@ -176,6 +177,7 @@ const TIPS = {
   project: '프로젝트 폴더의 전체 경로입니다. 없는 폴더면 새로 만듭니다.',
   task: '무엇을 만들지 평소 말로 적으세요. 원하는 기능과 제약을 자세히 쓸수록 설계가 정확해집니다.',
   implementer: '코드를 직접 작성하고, 리뷰를 받으면 고치는 AI 입니다.',
+  workflow: '미리 정해 둔 역할군과 단계 순서입니다. classic 은 아래의 구현·리뷰·종합 설정을 그대로 씁니다. 다른 워크플로는 역할을 템플릿에서 정합니다(duet workflows 로 목록 확인).',
   reviewer: '작성된 코드를 읽고 검사해서 승인하거나 반려하는 AI 입니다. 파일은 고칠 수 없습니다.',
   synth: '두 AI 의 설계안을 하나의 최종 설계(DESIGN.md)로 합치는 AI 입니다. 기본은 리뷰 담당이 합칩니다.',
   claude_model: 'Claude 의 어떤 모델을 쓸지 정합니다. 비워 두면 Claude 가 평소 쓰는 기본 모델입니다.',
@@ -834,6 +836,25 @@ class RunView {
   }
 
   // ---------------------------------------------------------------- head
+  roleChips(st, c) {
+    const wf = st.workflow;
+    if (!wf) {
+      return [
+        c.skip_design ? h('span', { class: 'chip' }, '설계 생략') : h('span', { class: 'chip' }, '종합 ', h('b', null, c.synth), ` · 토론 ${c.debate_rounds}라운드`),
+        c.design_only ? h('span', { class: 'chip' }, '설계만') : h('span', { class: 'chip' }, '구현 ', h('b', null, c.implementer), ' · 리뷰 ', h('b', null, c.reviewer), ` · 최대 ${c.max_review}회`),
+      ];
+    }
+    const roleOf = n => { const r = (wf.roles || {})[n] || {}; return `${n}(${r.agent || '?'}${r.model ? ' ' + r.model : ''})`; };
+    const chips = [withTip(h('span', { class: 'chip' }, '워크플로 ', h('b', null, wf.name)), 'workflow')];
+    for (const s of wf.steps || []) {
+      if (s.kind === 'explore') chips.push(h('span', { class: 'chip' }, '조사 ', h('b', null, roleOf(s.role))));
+      if (s.kind === 'debate') chips.push(h('span', { class: 'chip' }, c.skip_design ? '설계 생략' : `설계 ${(s.proposers || []).map(roleOf).join(', ')}${s.synth ? ' → ' + s.synth : ''}`));
+      if (s.kind === 'build' && !c.design_only) chips.push(h('span', { class: 'chip' }, '구현 ', h('b', null, roleOf(s.implementer)), ' · 리뷰 ', h('b', null, (s.reviewers || []).map(roleOf).join(', ')), ` · 최대 ${c.max_review}회`));
+      if (s.kind === 'audit' && !c.design_only) chips.push(h('span', { class: 'chip' }, '감사 ', h('b', null, (s.roles || []).map(roleOf).join(', '))));
+    }
+    return chips;
+  }
+
   renderHead() {
     const d = this.data, st = d.state, c = st.config || {};
     const run = { status: st.status, stale: d.stale };
@@ -842,8 +863,7 @@ class RunView {
     const modelOf = a => (c[`${a}.model`] || '기본') + (c[`${a}.effort`] ? ` · ${c[`${a}.effort`]}` : '');
     const chips = h('div', { class: 'chips' },
       this.m !== LOCAL ? h('span', { class: 'chip' }, '머신 ', h('b', null, machineName(this.m))) : null,
-      c.skip_design ? h('span', { class: 'chip' }, '설계 생략') : h('span', { class: 'chip' }, '종합 ', h('b', null, c.synth), ` · 토론 ${c.debate_rounds}라운드`),
-      c.design_only ? h('span', { class: 'chip' }, '설계만') : h('span', { class: 'chip' }, '구현 ', h('b', null, c.implementer), ' · 리뷰 ', h('b', null, c.reviewer), ` · 최대 ${c.max_review}회`),
+      ...this.roleChips(st, c),
       h('span', { class: 'chip' }, 'claude ', h('b', null, modelOf('claude'))),
       h('span', { class: 'chip' }, 'codex ', h('b', null, modelOf('codex'))),
       c.mock ? h('span', { class: 'chip' }, 'mock') : null,
@@ -922,7 +942,12 @@ class RunView {
   }
   roundsSummary() {
     const st = this.data.state;
-    const hist = Object.fromEntries((st.review_history || []).map(x => [x.file, x]));
+    // 리뷰어가 여럿이면 리뷰 파일마다 그 리뷰어의 판정을 보인다 (합산 판정은 review_history 의 바깥 필드)
+    const hist = {};
+    for (const x of st.review_history || []) {
+      if (x.reviewers) for (const r of x.reviewers) hist[r.file] = r;
+      else hist[x.file] = x;
+    }
     const entries = this.data.entries.filter(e => e.meta.step === 'test' || e.meta.step === 'repro' || (e.meta.ok !== 'false' && !e.label.endsWith('_failed')));
     const items = [];
     for (const e of entries) {
@@ -932,7 +957,7 @@ class RunView {
       else if (s === 'repro') items.push(h('span', { class: 'arrow' }, '→'), withTip(h('span', { class: 'chip' }, `재현 테스트 ${e.meta.repro_files || 0}개 `, reproTag(e.meta.repro_status)), 'step.repro'));
       else if (s === 'review') {
         items.push(h('span', { class: 'arrow' }, '→'));
-        items.push(h('span', { class: 'chip' }, '리뷰 ', hist[e.name] ? decisionTag(hist[e.name]) : verdictTag(e.verdict)));
+        items.push(h('span', { class: 'chip' }, e.meta.role ? `리뷰(${e.meta.role}) ` : '리뷰 ', hist[e.name] ? decisionTag(hist[e.name]) : verdictTag(e.verdict)));
       }
     }
     if (!items.length) return null;
@@ -992,7 +1017,7 @@ class RunView {
         onclick: () => { this.selected = e.name; this.autoLive = false; this.renderTimeline(); this.renderViewer(); },
       },
         h('span', { class: 'seq' }, String(e.seq).padStart(2, '0')),
-        h('span', { class: 'what' }, agentTag(m.agent), withTip(h('span', { class: 'ellipsis' }, STEP[m.step] || m.step), `step.${m.step}`)),
+        h('span', { class: 'what' }, agentTag(m.agent, m.role), withTip(h('span', { class: 'ellipsis' }, STEP[m.step] || m.step), `step.${m.step}`)),
         h('span', { class: 'dur' }, m.duration_sec ? fmtDur(m.duration_sec) : ''),
         h('span', { class: 'sub' },
           roundTxt ? h('span', null, roundTxt) : null,
@@ -1062,7 +1087,7 @@ class RunView {
       m.timestamp ? m.timestamp.replace('T', ' ') : ''].filter(Boolean).join(' · ');
     this.viewerEl.replaceChildren(
       h('div', { class: 'viewer-head' },
-        agentTag(m.agent), h('b', null, STEP[m.step] || m.step || ''),
+        agentTag(m.agent, m.role), h('b', null, STEP[m.step] || m.step || ''),
         m.round && m.round !== '0' ? h('span', { class: 'muted' }, `${m.round}회차`) : null,
         listed ? verdictTag(listed.verdict) : null,
         h('span', { class: 'spacer' }),
@@ -1576,6 +1601,29 @@ function updatePath() {
   const p = computedPath();
   $('#path-preview').textContent = !custom && p ? `→ ${p}` : '';
 }
+let dlgWorkflows = [];
+function workflowPreview() {
+  const f = form.elements;
+  const w = dlgWorkflows.find(x => x.id === f.workflow.value);
+  const classic = !w || w.id === 'classic';
+  $('#classic-roles').hidden = !classic;
+  const el = $('#workflow-preview');
+  if (!w) { el.textContent = ''; return; }
+  if (w.source === 'error') { el.textContent = `오류: ${w.error}`; return; }
+  const roles = classic ? '' : ' · 역할: ' + w.roles.map(r => `${r.name}=${r.agent}${r.model ? `(${r.model})` : ''}`).join(', ');
+  el.textContent = `${w.description || ''} — ${w.summary}${roles}`;
+}
+async function fillWorkflows(machine, project, value) {
+  const f = form.elements;
+  let data = { workflows: [], default: 'classic' };
+  try { data = await api('/api/workflows', { query: { project }, machine }); } catch (e) { /* 예전 원격 duet: classic 만 */ }
+  dlgWorkflows = data.workflows && data.workflows.length ? data.workflows : [{ id: 'classic', name: 'classic', summary: '', roles: [], source: 'config', source_label: '기본' }];
+  f.workflow.replaceChildren(...dlgWorkflows.map(w => h('option', { value: w.id, disabled: w.source === 'error' },
+    `${w.id}${w.source_label ? ` · ${w.source_label}` : ''}${w.source === 'error' ? ' (오류)' : ''}`)));
+  const want = value || data.default || 'classic';
+  f.workflow.value = dlgWorkflows.some(w => w.id === want && w.source !== 'error') ? want : 'classic';
+  workflowPreview();
+}
 function setEffortOptions(agent, value) {
   const f = form.elements;
   const sugg = app.settings.suggestions;
@@ -1613,6 +1661,7 @@ async function openRunDialog({ machine = LOCAL, project = '', defaults = null, h
   f.codex_model.value = (eff.codex || {}).model || '';
   setEffortOptions('claude', (eff.claude || {}).effort);
   setEffortOptions('codex', (eff.codex || {}).effort);
+  await fillWorkflows(machine, project, eff.workflow);
   f.skip_design.disabled = project ? !hasDesign : false;
   f.skip_design.parentElement.title = project && !hasDesign ? 'DESIGN.md 가 없어서 고를 수 없습니다' : '';
   $('#run-cost-note').hidden = false;
@@ -1630,7 +1679,8 @@ $('#sidebar-new-run').addEventListener('click', () => {
   openRunDialog({ machine: r.machine && r.machine !== LOCAL ? r.machine : LOCAL });
 });
 dlg.addEventListener('click', ev => { if (ev.target.closest('[data-close]')) dlg.close(); });
-form.elements.machine.addEventListener('change', fillRoots);
+form.elements.machine.addEventListener('change', () => { fillRoots(); fillWorkflows(form.elements.machine.value, '', form.elements.workflow.value); });
+form.elements.workflow.addEventListener('change', workflowPreview);
 form.elements.root.addEventListener('change', updatePath);
 form.elements.name.addEventListener('input', updatePath);
 form.elements.codex_model.addEventListener('change', () => setEffortOptions('codex', form.elements.codex_effort.value));
@@ -1642,9 +1692,12 @@ form.addEventListener('submit', async ev => {
   ev.preventDefault();
   const f = form.elements;
   const machine = f.machine.value;
+  const classic = f.workflow.value === 'classic' || !f.workflow.value;
   const body = {
     project: computedPath(), task: f.task.value,
-    implementer: f.implementer.value, reviewer: f.reviewer.value, synth: f.synth.value || undefined,
+    workflow: classic ? undefined : f.workflow.value,
+    implementer: classic ? f.implementer.value : undefined, reviewer: classic ? f.reviewer.value : undefined,
+    synth: classic ? (f.synth.value || undefined) : undefined,
     debate_rounds: f.debate_rounds.value, max_review: f.max_review.value,
     claude_model: f.claude_model.value.trim(), claude_effort: f.claude_effort.value,
     codex_model: f.codex_model.value.trim(), codex_effort: f.codex_effort.value,
@@ -1654,7 +1707,7 @@ form.addEventListener('submit', async ev => {
   const problem = !body.project ? (f.root.value === CUSTOM ? '작업 폴더 경로를 입력하세요.' : '폴더 이름을 입력하세요.')
     : !/^[\/~]/.test(body.project) ? '작업 폴더는 / 또는 ~ 로 시작하는 절대 경로여야 합니다.'
     : !body.task.trim() ? '과제를 입력하세요.'
-    : body.implementer === body.reviewer ? '구현 담당과 리뷰 담당은 달라야 합니다.' : '';
+    : classic && body.implementer === body.reviewer ? '구현 담당과 리뷰 담당은 달라야 합니다.' : '';
   if (problem) { formError.textContent = problem; formError.hidden = false; return; }
   const btn = $('#run-submit');
   btn.disabled = true;

@@ -25,7 +25,7 @@ from duet.runner import ExecutableNotFound, ProcessResult, run_process
 
 REMOTE_DIR = "$HOME/.duet/bin"
 REMOTE_PYZ = f"{REMOTE_DIR}/duet.pyz"
-PYZ_EXTS = {".py", ".md", ".js", ".css", ".html"}
+PYZ_EXTS = {".py", ".md", ".js", ".css", ".html", ".toml"}
 FIND_PYTHON = (
     'for p in python3.13 python3.12 python3.11 python3 "$HOME/.local/bin/python3.12"; do '
     'if command -v "$p" >/dev/null 2>&1 && "$p" -c "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)" 2>/dev/null; '

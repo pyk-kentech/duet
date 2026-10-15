@@ -1,0 +1,26 @@
+name = "existing"
+description = "기존 코드베이스에서 작업할 때: Codex 가 먼저 코드를 조사하고, 그 결과로 설계 토론 → 구현 → 리뷰"
+
+[roles.scout]
+agent = "codex"
+effort = "low"
+
+[roles.claude]
+agent = "claude"
+
+[roles.codex]
+agent = "codex"
+
+[[steps]]
+kind = "explore"
+role = "scout"
+
+[[steps]]
+kind = "debate"
+proposers = ["claude", "codex"]
+synth = "codex"
+
+[[steps]]
+kind = "build"
+implementer = "claude"
+reviewers = ["codex"]

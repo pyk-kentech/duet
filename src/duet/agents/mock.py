@@ -71,6 +71,11 @@ class MockAdapter:
             )
         if step == "synthesize":
             return f"## 결정 사항\n- ({self.name}) 단순한 쪽 채택\n\n# 최종 설계\n- {self.write_file} 하나\n"
+        if step == "explore":
+            return f"# {self.name} 사전 조사\n- 기존 코드 없음\n"
+        if step == "audit":
+            return ("## 반드시 고칠 것\n(없음)\n\n<verdict>\nstatus: APPROVED\n"
+                    "must_fix: 0\np1: 0\np2: 0\np3: 0\n</verdict>\n")
         if step in ("implement", "fix"):
             if req.mode is Mode.WRITE:
                 self._touch(req.cwd)

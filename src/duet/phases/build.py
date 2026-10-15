@@ -16,6 +16,9 @@ resume 키:
   impl:i            커밋까지 완료
   test:i            duet 가 테스트 실행 (결과는 state.tests[i], 기록 NN_test{i}.md)
   review:i          리뷰 + 판정 완료 (판정은 policy.decide: 심각도 기준·테스트 결과 반영)
+  review:i:<역할>   리뷰어가 여럿일 때 그 리뷰어의 리뷰 완료 (판정은 state.round_reviews[i][역할])
+
+리뷰어가 여럿이면(DESIGN.md 19.3) 모두 승인해야 승인, 막는 지적 수는 합.
 
 멈춤: 승인 → done_approved / 상한 도달 → done_unapproved(stop_reason=max_review)
       막는 지적 수가 stall_rounds 라운드 연속 최저치를 못 갱신 → done_unapproved(stop_reason=stalled)
@@ -23,17 +26,22 @@ resume 키:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from duet.agents.base import Mode
 from duet.phases.common import PhaseContext
 from duet.phases.debate import DESIGN_FILENAME
-from duet.policy import decide, stalled
-from duet.prompts import render
+from duet.policy import Decision, decide, stalled
 from duet.repro import parse_repros, write_repros
 from duet.runner import env_drops
 from duet.testing import STATUS_KO, describe_for_prompt, resolve_command, run_tests
 from duet.state import DONE_APPROVED, DONE_UNAPPROVED, PHASE_BUILD, PHASE_DONE
 from duet.verdict import parse_verdict
 from duet.workspace import GitError, Workspace
+
+if TYPE_CHECKING:
+    from duet.verdict import Verdict
+    from duet.workflow import Step
 
 DIFF_EXCLUDES = (DESIGN_FILENAME,)
 TRUNCATED_NOTE = "\n... (diff가 길어 잘림. 위의 변경 파일 요약을 보고 나머지는 파일을 직접 열어 확인)"
@@ -61,14 +69,17 @@ def build_review_diff(ws: Workspace, base: str, excludes_glob: list[str], max_ch
 
 
 class BuildPhase:
-    def __init__(self, ctx: PhaseContext, workspace: Workspace | None = None):
+    def __init__(self, ctx: PhaseContext, workspace: Workspace | None = None, step: "Step | None" = None):
         self.ctx = ctx
         self.state = ctx.state
         self.cfg = ctx.cfg
         self.ws = workspace or Workspace(ctx.workdir)
-        self.implementer = ctx.cfg.implementer
-        self.reviewer = ctx.cfg.reviewer
+        self.implementer = step.implementer if step is not None and step.implementer else ctx.cfg.implementer
+        self.reviewers: list[str] = list(step.reviewers) if step is not None else [ctx.cfg.reviewer]
+        self.reviewer = self.reviewers[0]
+        self.multi = len(self.reviewers) > 1
         self.max_review = ctx.cfg.max_review
+        self._single: "Verdict | None" = None
 
     # ---------------------------------------------------------------- run
     def run(self) -> bool:
@@ -94,14 +105,14 @@ class BuildPhase:
                     if i == 1 or not st.last_review:
                         step = "implement"
                         ctx.log(f"[{i}/{self.max_review}] 구현: {self.implementer}")
-                        prompt = render("implement", ctx.workdir, task=ctx.task, test_hint=self._test_hint())
+                        prompt = ctx.prompt(self.implementer, "implement", task=ctx.task,
+                                            test_hint=self._test_hint())
                     else:
                         step = "fix"
                         ctx.log(f"[{i}/{self.max_review}] 리뷰 반영: {self.implementer}")
-                        review_text = ctx.transcript.read(st.last_review)
-                        prompt = render("fix", ctx.workdir, task=ctx.task, review=review_text,
-                                        reviewer_name=self.reviewer, tests=self._tests_text(i - 1),
-                                        repro=self._repro_text(i - 1))
+                        prompt = ctx.prompt(self.implementer, "fix", task=ctx.task, review=self._review_texts(),
+                                            reviewer_name=", ".join(self.reviewers),
+                                            tests=self._tests_text(i - 1), repro=self._repro_text(i - 1))
                     out = ctx.call(self.implementer, step, prompt, Mode.WRITE,
                                    label=f"impl{i}_{self.implementer}", round_=i)
                     st.last_impl = out.file
@@ -127,30 +138,10 @@ class BuildPhase:
                 ctx.save()
                 self._preserve_pending_changes(i)
                 diff_title, diff = self._review_diff(i, base)
-                ctx.log(f"[{i}/{self.max_review}] 리뷰: {self.reviewer} (diff {len(diff):,}자{', 지난 리뷰 이후만' if '이후' in diff_title else ''})")
-                prompt = render("review", ctx.workdir, task=ctx.task, diff=diff, diff_title=diff_title,
-                                implementer_name=self.implementer,
-                                tests=self._tests_text(i), test_instruction=self._test_instruction(i),
-                                previous_review=self._previous_must_fix(),
-                                repro_instruction=REPRO_INSTRUCTION if self.cfg.repro_tests else "")
-                st.reviewed_commits[str(i)] = self.ws.head()
-                out = ctx.call(self.reviewer, "review", prompt, Mode.READ,
-                               label=f"review{i}_{self.reviewer}", round_=i)
-                self._undo_reviewer_changes()
-                verdict = parse_verdict(out.text)
+                decision, files = self._review_round(i, diff_title, diff)
                 test = st.tests.get(str(i))
-                decision = decide(verdict, block_severity=self.cfg.block_severity,
-                                  tests_block=bool(test and test.get("status") in ("failed", "timeout")),
-                                  require_tests_pass=self.cfg.require_tests_pass)
-                st.last_review = out.file
                 st.last_verdict = "APPROVED" if decision.approved else "CHANGES_REQUESTED"
-                st.review_history.append({
-                    "round": i, "file": out.file, "reviewer_status": verdict.status.value,
-                    "approved": decision.approved, "blocking": decision.blocking,
-                    "must_fix": verdict.must_fix, "severity": verdict.severity,
-                    "parse_failed": verdict.parse_failed, "reasons": decision.reasons,
-                    "tests": test.get("status") if test else None,
-                })
+                st.review_history.append(self._history_entry(i, decision, files, test))
                 st.mark_done(review_key)
                 ctx.log(f"[{i}/{self.max_review}] 판정: {decision.describe()}")
                 if decision.approved:
@@ -161,7 +152,7 @@ class BuildPhase:
                     return True
                 ctx.save()
                 if self.cfg.repro_tests and not st.is_done(f"repro:{i}"):
-                    self._handle_repros(i, out.text)
+                    self._handle_repros(i, "\n\n".join(ctx.transcript.read(f) for f in files))
                     st.mark_done(f"repro:{i}")
                     ctx.save()
                 if self._is_stalled():
@@ -179,6 +170,97 @@ class BuildPhase:
         ctx.set_position(PHASE_DONE, "unapproved", self.max_review)
         ctx.save()
         return False
+
+    # ---------------------------------------------------------------- review
+    def _review_round(self, i: int, diff_title: str, diff: str) -> tuple[Decision, list[str]]:
+        """이 라운드의 리뷰어들을 차례로 부르고 판정을 합친다. (합친 판정, 리뷰 파일들)"""
+        ctx, st = self.ctx, self.state
+        test = st.tests.get(str(i))
+        tests_block = bool(test and test.get("status") in ("failed", "timeout"))
+        parts = st.round_reviews.setdefault(str(i), {}) if self.multi else {}
+        decisions: list[tuple[str, Decision]] = []
+        files: list[str] = []
+        for role in self.reviewers:
+            sub_key = f"review:{i}:{role}"
+            if self.multi and st.is_done(sub_key) and role in parts:
+                p = parts[role]
+                decisions.append((role, Decision(p["approved"], p["blocking"], list(p["reasons"]))))
+                files.append(p["file"])
+                continue
+            ctx.log(f"[{i}/{self.max_review}] 리뷰: {role} (diff {len(diff):,}자"
+                    f"{', 지난 리뷰 이후만' if '이후' in diff_title else ''})")
+            prompt = ctx.prompt(role, "review", task=ctx.task, diff=diff, diff_title=diff_title,
+                                implementer_name=self.implementer,
+                                tests=self._tests_text(i), test_instruction=self._test_instruction(i),
+                                previous_review=self._previous_must_fix(role),
+                                repro_instruction=REPRO_INSTRUCTION if self.cfg.repro_tests else "")
+            st.reviewed_commits[str(i)] = self.ws.head()
+            out = ctx.call(role, "review", prompt, Mode.READ, label=f"review{i}_{role}", round_=i)
+            self._undo_reviewer_changes()
+            verdict = parse_verdict(out.text)
+            decision = decide(verdict, block_severity=self.cfg.block_severity, tests_block=tests_block,
+                              require_tests_pass=self.cfg.require_tests_pass)
+            st.last_review = out.file
+            st.last_reviews[role] = out.file
+            decisions.append((role, decision))
+            files.append(out.file)
+            if self.multi:
+                parts[role] = {"file": out.file, "reviewer_status": verdict.status.value,
+                               "approved": decision.approved, "blocking": decision.blocking,
+                               "must_fix": verdict.must_fix, "severity": verdict.severity,
+                               "parse_failed": verdict.parse_failed, "reasons": decision.reasons}
+                st.mark_done(sub_key)
+                ctx.log(f"[{i}/{self.max_review}] 판정({role}): {decision.describe()}")
+                ctx.save()
+            else:
+                self._single = verdict
+        if not self.multi:
+            return decisions[0][1], files
+        counts = [d.blocking for _, d in decisions if d.blocking is not None]
+        reasons = []
+        for role, d in decisions:
+            reasons.append(f"{role}: {'승인' if d.approved else '반려'}"
+                           + (f" (막는 지적 {d.blocking})" if d.blocking else ""))
+        merged = Decision(all(d.approved for _, d in decisions), sum(counts) if counts else None, reasons)
+        return merged, files
+
+    def _history_entry(self, i: int, decision: Decision, files: list[str], test: dict | None) -> dict:
+        if not self.multi:
+            v = self._single
+            assert v is not None
+            return {"round": i, "file": files[0], "reviewer_status": v.status.value,
+                    "approved": decision.approved, "blocking": decision.blocking,
+                    "must_fix": v.must_fix, "severity": v.severity,
+                    "parse_failed": v.parse_failed, "reasons": decision.reasons,
+                    "tests": test.get("status") if test else None}
+        parts = self.state.round_reviews.get(str(i), {})
+        rows = [{"role": r, **parts[r]} for r in self.reviewers if r in parts]
+        severity: dict[str, int] | None = None
+        if any(row.get("severity") for row in rows):
+            severity = {}
+            for row in rows:
+                for k, n in (row.get("severity") or {}).items():
+                    severity[k] = severity.get(k, 0) + n
+        must = [row["must_fix"] for row in rows if row.get("must_fix") is not None]
+        all_ok = all(row["reviewer_status"] == "APPROVED" for row in rows)
+        return {"round": i, "file": files[0], "files": files,
+                "reviewer_status": "APPROVED" if all_ok else "CHANGES_REQUESTED",
+                "approved": decision.approved, "blocking": decision.blocking,
+                "must_fix": sum(must) if must else None, "severity": severity,
+                "parse_failed": any(row.get("parse_failed") for row in rows), "reasons": decision.reasons,
+                "tests": test.get("status") if test else None, "reviewers": rows}
+
+    def _review_texts(self) -> str:
+        """수정 프롬프트에 넣을 지난 리뷰. 리뷰어가 여럿이면 역할별로 이어 붙인다."""
+        st = self.state
+        if not self.multi or not st.last_reviews:
+            return self.ctx.transcript.read(st.last_review)  # type: ignore[arg-type]
+        chunks = []
+        for role in self.reviewers:
+            f = st.last_reviews.get(role)
+            if f:
+                chunks.append(f"### {role} 의 리뷰\n\n{self.ctx.transcript.read(f).strip()}")
+        return "\n\n".join(chunks)
 
     # ---------------------------------------------------------------- tests
     def _env_drops(self) -> list[str]:
@@ -299,11 +381,12 @@ class BuildPhase:
                 "이 테스트가 통과하도록 코드를 고쳐라. 테스트 자체가 틀렸다고 판단되면 테스트를 고치거나 지우되, "
                 "이유를 IMPLEMENTATION_NOTES.md 에 적어라.")
 
-    def _previous_must_fix(self) -> str:
-        if not self.state.last_review:
+    def _previous_must_fix(self, role: str | None = None) -> str:
+        prev = self.state.last_reviews.get(role) if self.multi and role else self.state.last_review
+        if not prev:
             return "(첫 리뷰)"
         try:
-            text = self.ctx.transcript.read(self.state.last_review)
+            text = self.ctx.transcript.read(prev)
         except OSError:
             return "(이전 리뷰를 읽을 수 없음)"
         section = extract_section(text, "반드시 고칠 것")

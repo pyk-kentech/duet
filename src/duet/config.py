@@ -39,6 +39,10 @@ DEFAULT_DIFF_EXCLUDES = [
 RENAMED_KEYS = {"prompt_arg_max_chars": "prompt_arg_max_bytes"}
 
 
+# 워크플로 템플릿 이름 (DESIGN.md 19.4). "@경로.toml" 로 파일을 직접 줄 수도 있다
+WORKFLOW_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+CLASSIC_WORKFLOW = "classic"
+
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9._:\[\]/-]{0,80}$")
 EFFORT_SUGGESTIONS = {
     "claude": ["low", "medium", "high", "xhigh", "max"],
@@ -108,6 +112,7 @@ def _default_codex() -> AgentConfig:
 
 @dataclass
 class Config:
+    workflow: str = CLASSIC_WORKFLOW   # 워크플로 템플릿 (DESIGN.md 19장)
     implementer: str = "claude"
     reviewer: str = "codex"
     synth: str | None = None  # None이면 reviewer
@@ -144,6 +149,9 @@ class Config:
         return getattr(self, name)
 
     def validate(self) -> None:
+        w = self.workflow
+        if not isinstance(w, str) or not (WORKFLOW_NAME_RE.match(w) or (w.startswith("@") and 1 < len(w) <= 500)):
+            raise ConfigError(f"workflow 값이 잘못되었습니다: {w!r} (템플릿 이름 또는 @파일경로)")
         for key in ("implementer", "reviewer"):
             v = getattr(self, key)
             if v not in AGENT_NAMES:

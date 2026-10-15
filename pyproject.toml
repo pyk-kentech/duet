@@ -24,7 +24,7 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-duet = ["templates/*.md"]
+duet = ["templates/*.md", "workflows/*.toml"]
 "duet.ui" = ["static/*"]
 
 [tool.pytest.ini_options]

@@ -34,7 +34,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("task", help="만들 것 (한 줄 설명, 또는 @파일경로로 긴 설명)")
     _add_workdir(p_run)
     p_run.add_argument("--mock", action="store_true", help="실제 CLI 호출 없이 흐름만 테스트")
-    p_run.add_argument("--implementer", choices=["claude", "codex"], help="구현 담당 (기본: claude)")
+    p_run.add_argument("--workflow", metavar="NAME|@FILE",
+                       help="워크플로 템플릿 (기본: classic). 목록: duet workflows")
+    p_run.add_argument("--implementer", choices=["claude", "codex"], help="구현 담당 (기본: claude, classic 전용)")
     p_run.add_argument("--reviewer", choices=["claude", "codex"], help="리뷰 담당 (기본: codex)")
     p_run.add_argument("--synth", choices=["claude", "codex"], help="최종 설계 종합 담당 (기본: 리뷰어)")
     p_run.add_argument("--debate-rounds", type=int, help="설계 토론 비판 라운드 수 (기본: 1, 최대 5)")
@@ -70,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_log.add_argument("--run", metavar="RUN_ID", help="특정 실행 ID (기본: 마지막 실행)")
     p_log.add_argument("--all", action="store_true", help="모든 실행을 한 줄씩 나열")
     p_log.set_defaults(func=cmd_log)
+
+    p_wf = sub.add_parser("workflows", help="워크플로 템플릿 목록 / 자세히 보기")
+    p_wf.add_argument("action", nargs="?", choices=["list", "show"], default="list", help="list(기본) 또는 show")
+    p_wf.add_argument("name", nargs="?", help="show 할 워크플로 이름 또는 @파일경로")
+    p_wf.add_argument("--workdir", help="이 프로젝트의 .duet/workflows/ 도 함께 봄")
+    p_wf.set_defaults(func=cmd_workflows)
 
     p_ui = sub.add_parser("ui", help="관리자 UI(로컬 웹 대시보드) 실행")
     p_ui.add_argument("--host", default="127.0.0.1", help="바인딩 주소 (기본: 127.0.0.1)")
@@ -121,6 +129,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         mock=args.mock,
         force=args.force,
         overrides={
+            "workflow": args.workflow,
             "implementer": args.implementer, "reviewer": args.reviewer, "synth": args.synth,
             "debate_rounds": args.debate_rounds, "max_review": args.max_review,
             "claude.model": args.claude_model, "claude.effort": args.claude_effort,
@@ -155,6 +164,56 @@ def cmd_ui(args: argparse.Namespace) -> int:
         serve(args.host, args.port, open_browser=not args.no_browser, extra_projects=args.workdir)
     except OSError as e:
         raise OrchestratorError(str(e)) from e
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------- workflows
+def cmd_workflows(args: argparse.Namespace) -> int:
+    from duet.config import ConfigError, load_config
+    from duet.workflow import SOURCE_LABELS, WorkflowError, describe, list_workflows, load_workflow
+
+    wd = Path(args.workdir).expanduser().resolve() if args.workdir else None
+    try:
+        cfg = load_config(wd if wd is not None and wd.is_dir() else None)
+    except ConfigError as e:
+        raise OrchestratorError(f"설정 오류: {e}") from e
+    if args.action == "list":
+        for w in list_workflows(wd, cfg):
+            if w["source"] == "error":
+                print(f"✗ {w['id']:<12} 오류: {w['error']}")
+                continue
+            print(f"  {w['id']:<12} [{w['source_label']}] {w['description']}")
+            print(f"  {'':<12} {w['summary']}")
+        print("\n자세히: duet workflows show <이름>   실행: duet run ... --workflow <이름>")
+        return EXIT_OK
+    if not args.name:
+        raise OrchestratorError("show 할 워크플로 이름을 주세요: duet workflows show <이름>")
+    try:
+        wf = load_workflow(args.name, wd, cfg)
+    except WorkflowError as e:
+        raise OrchestratorError(f"워크플로 오류: {e}") from e
+    d = describe(wf, args.name)
+    print(f"{wf.name}  [{SOURCE_LABELS.get(wf.source, wf.source)}]  {wf.path}")
+    if wf.description:
+        print(f"  {wf.description}")
+    print("\n역할:")
+    for name in wf.used_roles():
+        role = wf.roles[name]
+        ac = role.agent_config(cfg)
+        from duet.config import describe_effort
+
+        extra = [f"모델 {ac.model or '기본'}"]
+        if describe_effort(ac):
+            extra.append(f"강도 {describe_effort(ac)}")
+        if role.templates:
+            extra.append("템플릿 " + ", ".join(f"{k}={v}" for k, v in role.templates.items()))
+        print(f"  {name:<12} {role.agent:<7} {' / '.join(extra)}")
+        if role.instructions:
+            print(f"  {'':<12} 지시: {_one_line(role.instructions, 90)}")
+    print("\n단계:")
+    for i, step in enumerate(d["steps"], 1):
+        rest = ", ".join(f"{k}={v}" for k, v in step.items() if k not in ("kind", "id"))
+        print(f"  {i}. {step['kind']:<8} {rest}")
     return EXIT_OK
 
 
@@ -236,9 +295,20 @@ def print_summary(st: RunState, run_dir: Path) -> None:
     print(f"실행 {st.run_id}  [{st.status}]")
     print(f"  과제: {_one_line(st.task, 100)}")
     print(f"  위치: {st.phase}/{st.step} round {st.round}   시작 {st.created_at}  갱신 {st.updated_at}")
-    print(f"  구성: 구현 {c.get('implementer')} / 리뷰 {c.get('reviewer')} / 종합 {c.get('synth')} / "
-          f"토론 {c.get('debate_rounds')}라운드 / 리뷰 최대 {c.get('max_review')}회"
-          + (" / mock" if c.get("mock") else ""))
+    if st.workflow:
+        from duet.workflow import Workflow, WorkflowError
+
+        try:
+            summary = Workflow.from_dict(st.workflow).summary()
+        except WorkflowError:
+            summary = "(읽을 수 없음)"
+        print(f"  워크플로: {st.workflow.get('name')} — {summary} / "
+              f"토론 {c.get('debate_rounds')}라운드 / 리뷰 최대 {c.get('max_review')}회"
+              + (" / mock" if c.get("mock") else ""))
+    else:
+        print(f"  구성: 구현 {c.get('implementer')} / 리뷰 {c.get('reviewer')} / 종합 {c.get('synth')} / "
+              f"토론 {c.get('debate_rounds')}라운드 / 리뷰 최대 {c.get('max_review')}회"
+              + (" / mock" if c.get("mock") else ""))
     if st.base_commit:
         print(f"  기준 커밋: {st.base_commit}")
     if st.last_verdict:
@@ -248,14 +318,16 @@ def print_summary(st: RunState, run_dir: Path) -> None:
     print(f"  호출 {len(st.calls)}회, 총 {total:.0f}초")
     for i, call in enumerate(st.calls, 1):
         flag = " 한도" if call.rate_limited else (" 시간초과" if call.timed_out else ("" if call.exit == 0 else f" exit {call.exit}"))
-        print(f"    {i:2d}. {call.agent:<7} {call.step:<10} {call.sec:7.1f}초{flag}  {call.file or ''}")
+        who = f"{call.role}({call.agent})" if call.role else call.agent
+        print(f"    {i:2d}. {who:<7} {call.step:<10} {call.sec:7.1f}초{flag}  {call.file or ''}")
     print(f"  기록: {run_dir}")
 
 
 def print_full(run_dir: Path) -> None:
     for e in Transcript(run_dir).entries():
         m = e.meta
-        head = f"{e.name}  [{m.get('agent', '?')} · {m.get('step', '?')} · {m.get('mode', '?')} · {m.get('duration_sec', '?')}초]"
+        who = f"{m['role']}({m.get('agent', '?')})" if m.get("role") else m.get("agent", "?")
+        head = f"{e.name}  [{who} · {m.get('step', '?')} · {m.get('mode', '?')} · {m.get('duration_sec', '?')}초]"
         print("=" * 78)
         print(head)
         print("=" * 78)

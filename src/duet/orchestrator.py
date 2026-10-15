@@ -13,16 +13,17 @@ from __future__ import annotations
 
 import datetime as dt
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Any, Callable, Mapping
 
-from duet.agents import AgentAdapter, AgentNotAvailable, make_agents
+from duet.agents import AgentAdapter, AgentNotAvailable, make_agents, make_role_agents
 from duet.config import Config, ConfigError, describe_effort, load_config
 from duet.lock import LockBusy, RunLock
 from duet.phases.build import BuildPhase
 from duet.phases.common import PhaseContext, PhaseStop
 from duet.phases.debate import DESIGN_FILENAME, DebatePhase
+from duet.phases.extra import run_audit, run_explore
 from duet.registry import register_quietly
 from duet.runner import env_drops
 from duet.state import (
@@ -40,11 +41,12 @@ from duet.state import (
     list_run_dirs,
 )
 from duet.transcript import Transcript
+from duet.workflow import SOURCE_LABELS, Workflow, WorkflowError, classic, load_workflow
 from duet.workspace import GitError, WorkdirRefused, check_workdir
 
 Printer = Callable[[str], None]
 
-CONFIG_KEYS = ("implementer", "reviewer", "synth", "debate_rounds", "max_review",
+CONFIG_KEYS = ("workflow", "implementer", "reviewer", "synth", "debate_rounds", "max_review",
                "claude.model", "claude.effort", "codex.model", "codex.effort",
                "claude.step_effort", "codex.step_effort",
                "test_command", "block_severity", "stall_rounds", "require_tests_pass",
@@ -96,10 +98,13 @@ def default_printer(line: str) -> None:
 
 class Orchestrator:
     def __init__(self, printer: Printer = default_printer,
-                 agent_factory: Callable[..., Mapping[str, AgentAdapter]] | None = None):
+                 agent_factory: Callable[..., Mapping[str, AgentAdapter]] | None = None,
+                 role_factory: Callable[..., Mapping[str, AgentAdapter]] | None = None):
         self.printer = printer
         # 기본값을 정의 시점에 묶지 않는다(테스트에서 make_agents 를 바꿔 끼울 수 있게)
         self.agent_factory = agent_factory or make_agents
+        # classic 이 아닌 워크플로: 역할 이름 → 어댑터 (DESIGN.md 19장)
+        self.role_factory = role_factory or make_role_agents
         self._console: IO[str] | None = None
 
     # ---------------------------------------------------------------- log
@@ -125,31 +130,45 @@ class Orchestrator:
         workdir.mkdir(parents=True, exist_ok=True)
 
         cfg = self._load_config(workdir, opts.overrides)
+        wf, cfg = self._resolve_workflow(workdir, cfg, opts)
         if opts.skip_design and not (workdir / DESIGN_FILENAME).is_file():
             raise OrchestratorError(f"--skip-design 인데 {workdir / DESIGN_FILENAME} 이 없습니다.")
-        agents = self._make_agents(cfg, opts.mock)
+        if opts.design_only and wf.first("debate") is None:
+            raise OrchestratorError(f"워크플로 {wf.name} 에는 설계(debate) 단계가 없어 --design-only 를 쓸 수 없습니다.")
+        if wf.first("build") and not wf.first("debate") and not (workdir / DESIGN_FILENAME).is_file():
+            raise OrchestratorError(f"워크플로 {wf.name} 에는 설계 단계가 없어 {workdir / DESIGN_FILENAME} 이 필요합니다.")
+        agents = self._make_agents(cfg, opts.mock, wf)
 
         with self._locked(workdir, "run") as lock:
             register_quietly(workdir)
             run_dir = create_run_dir(workdir)
             lock.set_run(run_dir.name)
-            state = RunState(run_id=run_dir.name, task=opts.task, config=self._snapshot(cfg, opts))
+            state = RunState(run_id=run_dir.name, task=opts.task, config=self._snapshot(cfg, opts),
+                             workflow=None if wf.is_classic else wf.to_dict())
             if opts.skip_design:
                 state.mark_done("debate")
             state.save(run_dir)
             with self._console_to(run_dir):
                 self.log(f"실행 시작: {run_dir.name}  (기록: {run_dir})")
-                design = "설계 생략(기존 DESIGN.md)" if opts.skip_design else \
-                    f"종합: {cfg.synth_name} / 토론 {cfg.debate_rounds}라운드"
-                build = "구현 생략(설계만)" if opts.design_only else \
-                    f"구현: {cfg.implementer} / 리뷰: {cfg.reviewer} / 리뷰 최대 {cfg.max_review}회"
-                self.log(f"{design} / {build}" + (" / mock" if opts.mock else ""))
-                self.log("모델: " + " / ".join(
-                    f"{n} {getattr(cfg, n).model or '기본'}"
-                    + (f"({describe_effort(getattr(cfg, n))})" if describe_effort(getattr(cfg, n)) else "")
-                    for n in ("claude", "codex")))
+                if wf.is_classic:
+                    design = "설계 생략(기존 DESIGN.md)" if opts.skip_design else \
+                        f"종합: {cfg.synth_name} / 토론 {cfg.debate_rounds}라운드"
+                    build = "구현 생략(설계만)" if opts.design_only else \
+                        f"구현: {cfg.implementer} / 리뷰: {cfg.reviewer} / 리뷰 최대 {cfg.max_review}회"
+                    self.log(f"{design} / {build}" + (" / mock" if opts.mock else ""))
+                    self.log("모델: " + " / ".join(
+                        f"{n} {getattr(cfg, n).model or '기본'}"
+                        + (f"({describe_effort(getattr(cfg, n))})" if describe_effort(getattr(cfg, n)) else "")
+                        for n in ("claude", "codex")))
+                else:
+                    flags = [x for x, on in (("설계 생략", opts.skip_design), ("설계만", opts.design_only),
+                                             ("mock", opts.mock)) if on]
+                    self.log(f"워크플로: {wf.name} ({SOURCE_LABELS.get(wf.source, wf.source)}) — {wf.summary()}"
+                             + (f" / {', '.join(flags)}" if flags else ""))
+                    self.log(f"토론 {cfg.debate_rounds}라운드 / 리뷰 최대 {cfg.max_review}회")
+                    self.log("역할: " + " / ".join(self._describe_role(wf, n, cfg) for n in wf.used_roles()))
                 self._log_env_drops(cfg, opts.mock)
-                return self._execute(workdir, run_dir, cfg, agents, state)
+                return self._execute(workdir, run_dir, cfg, agents, state, wf)
 
     # ---------------------------------------------------------------- resume
     def resume(self, workdir: Path, run_id: str | None = None,
@@ -179,7 +198,11 @@ class Orchestrator:
             overrides["max_review"] = max_review
         cfg = self._load_config(workdir, overrides)
         mock = bool(state.config.get("mock"))
-        agents = self._make_agents(cfg, mock)
+        try:
+            wf = Workflow.from_dict(state.workflow) if state.workflow else classic(cfg)
+        except WorkflowError as e:
+            raise OrchestratorError(f"저장된 워크플로를 읽을 수 없습니다: {e}") from e
+        agents = self._make_agents(cfg, mock, wf)
 
         with self._locked(workdir, "resume") as lock:
             # 잠금을 잡은 뒤 다시 읽는다(그 사이 다른 프로세스가 바꿨을 수 있음)
@@ -187,6 +210,8 @@ class Orchestrator:
             lock.set_run(run_dir.name)
             register_quietly(workdir)
             state.config["max_review"] = cfg.max_review
+            if state.status == DONE_UNAPPROVED and "build" in state.done:
+                state.done.remove("build")   # 리뷰 루프를 이어간다
             if state.stop_reason == "stalled":
                 # 사람이 계속하라고 했으니 수렴 판단은 지금부터 다시 센다
                 state.stall_baseline_round = state.round
@@ -199,26 +224,50 @@ class Orchestrator:
                 state.status = RUNNING
                 state.error = None
                 state.save(run_dir)
-                return self._execute(workdir, run_dir, cfg, agents, state)
+                return self._execute(workdir, run_dir, cfg, agents, state, wf)
 
     # ---------------------------------------------------------------- core
     def _execute(self, workdir: Path, run_dir: Path, cfg: Config,
-                 agents: Mapping[str, AgentAdapter], state: RunState) -> RunOutcome:
+                 agents: Mapping[str, AgentAdapter], state: RunState,
+                 wf: Workflow | None = None) -> RunOutcome:
+        wf = wf or classic(cfg)
         ctx = PhaseContext(task=state.task, workdir=workdir, cfg=cfg, agents=agents, state=state,
-                           transcript=Transcript(run_dir), run_dir=run_dir, log=self.log)
+                           transcript=Transcript(run_dir), run_dir=run_dir, log=self.log,
+                           workflow=None if wf.is_classic else wf)
         design_only = bool(state.config.get("design_only"))
+        approved: bool | None = None
         try:
-            if not state.is_done("debate"):
-                DebatePhase(ctx).run()
-                state.mark_done("debate")
+            for step in wf.steps:
+                if step.kind == "explore":
+                    run_explore(ctx, step)
+                elif step.kind == "debate":
+                    if not state.is_done("debate"):
+                        DebatePhase(ctx, step).run()
+                        state.mark_done("debate")
+                        state.save(run_dir)
+                    if design_only:
+                        return self._design_done(ctx, workdir, run_dir, "design_only")
+                elif step.kind == "build":
+                    if not state.is_done("build"):
+                        approved = BuildPhase(ctx, step=step).run()
+                        state.mark_done("build")
+                        state.save(run_dir)
+                    else:
+                        approved = bool(state.review_history and state.review_history[-1].get("approved"))
+                elif step.kind == "audit":
+                    if approved:
+                        run_audit(ctx, step)
+                    elif not state.is_done(f"audit:{step.id}"):
+                        self.log(f"감사 건너뜀({step.id}): 승인되지 않아 감사하지 않습니다.")
+                        state.mark_done(f"audit:{step.id}")
+                        state.save(run_dir)
+            if approved is None:
+                return self._design_done(ctx, workdir, run_dir, "no_build")
+            if approved:
+                # 감사 단계가 위치를 바꿨을 수 있다. 감사는 참고용이라 승인 상태를 유지한다.
+                state.status = DONE_APPROVED
+                ctx.set_position(PHASE_DONE, "approved", state.round)
                 state.save(run_dir)
-            if design_only:
-                state.status = DONE_DESIGN
-                ctx.set_position(PHASE_DONE, "design_only", state.round)
-                state.save(run_dir)
-                self.log(f"설계만 완료. {workdir / DESIGN_FILENAME} 를 확인하세요.")
-                return RunOutcome(state, run_dir)
-            approved = BuildPhase(ctx).run()
         except PhaseStop as stop:
             self.log(f"중단: {stop}")
             if state.status == STOPPED_RATE_LIMIT:
@@ -262,6 +311,54 @@ class Orchestrator:
         self.log(f"전체 대화 기록: {run_dir}")
         return RunOutcome(state, run_dir)
 
+    def _design_done(self, ctx: PhaseContext, workdir: Path, run_dir: Path, why: str) -> RunOutcome:
+        state = ctx.state
+        state.status = DONE_DESIGN
+        ctx.set_position(PHASE_DONE, "design_only", state.round)
+        state.save(run_dir)
+        if state.is_done("debate") and (workdir / DESIGN_FILENAME).is_file():
+            self.log(f"설계만 완료. {workdir / DESIGN_FILENAME} 를 확인하세요.")
+        else:
+            self.log(f"구현 단계가 없는 워크플로라 여기서 끝납니다. 기록: {run_dir}")
+        return RunOutcome(state, run_dir)
+
+    # ---------------------------------------------------------------- workflow
+    def _resolve_workflow(self, workdir: Path, cfg: Config, opts: RunOptions) -> tuple[Workflow, Config]:
+        """고른 워크플로를 읽고, 템플릿의 rounds·max_review 를 설정에 반영한다 (CLI 인자가 우선)."""
+        try:
+            wf = load_workflow(cfg.workflow, workdir, cfg)
+        except WorkflowError as e:
+            raise OrchestratorError(f"워크플로 오류: {e}") from e
+        if wf.is_classic:
+            return wf, cfg
+        given = [f"--{k}" for k in ("implementer", "reviewer", "synth") if opts.overrides.get(k)]
+        if given:
+            raise OrchestratorError(f"{', '.join(given)} 는 classic 워크플로에서만 쓸 수 있습니다 "
+                                    f"(워크플로 {wf.name} 은 역할을 템플릿에서 정합니다).")
+        changes: dict[str, Any] = {}
+        debate = wf.first("debate")
+        if debate is not None:
+            if len(debate.proposers) == 1:
+                changes["debate_rounds"] = 0
+            elif opts.overrides.get("debate_rounds") is None and debate.rounds is not None:
+                changes["debate_rounds"] = debate.rounds
+        build = wf.first("build")
+        if build is not None and opts.overrides.get("max_review") is None and build.max_review is not None:
+            changes["max_review"] = build.max_review
+        cfg = replace(cfg, **changes)
+        try:
+            cfg.validate()
+        except ConfigError as e:
+            raise OrchestratorError(f"설정 오류: {e}") from e
+        return wf, cfg
+
+    @staticmethod
+    def _describe_role(wf: Workflow, name: str, cfg: Config) -> str:
+        role = wf.roles[name]
+        ac = role.agent_config(cfg)
+        effort = describe_effort(ac)
+        return f"{name}={role.agent}({ac.model or '기본'}" + (f", {effort}" if effort else "") + ")"
+
     # ---------------------------------------------------------------- helpers
     def _locked(self, workdir: Path, verb: str) -> RunLock:
         lock = RunLock(workdir, command=f"duet {verb} " + " ".join(sys.argv[1:]))
@@ -279,9 +376,14 @@ class Orchestrator:
         except ConfigError as e:
             raise OrchestratorError(f"설정 오류: {e}") from e
 
-    def _make_agents(self, cfg: Config, mock: bool) -> Mapping[str, AgentAdapter]:
-        agents = self.agent_factory(cfg, mock=mock)
-        for name in (cfg.implementer, cfg.reviewer, cfg.synth_name):
+    def _make_agents(self, cfg: Config, mock: bool, wf: Workflow | None = None) -> Mapping[str, AgentAdapter]:
+        if wf is not None and not wf.is_classic:
+            agents = self.role_factory(cfg, wf, mock=mock)
+            names = wf.used_roles()
+        else:
+            agents = self.agent_factory(cfg, mock=mock)
+            names = [cfg.implementer, cfg.reviewer, cfg.synth_name]
+        for name in dict.fromkeys(names):
             try:
                 agents[name].check()
             except AgentNotAvailable as e:
@@ -301,6 +403,7 @@ class Orchestrator:
             "claude.model": cfg.claude.model, "claude.effort": cfg.claude.effort,
             "codex.model": cfg.codex.model, "codex.effort": cfg.codex.effort,
             "claude.step_effort": dict(cfg.claude.step_effort), "codex.step_effort": dict(cfg.codex.step_effort),
+            "workflow": cfg.workflow,
             "test_command": cfg.test_command, "block_severity": cfg.block_severity,
             "stall_rounds": cfg.stall_rounds, "require_tests_pass": cfg.require_tests_pass,
             "review_diff": cfg.review_diff, "repro_tests": cfg.repro_tests,

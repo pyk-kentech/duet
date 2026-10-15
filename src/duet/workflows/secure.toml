@@ -1,0 +1,29 @@
+name = "secure"
+description = "classic 에 보안 리뷰어를 더하고, 승인 뒤 Claude 가 전체를 한 번 감사합니다"
+
+[roles.claude]
+agent = "claude"
+
+[roles.codex]
+agent = "codex"
+
+[roles.security]
+agent = "codex"
+templates = { review = "review_security" }
+
+[roles.auditor]
+agent = "claude"
+
+[[steps]]
+kind = "debate"
+proposers = ["claude", "codex"]
+synth = "codex"
+
+[[steps]]
+kind = "build"
+implementer = "claude"
+reviewers = ["codex", "security"]
+
+[[steps]]
+kind = "audit"
+roles = ["auditor"]

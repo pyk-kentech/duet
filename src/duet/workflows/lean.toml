@@ -1,0 +1,17 @@
+name = "lean"
+description = "가장 싼 구성: Claude 혼자 설계(토론 없음) → Claude 구현 → Codex 리뷰"
+
+[roles.claude]
+agent = "claude"
+
+[roles.codex]
+agent = "codex"
+
+[[steps]]
+kind = "debate"
+proposers = ["claude"]
+
+[[steps]]
+kind = "build"
+implementer = "claude"
+reviewers = ["codex"]

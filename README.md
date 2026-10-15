@@ -140,6 +140,61 @@ duet run "..." --workdir ./x --claude-model opus --claude-effort high --codex-mo
 비우면 각 CLI의 기본 모델을 씁니다. 매번 쓰기 번거로우면 UI의 **설정 > 기본 실행 설정**에 저장하세요(`~/.duet/settings.json`).
 우선순위는 CLI 인자 > 작업 폴더의 `duet.toml` > 전역 설정 > 기본값입니다.
 
+Codex 는 기본으로 단계마다 추론 강도를 다르게 씁니다(설계 종합·첫 리뷰 `high`, 나머지 `medium`). `--codex-effort xhigh` 처럼 하나만 주면 모든 단계에 그 값을 쓰고, 단계별로 바꾸려면 `--codex-step-effort review=xhigh,fix=low` 를 씁니다.
+
+## 워크플로 템플릿
+
+역할군과 단계 순서를 템플릿으로 골라 씁니다. 기본은 `classic`(지금까지의 Claude·Codex 토론 → 구현 → 교차 리뷰)입니다.
+
+```bash
+duet workflows                     # 쓸 수 있는 템플릿 목록
+duet workflows show secure         # 역할·단계 자세히
+duet run "..." --workdir ./x --workflow secure
+```
+
+| 내장 | 내용 |
+|---|---|
+| `secure` | classic + 보안 리뷰어(Codex, 보안 전용 프롬프트) + 승인 뒤 Claude 의 전체 감사 |
+| `existing` | 기존 코드베이스용: Codex 가 먼저 코드를 조사하고 그 결과로 설계·구현 |
+| `lean` | 가장 쌈: Claude 혼자 설계(토론 없음) → 구현 → Codex 리뷰 |
+
+직접 만들려면 `<작업 폴더>/.duet/workflows/<이름>.toml` 또는 `~/.duet/workflows/<이름>.toml` 에 둡니다. 단계 종류는 `explore`(사전 조사), `debate`(설계), `build`(구현·리뷰, 리뷰어 최대 3명), `audit`(승인 뒤 감사, 참고용)입니다.
+
+```toml
+name = "my-team"
+description = "Opus 설계자 + Sonnet 구현자 + Codex 두 명 리뷰"
+
+[roles.architect]
+agent = "claude"
+model = "opus"
+effort = "high"
+
+[roles.coder]
+agent = "claude"
+model = "sonnet"
+
+[roles.reviewer]
+agent = "codex"
+
+[roles.security]
+agent = "codex"
+templates = { review = "review_security" }   # 프롬프트 템플릿 교체
+instructions = "인증·권한 코드를 특히 꼼꼼히 봐라."   # 이 역할의 프롬프트 끝에 붙는 지시
+
+[[steps]]
+kind = "debate"
+proposers = ["architect", "reviewer"]
+synth = "architect"
+
+[[steps]]
+kind = "build"
+implementer = "coder"
+reviewers = ["reviewer", "security"]   # 모두 승인해야 승인
+max_review = 4
+```
+
+자세한 규칙은 DESIGN.md 19장에 있습니다.
+
 ## 리뷰 규칙과 테스트
 
 - **duet가 직접 테스트**: 구현이 커밋되면 duet가 테스트를 돌리고 결과를 리뷰어와 구현자에게 보여줍니다. 명령은 `--test-command`, 구현자가 `duet.toml`에 적은 `test_command`, 자동 감지(pytest·npm·cargo·go·make) 순으로 정합니다. 테스트가 실패하면 리뷰어가 승인해도 승인하지 않습니다.

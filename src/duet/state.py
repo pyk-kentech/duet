@@ -27,6 +27,8 @@ FINAL_STATUSES = frozenset({DONE_APPROVED, DONE_UNAPPROVED, DONE_DESIGN})
 PHASE_INIT = "init"
 PHASE_DEBATE = "debate"
 PHASE_BUILD = "build"
+PHASE_EXPLORE = "explore"
+PHASE_AUDIT = "audit"
 PHASE_DONE = "done"
 
 
@@ -40,6 +42,7 @@ class CallRecord:
     timed_out: bool = False
     file: str | None = None
     usage: dict | None = None
+    role: str | None = None   # 워크플로 역할 이름 (agent 와 다를 때만)
 
 
 @dataclass
@@ -67,6 +70,12 @@ class RunState:
     reviewed_commits: dict[str, str] = field(default_factory=dict)  # round → 리뷰한 시점의 HEAD (증분 diff 기준)
     repros: dict[str, dict] = field(default_factory=dict)     # round → 리뷰어가 낸 재현 테스트 처리 결과
     calls: list[CallRecord] = field(default_factory=list)
+    # 워크플로 템플릿 (DESIGN.md 19장). None 이면 classic(설정에서 만듦)
+    workflow: dict | None = None
+    last_reviews: dict[str, str] = field(default_factory=dict)        # 역할 → 마지막 리뷰 파일 (리뷰어 여럿)
+    round_reviews: dict[str, dict] = field(default_factory=dict)      # round → 역할 → 리뷰어별 판정 (리뷰어 여럿)
+    explores: dict[str, str] = field(default_factory=dict)            # explore 단계 id → 결과 파일
+    audits: dict[str, list] = field(default_factory=dict)             # audit 단계 id → 감사자별 결과
     error: str | None = None
     created_at: str = field(default_factory=lambda: dt.datetime.now().isoformat(timespec="seconds"))
     updated_at: str = ""
@@ -81,9 +90,10 @@ class RunState:
 
     def record_call(self, agent: str, step: str, sec: float, exit_code: int, *,
                     rate_limited: bool = False, timed_out: bool = False,
-                    file: str | None = None, usage: dict | None = None) -> None:
+                    file: str | None = None, usage: dict | None = None, role: str | None = None) -> None:
         self.calls.append(CallRecord(agent, step, round(sec, 1), exit_code,
-                                     rate_limited=rate_limited, timed_out=timed_out, file=file, usage=usage))
+                                     rate_limited=rate_limited, timed_out=timed_out, file=file, usage=usage,
+                                     role=role))
 
     def usage_totals(self) -> dict[str, dict]:
         """에이전트별 사용량 합계."""
@@ -111,7 +121,9 @@ class RunState:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "RunState":
         data = dict(data)
-        data["calls"] = [CallRecord(**c) for c in data.get("calls", [])]
+        # 모르는 필드는 버린다(더 새 duet 가 쓴 run.json 도 읽을 수 있게)
+        call_keys = set(CallRecord.__dataclass_fields__)
+        data["calls"] = [CallRecord(**{k: v for k, v in c.items() if k in call_keys}) for c in data.get("calls", [])]
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in data.items() if k in known})
 

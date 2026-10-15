@@ -19,7 +19,8 @@
 - 외부에 공개하는 웹 서비스, 데이터베이스 (관리자 UI 는 본인 PC 의 127.0.0.1 전용 — 13장)
 - 유료 API 직접 호출 (Anthropic/OpenAI SDK 사용 안 함)
 - chatgpt.com / claude.ai 웹 화면 자동화 (약관 위험 + 취약)
-- 3개 이상 에이전트, 병렬 실행 (v2 후보로만 남김)
+- 병렬 실행 (v2 후보로만 남김). 역할은 워크플로 템플릿(19장)으로 여럿 둘 수 있지만 호출은 한 번에 하나씩 순차로 한다.
+- Claude Code·Codex 외의 CLI (역할은 둘 중 하나의 CLI 에 모델·강도·지시를 붙인 것)
 
 ---
 
@@ -417,6 +418,10 @@ env_keep = ["CLAUDE_CODE_OAUTH_TOKEN"]
 - `AgentConfig.step_effort`, `--{agent}-step-effort`, Codex 기본 `medium`(종합·첫 리뷰 `high`), `env_strip`/`env_keep`, `doctor` 의 API 키 점검 (18장)
 - ✅ 단계·라운드별 effort 결정, 설정 층 규칙(effort 만 정한 층은 단계별을 비움), resume 보존·예전 run 호환, 가짜 CLI 로 단계별 플래그와 자식 환경(비밀 변수 제거·keep 예외·테스트 명령) 검증
 
+### M13. 워크플로 템플릿 (2026-10-16 사용자 요청으로 추가)
+- `workflow.py`(역할·단계 정의, 로드·검증, classic), 내장 템플릿 `workflows/*.toml`, 단계 종류 explore/debate/build/audit, 리뷰어 여러 명, 역할별 지시·프롬프트, `--workflow`, `duet workflows`, UI 선택 (19장)
+- ✅ 템플릿 검증 오류, classic 이 예전과 같은 기록·커밋을 남김, 역할별 모델·강도 플래그, 리뷰어 2명 판정 합산·수정 프롬프트, explore/audit, resume 시 저장된 정의 사용, UI 목록·실행
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -582,3 +587,48 @@ memo-cli 실측(Codex 세션 기록): 설계 단계 호출은 입력 약 2만 �
 - git, `doctor`, ssh(원격), UI 가 띄우는 duet 는 그대로 둔다. ssh 는 `SSH_AUTH_SOCK` 이 필요하고, UI 가 띄운 duet 는 자기 자식에게 같은 규칙을 다시 적용한다.
 - duet 가 정한 변수(테스트의 `CI=1` 등)는 빼지 않는다. 실행 시작 로그에 뺀 변수 **이름**만 한 줄 남긴다(값은 남기지 않음).
 - `duet doctor`: 셸에 `ANTHROPIC_API_KEY`·`ANTHROPIC_AUTH_TOKEN`·`OPENAI_API_KEY`·`CODEX_API_KEY` 가 있으면 경고 항목을 띄운다. duet 설정이 그 변수를 빼면 "duet 는 빼고 넘김(직접 `claude -p` 를 돌리면 API 과금)", 안 빼면 "구독 대신 API 로 과금될 수 있음".
+
+---
+
+## 19. 워크플로 템플릿
+
+미리 정해 둔 **역할군**과 **단계 순서**를 템플릿 파일로 두고 골라 쓴다. 예: "일반 리뷰 + 보안 리뷰", "기존 코드 조사 후 설계", "설계 토론 없이 싸게". 실행은 지금처럼 한 번에 하나씩 순차로 하고, 흐름 제어·resume·종료 판단은 duet 코드가 맡는다(템플릿은 정해진 단계 종류를 조합할 뿐 분기·반복을 직접 쓰지 않는다).
+
+### 19.1 역할 (`[roles.<이름>]`)
+| 키 | 뜻 |
+|---|---|
+| `agent` | `claude` 또는 `codex` (필수) |
+| `model`, `effort`, `step_effort` | 이 역할의 모델·추론 강도. 없으면 `[claude]`/`[codex]` 설정(CLI `--codex-model` 등 포함)을 따른다. 층 규칙은 18.1 과 같다(effort 만 쓰면 단계별을 비움) |
+| `instructions` | 이 역할의 모든 프롬프트 끝에 붙는 추가 지시 (예: "보안 관점으로만 봐라"). 4000자 이하 |
+| `templates` | 단계별 프롬프트 템플릿 교체 `{ review = "review_security" }`. 키는 단계 이름, 값은 템플릿 이름 |
+
+- 이름은 `[a-z][a-z0-9_]{0,23}`. 같은 CLI 를 여러 역할이 써도 된다(예: Claude Opus 설계자 + Claude Sonnet 구현자). bin·args 는 `[claude]`/`[codex]` 설정을 공유한다.
+- 기록·로그에는 역할 이름이 보이고(`architect ← propose`), 메타에 `agent`(CLI)와 `role` 을 함께 남긴다. 사용량 합계는 CLI 기준.
+
+### 19.2 단계 (`[[steps]]`, 위에서 아래로 순서대로)
+| kind | 키 | 하는 일 | resume 키 |
+|---|---|---|---|
+| `explore` | `id`, `role` | 읽기 전용으로 기존 코드를 조사(`explore` 템플릿). 결과를 이후 propose·implement 프롬프트 끝에 "사전 조사"로 붙인다 | `explore:<id>` |
+| `debate` | `proposers`(1~2), `rounds`, `synth` | 지금의 설계 토론. 제안자가 1명이면 비판 없이, `synth` 가 없으면 그 제안을 그대로 DESIGN.md 로 | `debate` (+ 기존 세부 키) |
+| `build` | `implementer`, `reviewers`(1~3), `max_review` | 지금의 구현·테스트·리뷰 루프. 리뷰어가 여럿이면 아래 19.3 | 기존 키 + `review:i:<역할>` |
+| `audit` | `id`, `roles`(1~3) | build 가 승인으로 끝난 뒤, 기준 커밋부터 전체 diff 를 한 번 감사(`audit` 템플릿). **참고용**: 결과는 기록·로그·`run.json` 의 `audits` 에 남고 실행 상태는 바꾸지 않는다 | `audit:<id>` |
+
+- 규칙: 단계 1개 이상, `debate`·`build` 는 각각 최대 1개, `debate` 는 `build` 앞, `audit` 은 `build` 뒤, `explore` 는 `build` 앞. `id` 는 같은 kind 안에서 겹치지 않음(기본값 kind 이름). 참조하는 역할은 모두 정의돼 있어야 하고, 한 단계 안에서 역할이 겹치면 안 된다(리뷰어 목록에 구현자 불가).
+- `rounds`·`max_review` 를 템플릿에 쓰면 그 값이 duet.toml·전역 설정보다 우선하고, CLI `--debate-rounds`·`--max-review` 가 그보다 우선한다. 정해진 값은 실행 상태에 저장한다.
+- `--design-only` 는 debate 단계까지만(앞의 explore 포함), `--skip-design` 은 debate 단계를 건너뛴다.
+
+### 19.3 리뷰어 여러 명
+- 같은 라운드에서 리뷰어를 순서대로 부른다(같은 diff, 같은 테스트 결과). 각자 `policy.decide` 로 판단하고, **모두 승인해야 승인**, 막는 지적 수는 합(수렴 판단도 합 기준). 하나라도 판정 블록이 없으면 그 리뷰어는 반려로 본다(기존 규칙).
+- 수정 프롬프트에는 모든 리뷰를 `### <역할> 의 리뷰` 로 이어 붙여 넣는다. 각 리뷰어의 '이전 리뷰'는 자기 직전 리뷰다. 재현 테스트는 모든 리뷰에서 모아 한 번에 처리한다.
+- `review_history[i]` 의 기존 필드는 합산 값, `reviewers` 에 리뷰어별 판정. `last_reviews` 에 역할 → 마지막 리뷰 파일. 리뷰어가 1명이면 기록·필드가 예전과 같다.
+
+### 19.4 템플릿 파일과 선택
+- 위치(앞이 우선): `<workdir>/.duet/workflows/<이름>.toml` → `$DUET_HOME/workflows/<이름>.toml` → 내장(`duet/workflows/`). `--workflow @경로.toml` 로 파일을 직접 줄 수도 있다.
+- 최상위 키: `name`(파일 이름과 같지 않아도 됨, 표시용), `description`, `[roles.*]`, `[[steps]]`. 알 수 없는 키는 거부한다.
+- 선택: CLI `--workflow 이름`, 설정 `workflow = "이름"`(duet.toml·전역 설정). 기본 `classic`.
+- **`classic`** 은 파일이 아니라 설정에서 만든다: 역할 `claude`·`codex`(설정 그대로), `debate(proposers=[claude, codex], synth=synth, rounds=debate_rounds)` → `build(implementer, [reviewer], max_review)`. 기록 이름·resume 키·출력이 M12 와 완전히 같다. `--implementer/--reviewer/--synth` 는 classic 에서만 쓸 수 있다(다른 템플릿과 함께 주면 사용 오류).
+- 실행 시작 때 고른 템플릿을 해석한 정의 전체를 `run.json` 의 `workflow` 에 저장하고, resume 은 파일이 아니라 이 저장본을 쓴다. 예전 실행(`workflow` 없음)은 classic.
+- 내장 템플릿: `secure`(classic + 보안 리뷰어 + 마지막 감사), `existing`(기존 코드 조사 → 설계 토론 → 구현), `lean`(제안자 1명, 토론 없음, 리뷰어 1명. 가장 쌈).
+- 프롬프트 템플릿 찾는 곳도 같은 순서로 넓힌다: `<workdir>/.duet/templates/` → `$DUET_HOME/templates/` → 내장. 내장에 `explore.md`, `audit.md`, `review_security.md` 추가. 이름은 `[a-z][a-z0-9_]*`.
+- `duet workflows [--workdir P]`: 쓸 수 있는 템플릿 목록(이름, 출처, 설명, 역할·단계 요약). `duet workflows show 이름` 은 해석한 정의를 보여 준다.
+- UI: 새 실행 창에 워크플로 선택(설명·역할·단계 미리보기), 실행 상세에 워크플로 이름과 역할 표시. 지금 호출의 실시간 보기는 역할 → CLI 로 바꿔 세션 기록을 찾는다.

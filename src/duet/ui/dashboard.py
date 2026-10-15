@@ -21,7 +21,8 @@ from subprocess import Popen
 from typing import Any
 
 from duet.activity import agent_activity, call_start_epoch
-from duet.config import AGENT_NAMES, ConfigError, MAX_DEBATE_ROUNDS, MAX_REVIEW_ROUNDS, describe_effort, load_config
+from duet.workflow import WorkflowError, list_workflows, load_workflow, role_agent_map
+from duet.config import AGENT_NAMES, CLASSIC_WORKFLOW, WORKFLOW_NAME_RE, ConfigError, MAX_DEBATE_ROUNDS, MAX_REVIEW_ROUNDS, describe_effort, load_config
 from duet.lock import read_lock
 from duet.orchestrator import CONSOLE_LOG
 from duet.phases.build import build_review_diff
@@ -166,7 +167,7 @@ class Dashboard:
             "stale": st.status == RUNNING and not (live and live.get("run_id") == st.run_id),
             "console_size": console.stat().st_size if console.is_file() else 0,
             "has_design_backup": (rd / BACKUP_FILENAME).is_file(),
-            "current_call": current_call(console) if live and live.get("run_id") == st.run_id else None,
+            "current_call": self._current_call(rd) if live and live.get("run_id") == st.run_id else None,
             "resume": self._resume_hint(st, wd),
             "now": dt.datetime.now().isoformat(timespec="seconds"),
         }
@@ -178,11 +179,36 @@ class Dashboard:
         live = self._live(wd)
         if not live or live.get("run_id") != rd.name:
             return {"live": False, "call": None, "events": []}
-        call = current_call(rd / CONSOLE_LOG)
+        call = self._current_call(rd)
         if not call:
             return {"live": True, "call": None, "events": []}
         since = call_start_epoch(call["started"])
-        return {"live": True, "call": call, "events": agent_activity(call["agent"], wd, since)}
+        return {"live": True, "call": call, "events": agent_activity(call["cli"], wd, since)}
+
+    def _current_call(self, rd: Path) -> dict[str, Any] | None:
+        """지금 호출. 로그에는 역할 이름이 찍히므로 세션 기록을 찾을 CLI 이름(cli)을 붙인다 (DESIGN.md 19.4)."""
+        call = current_call(rd / CONSOLE_LOG)
+        if call is None:
+            return None
+        try:
+            roles = role_agent_map(RunState.load(rd).workflow)
+        except (OSError, ValueError):
+            roles = {}
+        call["cli"] = roles.get(call["agent"], call["agent"])
+        return call
+
+    def workflows(self, project: str | None) -> dict[str, Any]:
+        wd: Path | None = None
+        if project:
+            try:
+                wd = self.project(project)
+            except ApiError:
+                wd = None
+        try:
+            cfg = load_config(wd)
+        except ConfigError as e:
+            return {"workflows": [], "default": CLASSIC_WORKFLOW, "error": str(e)}
+        return {"workflows": list_workflows(wd, cfg), "default": cfg.workflow}
 
     def entry(self, project: str | None, run_id: str | None, name: str | None) -> dict[str, Any]:
         wd = self.project(project)
@@ -285,9 +311,14 @@ class Dashboard:
         except WorkdirRefused as e:
             raise ApiError(400, str(e)) from e
         overrides: dict[str, Any] = {}
+        workflow = str(payload.get("workflow") or "").strip()
+        if workflow and workflow != CLASSIC_WORKFLOW:
+            if not WORKFLOW_NAME_RE.match(workflow):
+                raise ApiError(400, f"워크플로 이름이 잘못되었습니다: {workflow}")
+            overrides["workflow"] = workflow
         for key in ("implementer", "reviewer", "synth"):
             v = payload.get(key)
-            if v:
+            if v and "workflow" not in overrides:
                 if v not in AGENT_NAMES:
                     raise ApiError(400, f"{key} 값이 잘못되었습니다: {v}")
                 overrides[key] = v
@@ -313,9 +344,15 @@ class Dashboard:
             except (TypeError, ValueError):
                 raise ApiError(400, "stall_rounds 는 숫자여야 합니다.") from None
         try:
-            load_config(wd if wd.is_dir() else None, overrides)
+            cfg = load_config(wd if wd.is_dir() else None, overrides)
         except ConfigError as e:
             raise ApiError(400, f"설정 오류: {e}") from e
+        try:
+            wf = load_workflow(cfg.workflow, wd if wd.is_dir() else None, cfg)
+        except WorkflowError as e:
+            raise ApiError(400, f"워크플로 오류: {e}") from e
+        if design_only and wf.first("debate") is None:
+            raise ApiError(400, f"워크플로 {wf.name} 에는 설계 단계가 없어 '설계만'을 고를 수 없습니다.")
         if skip_design and not (wd / DESIGN_FILENAME).is_file():
             raise ApiError(400, f"'설계 생략'인데 {wd / DESIGN_FILENAME} 이 없습니다.")
         self._ensure_not_busy(wd)
@@ -327,7 +364,7 @@ class Dashboard:
         task_file.write_text(task, encoding="utf-8")
 
         argv = ["run", f"@{task_file}", "--workdir", str(wd)]
-        for key, flag in (("implementer", "--implementer"), ("reviewer", "--reviewer"), ("synth", "--synth"),
+        for key, flag in (("workflow", "--workflow"), ("implementer", "--implementer"), ("reviewer", "--reviewer"), ("synth", "--synth"),
                           ("debate_rounds", "--debate-rounds"), ("max_review", "--max-review"),
                           ("claude.model", "--claude-model"), ("claude.effort", "--claude-effort"),
                           ("codex.model", "--codex-model"), ("codex.effort", "--codex-effort"),
@@ -470,7 +507,8 @@ class Dashboard:
             cfg = load_config(wd if wd is not None and wd.is_dir() else None)
         except ConfigError as e:
             return {"error": str(e)}
-        return {"implementer": cfg.implementer, "reviewer": cfg.reviewer, "synth": cfg.synth_name,
+        return {"workflow": cfg.workflow, "implementer": cfg.implementer, "reviewer": cfg.reviewer,
+                "synth": cfg.synth_name,
                 "debate_rounds": cfg.debate_rounds, "max_review": cfg.max_review,
                 # 단계별 강도가 있으면 effort 를 비워 둔다: 화면이 그 값을 다시 넘기면 단계별 설정이 지워진다
                 **{n: {"model": getattr(cfg, n).model,
@@ -590,6 +628,7 @@ API_METHODS: dict[str, Any] = {
     "activity": lambda d, a: d.activity(a.get("project"), a.get("run")),
     "doctor": lambda d, a: d.doctor(),
     "defaults": lambda d, a: d._defaults(None),
+    "workflows": lambda d, a: d.workflows(a.get("project")),
 }
 
 
