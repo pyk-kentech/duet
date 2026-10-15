@@ -401,3 +401,22 @@ def test_post_without_body_is_accepted(server):
     req = urllib.request.Request(url, data=b"", method="POST", headers={"X-Duet-Token": TOKEN})
     with urllib.request.urlopen(req, timeout=10) as r:
         assert r.status == 200
+
+
+def test_every_help_key_has_text():
+    """index.html 의 data-help 키와 app.js 의 help()/withTip() 키가 모두 TIPS 에 있어야 한다(설명 누락 방지)."""
+    import re
+    from importlib import resources
+    static = resources.files("duet.ui").joinpath("static")
+    html = static.joinpath("index.html").read_text(encoding="utf-8")
+    js = static.joinpath("app.js").read_text(encoding="utf-8")
+    tips_block = js[js.index("const TIPS = {"): js.index("};", js.index("const TIPS = {"))]
+    defined = set(re.findall(r"^\s*'?([\w.]+)'?\s*:", tips_block, re.MULTILINE))
+    key = r"([A-Za-z][A-Za-z0-9_.]*)"
+    used = set(re.findall(r'data-help="' + key + '"', html))
+    used |= set(re.findall(r"help\('" + key + r"'\)", js))
+    used |= set(re.findall(r"withTip\([^;]*?, '" + key + r"'\)", js))
+    used |= {f"nav.{k}" for k in re.findall(r'data-nav="(\w+)"', html)}
+    missing = sorted(k for k in used if k not in defined)
+    assert not missing, f"설명이 없는 키: {missing}"
+    assert len(used) > 40

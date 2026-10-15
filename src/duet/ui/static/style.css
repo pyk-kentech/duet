@@ -453,3 +453,14 @@ table.plain tr:last-child td { border-bottom: 0; }
 .update-banner span { color: var(--muted); }
 .restart-overlay { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgba(10, 14, 20, .35); }
 .restart-overlay .card { display: flex; gap: 10px; align-items: center; font-weight: 600; }
+
+/* 도움말 "?" 와 설명 상자 */
+.help { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; margin-left: 3px;
+  border-radius: 50%; border: 1px solid var(--line-strong); color: var(--muted); background: var(--panel);
+  font-size: 10.5px; font-weight: 700; cursor: help; vertical-align: 1px; user-select: none; }
+.help:hover, .help:focus-visible { border-color: var(--accent); color: var(--accent); }
+.tooltip { position: fixed; z-index: 90; max-width: min(320px, calc(100vw - 16px)); padding: 8px 11px; border-radius: 8px;
+  background: var(--text); color: var(--bg); font-size: 12.5px; font-weight: 400; line-height: 1.55; white-space: normal;
+  box-shadow: 0 6px 20px rgba(0,0,0,.18); pointer-events: none; text-align: left; letter-spacing: 0; }
+[data-tip]:not(.help):not(input):not(select) { cursor: help; }
+button[data-tip], a[data-tip], .btn[data-tip] { cursor: pointer; }

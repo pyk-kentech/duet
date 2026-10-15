@@ -45,7 +45,7 @@ const CHECK_STATUS = { ok: '정상', warn: '확인 필요', missing: '없음', e
 function statusKey(run) { return run.stale ? 'stale' : run.status; }
 function statusBadge(run, live) {
   const key = statusKey(run);
-  return h('span', { class: `badge s-${key}${live ? ' live' : ''}` }, live ? '실행 중' : (STATUS[key] || key));
+  return withTip(h('span', { class: `badge s-${key}${live ? ' live' : ''}` }, live ? '실행 중' : (STATUS[key] || key)), `status.${live ? 'running' : key}`);
 }
 function agentTag(name) {
   if (!name) return null;
@@ -57,18 +57,20 @@ function verdictTag(v) {
   const label = v.status === 'APPROVED' ? '승인' : '반려';
   const extra = v.must_fix ? ` ${v.must_fix}` : '';
   const title = v.parse_failed ? '판정 블록이 없어 반려로 간주' : v.contradiction ? 'APPROVED 인데 must_fix>0 → 반려' : '';
-  return h('span', { class: `verdict v-${v.status}`, title: title || null }, label + extra + (v.parse_failed || v.contradiction ? ' ?' : ''));
+  const base = v.status === 'APPROVED' ? TIPS.approved : TIPS.rejected_n;
+  return h('span', { class: `verdict v-${v.status}`, 'data-tip': title ? `${base} (${title})` : base }, label + extra + (v.parse_failed || v.contradiction ? ' ?' : ''));
 }
 const TEST_STATUS = { passed: '통과', failed: '실패', error: '실행 불가', timeout: '시간 초과' };
 function testTag(status) {
   if (!status) return null;
-  return h('span', { class: `verdict t-${status}` }, `테스트 ${TEST_STATUS[status] || status}`);
+  return withTip(h('span', { class: `verdict t-${status}` }, `테스트 ${TEST_STATUS[status] || status}`), `test.${status}`);
 }
 function decisionTag(hst) {
   if (!hst) return null;
-  const title = (hst.reasons || []).join(' · ');
-  if (hst.approved) return h('span', { class: 'verdict v-APPROVED', title }, '승인' + (hst.reviewer_status !== 'APPROVED' ? ' *' : ''));
-  return h('span', { class: 'verdict v-CHANGES_REQUESTED', title }, '반려' + (hst.blocking != null ? ` ${hst.blocking}` : ''));
+  const why = (hst.reasons || []).join(' · ');
+  const tip = (t) => why ? `${t} (${why})` : t;
+  if (hst.approved) return h('span', { class: 'verdict v-APPROVED', 'data-tip': tip(hst.reviewer_status !== 'APPROVED' ? TIPS.approved_star : TIPS.approved) }, '승인' + (hst.reviewer_status !== 'APPROVED' ? ' *' : ''));
+  return h('span', { class: 'verdict v-CHANGES_REQUESTED', 'data-tip': tip(TIPS.rejected_n) }, '반려' + (hst.blocking != null ? ` ${hst.blocking}` : ''));
 }
 function fmtDur(sec) {
   sec = Math.max(0, Math.round(Number(sec) || 0));
@@ -152,6 +154,179 @@ function toast(msg, bad = false) {
 function errorBox(e) {
   return h('div', { class: 'alert alert-bad' }, h('b', null, '오류'), h('span', null, e.message || String(e)));
 }
+// =================================================================== 쉬운 설명 (마우스를 올리면 뜨는 상자)
+const TIPS = {
+  // 메뉴
+  'nav.home': '모든 프로젝트와 실행 기록을 봅니다.',
+  'nav.setup': 'duet 가 쓰는 프로그램(Claude, Codex 등)이 설치·로그인되어 있는지 확인하고, 없으면 여기서 바로 설치·로그인합니다.',
+  'nav.usage': '구독을 얼마나 썼는지 봅니다. 컴퓨터에 남은 기록만 읽어서, 이 화면을 본다고 사용량이 줄지는 않습니다.',
+  'nav.settings': '자주 쓰는 폴더, 기본 모델, 다른 컴퓨터(원격 머신) 같은 기본값을 저장합니다.',
+  new_run: '두 AI 에게 새 과제를 맡깁니다. 설계 토론 → 구현 → 서로 리뷰 순서로 알아서 진행됩니다.',
+  // 새 실행 창
+  machine: '어느 컴퓨터에서 돌릴지 고릅니다. 다른 컴퓨터는 설정 > 원격 머신에서 추가할 수 있습니다.',
+  root: '프로젝트 폴더를 만들 상위 폴더입니다. 자주 쓰는 위치는 설정에 저장해 두면 여기에 나옵니다.',
+  name: '새로 만들 프로젝트 폴더 이름입니다. "위치 / 이름"이 작업 폴더가 됩니다.',
+  project: '프로젝트 폴더의 전체 경로입니다. 없는 폴더면 새로 만듭니다.',
+  task: '무엇을 만들지 평소 말로 적으세요. 원하는 기능과 제약을 자세히 쓸수록 설계가 정확해집니다.',
+  implementer: '코드를 직접 작성하고, 리뷰를 받으면 고치는 AI 입니다.',
+  reviewer: '작성된 코드를 읽고 검사해서 승인하거나 반려하는 AI 입니다. 파일은 고칠 수 없습니다.',
+  synth: '두 AI 의 설계안을 하나의 최종 설계(DESIGN.md)로 합치는 AI 입니다. 기본은 리뷰 담당이 합칩니다.',
+  claude_model: 'Claude 의 어떤 모델을 쓸지 정합니다. 비워 두면 Claude 가 평소 쓰는 기본 모델입니다.',
+  codex_model: 'Codex(ChatGPT)의 어떤 모델을 쓸지 정합니다. 비워 두면 기본 모델입니다.',
+  effort: 'AI 가 얼마나 깊게 생각할지입니다. 높을수록 꼼꼼하지만 느리고 사용량을 더 씁니다. 비워 두면 기본값입니다.',
+  debate_rounds: '두 AI 가 서로의 설계안을 비판하고 고치는 횟수입니다. 0 이면 비판 없이 바로 합칩니다. 1 늘릴 때마다 AI 호출이 2번 늘어납니다.',
+  max_review: '"구현 → 리뷰"를 최대 몇 번 반복할지입니다. 그 전에 승인되면 바로 끝납니다.',
+  stall_rounds: '리뷰에서 고칠 것이 이 횟수만큼 연속으로 줄지 않으면 멈추고 사람에게 넘깁니다. 끝없이 반려만 반복되는 걸 막습니다. 0 이면 이 기능을 끕니다.',
+  block_severity: '어느 정도 문제까지 반려할지입니다. P1 = 동작 안 함·보안 문제, P2 = 설계와 다름·흔한 입력에서 오류, P3 = 드문 입력·사소한 개선. 기본(P1·P2)은 사소한 것만 남으면 승인합니다.',
+  test_command: '구현이 끝날 때마다 duet 가 직접 돌릴 테스트 명령입니다. 비우면 프로젝트를 보고 알아서 찾습니다. none 이라고 쓰면 테스트를 하지 않습니다.',
+  design_only: '설계 토론까지만 하고 멈춥니다. 코드를 만들기 전에 설계를 먼저 읽어 보고 싶을 때 좋습니다.',
+  skip_design: '이미 있는 DESIGN.md 로 바로 구현을 시작합니다. 설계를 직접 고친 뒤에 씁니다.',
+  mock: '진짜 AI 를 부르지 않고 흉내만 냅니다. 화면과 흐름을 시험해 볼 때 씁니다. 사용량이 들지 않습니다.',
+  force: '폴더에 아직 저장(커밋)하지 않은 변경이 있어도 시작합니다. 그 변경도 duet 의 첫 커밋에 같이 들어갑니다.',
+  // 상태
+  'status.running': '지금 진행 중입니다.',
+  'status.done_approved': '리뷰에서 승인받고 끝났습니다.',
+  'status.done_unapproved': '정한 횟수 안에 승인받지 못했거나, 고칠 것이 줄지 않아 멈췄습니다. 이어하기로 계속할 수 있습니다.',
+  'status.done_design': '설계까지만 하고 끝났습니다. 구현하려면 새 실행에서 "설계 생략"을 고르세요.',
+  'status.stopped_rate_limit': '구독 사용 한도에 걸려 멈췄습니다. 한도가 초기화된 뒤 이어하기를 누르세요.',
+  'status.stopped_user': '중지 버튼(또는 Ctrl-C)으로 멈췄습니다. 이어하기를 누르면 멈춘 단계부터 다시 합니다.',
+  'status.failed': 'AI 호출이나 git 작업이 반복해서 실패했습니다. 콘솔 탭에서 이유를 보고 이어하기를 누르세요.',
+  'status.stale': '"진행 중"으로 기록돼 있는데 프로그램은 꺼져 있습니다(터미널을 닫았거나 컴퓨터가 꺼짐). 이어하기로 계속하세요.',
+  'status.broken': '기록 파일(run.json)을 읽을 수 없습니다.',
+  // 실행 화면
+  resume: '멈춘 지점부터 이어서 진행합니다. 이미 끝난 단계는 다시 하지 않습니다.',
+  resume_more: '리뷰 횟수 한도를 늘리고, 마지막 리뷰를 반영해 고치는 단계부터 이어갑니다.',
+  stop: '지금 하던 AI 호출을 버리고 멈춥니다. 나중에 이어하기로 그 단계부터 다시 할 수 있습니다.',
+  remove_project: '목록에서만 뺍니다. 폴더와 파일은 지우지 않습니다.',
+  'tab.talk': '두 AI 가 주고받은 글을 순서대로 봅니다. 왼쪽에서 고르면 오른쪽에 내용이 나옵니다.',
+  'tab.console': '진행 로그입니다. 터미널에 찍히는 것과 같습니다.',
+  'tab.changes': '라운드마다 바뀐 코드입니다. 초록 줄은 추가, 빨강 줄은 삭제입니다.',
+  'tab.design': '최종 설계 문서(DESIGN.md)입니다.',
+  'step.propose': '각 AI 가 처음 내놓은 설계안입니다.',
+  'step.critique': '상대 설계안의 약점을 지적하고, 배울 점을 반영해 자기 안을 고친 것입니다.',
+  'step.synthesize': '두 안을 합친 최종 설계입니다. DESIGN.md 로 저장됩니다.',
+  'step.implement': '설계대로 처음 코드를 작성한 AI 의 요약입니다.',
+  'step.fix': '리뷰 지적을 반영해 고친 내용의 요약입니다.',
+  'step.test': 'duet 가 직접 돌린 테스트 결과입니다. 실패하면 리뷰어가 승인해도 승인되지 않습니다.',
+  'step.review': '상대 AI 의 코드 리뷰와 판정입니다.',
+  'step.pending': '지금 이 AI 가 일하는 중입니다. 오른쪽 숫자는 걸린 시간입니다.',
+  approved_star: '리뷰어는 반려했지만, 남은 지적이 반려 기준보다 가벼워서 duet 가 승인했습니다.',
+  approved: '승인되었습니다.',
+  rejected_n: '반려되었습니다. 숫자는 반려 기준에 걸린 "반드시 고칠 것"의 개수입니다.',
+  'test.passed': 'duet 가 돌린 테스트가 모두 통과했습니다.',
+  'test.failed': 'duet 가 돌린 테스트가 실패했습니다. 이 라운드는 승인되지 않습니다.',
+  'test.error': '테스트 명령을 실행하지 못했습니다(명령이 없거나 테스트가 0개). 코드 문제가 아닐 수 있어 승인을 막지는 않습니다.',
+  'test.timeout': '테스트가 시간 안에 끝나지 않았습니다. 승인되지 않습니다.',
+  base: '구현을 시작하기 직전의 저장 지점(git 커밋)입니다. 변경 사항은 이 지점과 비교합니다.',
+  usage_cost: '같은 양을 API 로 썼다면 드는 요금의 추정치입니다. 실제로 내는 구독 요금과는 별개입니다.',
+  tokens: '토큰은 AI 가 글을 세는 단위(글자 조각)입니다. 입력은 AI 가 읽은 양, 출력은 AI 가 쓴 양입니다.',
+  rounds: '라운드마다 구현 → 테스트 → 리뷰가 어떻게 됐는지 한 줄로 봅니다.',
+  // 환경·로그인
+  'tool.duet': 'duet 자체와, 그걸 돌리는 Python 입니다.',
+  'tool.git': '코드 변경 이력을 저장하는 프로그램입니다. duet 가 라운드마다 저장(커밋)합니다. 꼭 필요합니다.',
+  'tool.curl': '인터넷에서 설치 파일을 받는 프로그램입니다. Claude·Codex·uv 를 설치할 때 필요합니다.',
+  'tool.uv': 'Python 도구 설치 프로그램입니다. 다른 컴퓨터에 Python 을 설치할 때 씁니다. 없어도 됩니다.',
+  'tool.claude': 'Claude 를 터미널에서 쓰는 공식 프로그램입니다. Claude 구독 계정으로 로그인해야 합니다.',
+  'tool.codex': 'ChatGPT(Codex)를 터미널에서 쓰는 공식 프로그램입니다. ChatGPT 계정으로 로그인해야 합니다.',
+  recheck: '설치·로그인 상태를 다시 확인합니다.',
+  term_input: '로그인 코드나 질문의 답을 여기에 붙여 넣고 Enter 를 누르세요.',
+  term_secret: '비밀번호처럼 화면에 보이면 안 되는 값을 입력할 때 켜세요.',
+  term_kill: '진행 중인 설치·로그인을 멈춥니다.',
+  deploy: '이 컴퓨터의 duet 를 원격 머신에 복사합니다. duet 를 업데이트한 뒤에도 누르세요.',
+  'remote.ssh': '이 컴퓨터에서 원격 머신으로 접속되는지 봅니다. 비밀번호 없이 접속되게 미리 ssh-copy-id 를 해 두어야 합니다.',
+  'remote.python': '원격 머신에 Python 3.11 이상이 있는지 봅니다. duet 를 돌리는 데 필요합니다.',
+  'remote.duet': '원격 머신에 duet 가 복사되어 있고 최신인지 봅니다.',
+  // 사용량
+  codex_limit: 'ChatGPT 구독의 Codex 사용 한도 중 얼마나 썼는지입니다. 100% 가 되면 초기화 시각까지 Codex 를 못 씁니다.',
+  claude_tokens: 'Claude 는 남은 한도를 알려주지 않아서, 이 컴퓨터에서 쓴 양(토큰)을 대신 보여줍니다. 남은 한도는 claude 를 켜고 /usage 로 볼 수 있습니다.',
+  duet_usage: 'duet 실행이 쓴 양만 따로 모았습니다.',
+  // 설정
+  roots: '새 실행에서 고를 수 있는 상위 폴더 목록입니다. 첫 번째가 기본으로 선택됩니다.',
+  'machine.id': '이 머신을 부를 짧은 영문 이름입니다(예: lab). 나중에 바꿀 수 없습니다.',
+  'machine.name': '화면에 보일 이름입니다(예: 연구실 서버).',
+  'machine.ssh': '접속 주소입니다. 사용자@호스트 형식(예: me@lab.example.com). 비밀번호 없이 접속되게 미리 ssh-copy-id 를 해 두세요.',
+  'machine.port': 'SSH 포트입니다. 보통 22 입니다.',
+  'machine.root': '원격 머신에서 프로젝트 폴더를 만들 위치입니다(예: ~/duet-projects).',
+  require_tests: '켜 두면 테스트가 실패했을 때 리뷰어가 승인해도 승인하지 않습니다.',
+  restart: 'UI 서버를 다시 켭니다. 같은 주소로 다시 뜨고, 진행 중인 실행은 영향이 없습니다.',
+  update: 'duet 프로그램이 바뀌었습니다. 다시 시작해야 새 기능이 화면에 나옵니다.',
+};
+
+function tipText(key) { return TIPS[key] || null; }
+function withTip(el, key) {
+  const t = TIPS[key] || (key && key.length > 30 ? key : null);
+  if (t && el) el.setAttribute('data-tip', t);
+  return el;
+}
+function help(key) {
+  const t = TIPS[key];
+  if (!t) return null;
+  return h('span', { class: 'help', 'data-tip': t, tabindex: '0', role: 'button', 'aria-label': `도움말: ${t}` }, '?');
+}
+
+// 툴팁 상자 하나를 띄우고 옮긴다. 모달 창(dialog) 안에서는 그 안에 붙여야 위에 보인다.
+const tipEl = document.createElement('div');
+tipEl.className = 'tooltip';
+tipEl.setAttribute('role', 'tooltip');
+tipEl.hidden = true;
+let tipTimer = null, tipTarget = null, tipPinned = false;
+function showTip(target) {
+  const text = target.getAttribute('data-tip');
+  if (!text) return;
+  const host = target.closest('dialog[open]') || document.body;
+  if (tipEl.parentNode !== host) host.append(tipEl);
+  tipTarget = target;
+  tipEl.textContent = text;
+  tipEl.hidden = false;
+  const r = target.getBoundingClientRect();
+  const tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
+  let left = r.left + r.width / 2 - tw / 2;
+  left = Math.max(8, Math.min(left, window.innerWidth - tw - 8));
+  let top = r.top - th - 8;
+  if (top < 8) top = r.bottom + 8;
+  tipEl.style.left = `${left}px`;
+  tipEl.style.top = `${top}px`;
+}
+function hideTip() {
+  clearTimeout(tipTimer);
+  tipTimer = null;
+  tipTarget = null;
+  tipPinned = false;
+  tipEl.hidden = true;
+}
+document.addEventListener('mouseover', ev => {
+  const t = ev.target.closest && ev.target.closest('[data-tip]');
+  if (t === tipTarget) return;
+  clearTimeout(tipTimer);
+  if (!t) { if (tipTarget && !tipPinned) hideTip(); return; }
+  if (tipPinned) return;
+  tipTimer = setTimeout(() => showTip(t), t.classList.contains('help') ? 0 : 350);
+});
+document.addEventListener('focusin', ev => { const t = ev.target.closest && ev.target.closest('[data-tip]'); if (t) showTip(t); });
+document.addEventListener('focusout', () => { if (!tipPinned) hideTip(); });
+document.addEventListener('scroll', () => hideTip(), true);
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape') hideTip(); });
+// "?" 는 눌러도 뜬다(휴대폰). label 안에 있어도 체크박스가 바뀌지 않게 막는다.
+document.addEventListener('click', ev => {
+  const t = ev.target.closest && ev.target.closest('.help');
+  if (!t) { if (tipPinned) hideTip(); return; }
+  // 누르면 항상 띄우고 고정한다(휴대폰은 마우스 올림이 없음). 다른 곳을 누르면 닫힌다.
+  ev.preventDefault();
+  ev.stopPropagation();
+  clearTimeout(tipTimer);
+  showTip(t);
+  tipPinned = true;
+}, true);
+// HTML 에 data-help="키" 로 표시한 곳에 "?" 를 붙인다
+function decorateHelp(root = document) {
+  root.querySelectorAll('[data-help]').forEach(el => {
+    if (el.querySelector(':scope > .help')) return;
+    const node = help(el.getAttribute('data-help'));
+    if (node) el.append(' ', node);
+  });
+  root.querySelectorAll('[data-nav]').forEach(a => withTip(a, `nav.${a.getAttribute('data-nav')}`));
+}
+
 // =================================================================== markdown (안전한 DOM 렌더러)
 const INLINE_RE = new RegExp([
   '(`+)([\\s\\S]*?[^`])\\1(?!`)',                 // 1,2 code
@@ -435,14 +610,14 @@ async function refreshSidebar() {
   const box = $('#side-projects');
   const groups = app.groups.filter(g => g.local || g.projects.length || g.error);
   box.replaceChildren(...groups.map(g => h('div', { class: 'side-group' },
-    h('div', { class: 'side-title' }, g.local ? '이 머신' : g.name, g.error ? h('span', { class: 'warn-dot', title: g.error }) : null),
+    h('div', { class: 'side-title' }, g.local ? '이 머신' : g.name, g.error ? h('span', { class: 'warn-dot', 'data-tip': g.error }) : null),
     h('ul', null, g.projects.length ? g.projects.map(p => {
       const st = p.latest ? statusKey(p.latest) : '';
       return h('li', null, h('a', {
-        href: hrefProject(g.id, p.path), title: p.path,
+        href: hrefProject(g.id, p.path), 'data-tip': p.path,
         class: (r.project === p.path && (r.machine || LOCAL) === g.id ? 'active' : null),
       }, h('span', { class: `dot s-${p.live ? 'running live' : st}` }), h('span', { class: 'name' }, p.name)));
-    }) : h('li', { class: 'empty' }, g.error ? h('a', { href: `#/setup?m=${enc(g.id)}`, title: g.error }, '확인 필요 → 환경·로그인') : '없음')))));
+    }) : h('li', { class: 'empty' }, g.error ? h('a', { href: `#/setup?m=${enc(g.id)}`, 'data-tip': g.error }, '확인 필요 → 환경·로그인') : '없음')))));
 }
 async function loadSettings(force) {
   if (!app.settings || force) app.settings = await api('/api/settings');
@@ -483,7 +658,7 @@ class HomeView {
           g.error ? h('span', { class: 'badge s-failed' }, '연결 안 됨') : null,
           h('span', { class: 'spacer' }),
           h('a', { class: 'btn btn-sm', href: `#/setup?m=${enc(g.id)}` }, '환경·로그인'),
-          h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => openRunDialog({ machine: g.id }) }, '새 실행')),
+          withTip(h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => openRunDialog({ machine: g.id }) }, '새 실행'), 'new_run')),
         g.error ? h('div', { class: 'alert alert-warn' }, h('span', null, g.error)) : null,
         cards.length ? h('div', { class: 'grid' }, cards)
           : g.error ? null : h('div', { class: 'card empty-state small' }, '아직 프로젝트가 없습니다. ‘새 실행’으로 시작하세요.'),
@@ -553,8 +728,8 @@ class ProjectView {
       h('div', null, crumbs(this.r), h('h1', null, baseName(d.project)), h('div', { class: 'sub' }, d.project)),
       h('span', { class: 'spacer' }),
       h('div', { class: 'actions' },
-        live ? h('button', { class: 'btn btn-danger', type: 'button', onclick: () => stopRun(m, d.project) }, '중지') : null,
-        h('button', { class: 'btn', type: 'button', onclick: () => this.remove() }, '목록에서 제거'),
+        live ? withTip(h('button', { class: 'btn btn-danger', type: 'button', onclick: () => stopRun(m, d.project) }, '중지'), 'stop') : null,
+        withTip(h('button', { class: 'btn', type: 'button', onclick: () => this.remove() }, '목록에서 제거'), 'remove_project'),
         h('button', { class: 'btn btn-primary', type: 'button', disabled: live ? true : null,
           title: live ? '이 폴더에서 이미 실행 중입니다' : null,
           onclick: () => openRunDialog({ machine: m, project: d.project, defaults: d.defaults, hasDesign: d.has_design }) }, '새 실행')));
@@ -578,7 +753,7 @@ class ProjectView {
         h('tbody', null, d.runs.map(run => h('tr', { onclick: () => { location.hash = hrefRun(m, d.project, run.run_id); } },
           h('td', { class: 'id' }, h('a', { href: hrefRun(m, d.project, run.run_id) }, run.run_id)),
           h('td', null, statusBadge(run, run.live)),
-          h('td', { class: 'task-cell' }, h('div', { class: 'ellipsis', title: run.task }, oneLine(run.task, 90))),
+          h('td', { class: 'task-cell' }, h('div', { class: 'ellipsis', 'data-tip': run.task }, oneLine(run.task, 90))),
           h('td', { class: 'nowrap small' }, `${PHASE[run.phase] || run.phase || '-'} · ${STEP[run.step] || run.step || '-'}${run.round ? ` · ${run.round}회차` : ''}`),
           h('td', null, verdictTag(run.last_verdict ? { status: run.last_verdict } : null)),
           h('td', { class: 'nowrap small' }, `${run.calls}회 · ${fmtDur(run.total_sec)}`),
@@ -657,7 +832,7 @@ class RunView {
       c.mock ? h('span', { class: 'chip' }, 'mock') : null,
       c.block_severity ? h('span', { class: 'chip' }, '반려 기준 ', h('b', null, { P1: 'P1', P2: 'P1·P2', P3: 'P1·P2·P3' }[c.block_severity] || c.block_severity)) : null,
       c.test_command ? h('span', { class: 'chip' }, '테스트 ', h('b', null, c.test_command === 'auto' ? '자동' : c.test_command)) : null,
-      st.base_commit ? h('span', { class: 'chip' }, '기준 ', h('b', { class: 'mono' }, st.base_commit)) : null,
+      st.base_commit ? withTip(h('span', { class: 'chip' }, '기준 ', h('b', { class: 'mono' }, st.base_commit)), 'base') : null,
       h('span', { class: 'chip' }, `호출 ${st.calls.length}회 · ${fmtDur(totalSec)}`));
     const totals = {};
     for (const call of st.calls) {
@@ -668,8 +843,8 @@ class RunView {
       t.cost_usd += call.usage.cost_usd || 0;
     }
     const usageChips = Object.keys(totals).length ? h('div', { class: 'chips' },
-      h('span', { class: 'faint small' }, '사용량'),
-      Object.entries(totals).map(([a, t]) => h('span', { class: 'chip tok' }, agentTag(a), ' ', usageLine(t)))) : null;
+      h('span', { class: 'faint small' }, '사용량', help('tokens')),
+      Object.entries(totals).map(([a, t]) => withTip(h('span', { class: 'chip tok' }, agentTag(a), ' ', usageLine(t)), t.cost_usd ? 'usage_cost' : 'tokens'))) : null;
 
     const alerts = [];
     if (d.stale) alerts.push(h('div', { class: 'alert alert-warn' }, h('b', null, '멈춤'),
@@ -707,14 +882,14 @@ class RunView {
     const d = this.data, hint = d.resume || {};
     const box = h('div', { class: 'actions' });
     if (d.live) {
-      box.append(h('button', { class: 'btn btn-danger', type: 'button', onclick: () => stopRun(this.m, d.project) }, '중지'));
+      box.append(withTip(h('button', { class: 'btn btn-danger', type: 'button', onclick: () => stopRun(this.m, d.project) }, '중지'), 'stop'));
       return box;
     }
     if (hint.possible) {
       let input = null;
       if (hint.needs_max_review) {
         input = h('input', { type: 'number', min: hint.current_max_review + 1, max: 10, value: Math.min(hint.current_max_review + 1, 10), 'aria-label': '리뷰 최대 횟수' });
-        box.append(h('label', null, '리뷰 최대', input, '회까지'));
+        box.append(h('label', null, '리뷰 최대', input, '회까지', help('max_review')));
       }
       box.append(h('button', { class: 'btn btn-primary', type: 'button', onclick: async ev => {
         ev.target.disabled = true;
@@ -724,7 +899,7 @@ class RunView {
           toast('이어하기를 시작했습니다. 잠시 뒤 진행 상황이 보입니다.');
           schedule(this, 1200);
         } catch (e) { toast(e.message, true); ev.target.disabled = false; }
-      } }, hint.needs_max_review ? '리뷰 계속하기' : '이어하기'));
+      }, 'data-tip': hint.needs_max_review ? TIPS.resume_more : TIPS.resume }, hint.needs_max_review ? '리뷰 계속하기' : '이어하기'));
     }
     return box;
   }
@@ -743,14 +918,14 @@ class RunView {
       }
     }
     if (!items.length) return null;
-    return h('div', { class: 'rounds' }, h('span', { class: 'faint small' }, '리뷰 이력'), items);
+    return h('div', { class: 'rounds' }, h('span', { class: 'faint small' }, '리뷰 이력', help('rounds')), items);
   }
 
   // ---------------------------------------------------------------- tabs
   renderTabs() {
     const d = this.data, t = this.r.tab;
-    const mk = (key, label, count) => h('a', { href: hrefRun(this.m, this.r.project, this.r.run, key), class: t === key ? 'active' : null },
-      label, count !== undefined ? h('span', { class: 'count' }, count) : null);
+    const mk = (key, label, count) => h('a', { href: hrefRun(this.m, this.r.project, this.r.run, key), class: t === key ? 'active' : null,
+      'data-tip': TIPS[`tab.${key}`] }, label, count !== undefined ? h('span', { class: 'count' }, count) : null);
     this.tabsSlot.replaceChildren(
       mk('talk', '대화', d.entries.length), mk('console', '콘솔'), mk('changes', '변경 사항'), mk('design', '설계 문서'));
   }
@@ -796,19 +971,19 @@ class RunView {
         onclick: () => { this.selected = e.name; this.renderTimeline(); this.renderViewer(); },
       },
         h('span', { class: 'seq' }, String(e.seq).padStart(2, '0')),
-        h('span', { class: 'what' }, agentTag(m.agent), h('span', { class: 'ellipsis' }, STEP[m.step] || m.step)),
+        h('span', { class: 'what' }, agentTag(m.agent), withTip(h('span', { class: 'ellipsis' }, STEP[m.step] || m.step), `step.${m.step}`)),
         h('span', { class: 'dur' }, m.duration_sec ? fmtDur(m.duration_sec) : ''),
         h('span', { class: 'sub' },
           roundTxt ? h('span', null, roundTxt) : null,
           failed ? h('span', null, m.rate_limited === 'true' ? '한도 도달' : m.timed_out === 'true' ? '시간 초과' : `실패 (exit ${m.exit_code})`) : null,
           m.attempt && m.attempt !== '1' ? h('span', null, `재시도 ${Number(m.attempt) - 1}`) : null,
-          m.tokens_out ? h('span', { class: 'tok', title: `입력 ${m.tokens_in || 0} 토큰` }, `출력 ${fmtTok(m.tokens_out)}`) : null,
+          m.tokens_out ? h('span', { class: 'tok', 'data-tip': `AI 가 쓴 양(출력 토큰). 읽은 양(입력)은 ${fmtTok(m.tokens_in || 0)} 토큰입니다.` }, `출력 ${fmtTok(m.tokens_out)}`) : null,
           isTest ? testTag(m.test_status) : hst ? decisionTag(hst) : verdictTag(e.verdict)))));
     }
     const cc = d.current_call;
     if (d.live) {
       const elapsed = cc ? cc.elapsed_sec + Math.round((Date.now() - this.loadedAt) / 1000) : null;
-      items.push(h('li', { class: 'pending' }, h('button', { type: 'button', disabled: true },
+      items.push(h('li', { class: 'pending', 'data-tip': TIPS['step.pending'] }, h('button', { type: 'button', disabled: true },
         h('span', { class: 'seq' }, h('span', { class: 'spinner' })),
         h('span', { class: 'what' }, cc ? agentTag(cc.agent) : null, h('span', null, cc ? `${STEP[cc.step] || cc.step} 진행 중` : '준비 중')),
         h('span', { class: 'dur' }, elapsed !== null ? fmtDur(elapsed) : ''),
@@ -966,7 +1141,7 @@ class SetupView {
       h('div', null, h('h1', null, '환경·로그인'),
         h('div', { class: 'muted' }, 'duet 가 쓰는 도구의 설치와 로그인 상태를 확인하고, 없으면 여기서 설치·로그인합니다.')),
       h('span', { class: 'spacer' }),
-      h('button', { class: 'btn', type: 'button', onclick: () => this.reload() }, '다시 점검'));
+      withTip(h('button', { class: 'btn', type: 'button', onclick: () => this.reload() }, '다시 점검'), 'recheck'));
   }
   async reload() { this.checksEl && this.checksEl.replaceChildren(h('div', { class: 'loading' }, '점검 중…')); await this.load(); }
   async load() {
@@ -992,14 +1167,14 @@ class SetupView {
   remoteCard(info) {
     const m = this.r.machine;
     const rows = [];
-    rows.push(['SSH 연결', info.reachable ? 'ok' : 'error', info.reachable ? (info.uname || '연결됨') : info.error,
+    rows.push([['SSH 연결', help('remote.ssh')], info.reachable ? 'ok' : 'error', info.reachable ? (info.uname || '연결됨') : info.error,
       info.hint ? h('span', { class: 'mono small' }, info.hint) : null]);
     if (info.reachable) {
-      rows.push(['Python 3.11+', info.python ? 'ok' : 'missing', info.python || '찾지 못했습니다. uv 를 설치한 뒤 Python 3.12 를 설치하세요.',
+      rows.push([['Python 3.11+', help('remote.python')], info.python ? 'ok' : 'missing', info.python || '찾지 못했습니다. uv 를 설치한 뒤 Python 3.12 를 설치하세요.',
         info.python ? null : [this.actBtn('install_uv'), this.actBtn('install_python')]]);
       const dep = info.deployed ? (info.up_to_date ? 'ok' : 'warn') : 'missing';
-      rows.push(['duet 배포', dep, info.deployed ? (info.up_to_date ? `최신 (${info.remote_hash})` : `업데이트 필요 (원격 ${info.remote_hash} · 이 머신 ${info.local_hash})`) : '아직 배포하지 않았습니다.',
-        info.python ? h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: ev => this.deploy(ev) }, info.deployed ? '업데이트' : '배포') : null]);
+      rows.push([['duet 배포', help('remote.duet')], dep, info.deployed ? (info.up_to_date ? `최신 (${info.remote_hash})` : `업데이트 필요 (원격 ${info.remote_hash} · 이 머신 ${info.local_hash})`) : '아직 배포하지 않았습니다.',
+        info.python ? withTip(h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: ev => this.deploy(ev) }, info.deployed ? '업데이트' : '배포'), 'deploy') : null]);
     }
     return h('div', { class: 'card table-wrap' }, h('table', { class: 'checks-table' },
       h('thead', null, h('tr', null, h('th', null, `원격 머신: ${machineName(m)}`), h('th', null, '상태'), h('th', null, '내용'), h('th', null, ''))),
@@ -1009,7 +1184,7 @@ class SetupView {
   }
   checksCard(d) {
     const rows = d.checks.map(c => h('tr', null,
-      h('td', null, h('b', null, c.name), c.path ? h('div', { class: 'ver' }, c.path) : null),
+      h('td', null, h('b', null, c.name), help(`tool.${c.id}`), c.path ? h('div', { class: 'ver' }, c.path) : null),
       h('td', null, h('span', { class: `badge s-${c.status}` }, CHECK_STATUS[c.status] || c.status)),
       h('td', null, c.version ? h('div', { class: 'ver' }, c.version.split(' (')[0]) : null, h('div', { class: 'small' }, c.detail)),
       h('td', null, h('div', { class: 'acts' }, c.actions.map(a => this.actBtn(a, c.status !== 'ok' || a.startsWith('login') ? 'btn-primary' : ''))))));
@@ -1023,7 +1198,8 @@ class SetupView {
   actBtn(id, cls = '') {
     const a = (app.actions || {})[id];
     const label = a ? a.title : id;
-    return h('button', { class: `btn btn-sm ${cls}`, type: 'button', title: a ? a.command : null, onclick: () => this.runAction(id) }, label);
+    const tip = a ? [a.note, `실행 명령: ${a.command}`].filter(Boolean).join(' · ') : null;
+    return h('button', { class: `btn btn-sm ${cls}`, type: 'button', 'data-tip': tip, onclick: () => this.runAction(id) }, label);
   }
   async deploy(ev) {
     ev.target.disabled = true;
@@ -1047,7 +1223,7 @@ class SetupView {
     this.preEl = h('pre');
     this.linksEl = h('div', { class: 'term-links' });
     this.linksEl.hidden = true;
-    const input = h('input', { type: 'text', placeholder: '코드나 답을 입력하고 Enter', autocomplete: 'off', spellcheck: 'false' });
+    const input = h('input', { type: 'text', placeholder: '코드나 답을 입력하고 Enter', autocomplete: 'off', spellcheck: 'false', 'data-tip': TIPS.term_input });
     const secret = h('input', { type: 'checkbox', onchange: () => { input.type = secret.checked ? 'password' : 'text'; } });
     const send = async () => {
       if (!input.value) return;
@@ -1056,9 +1232,9 @@ class SetupView {
     };
     input.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); send(); } });
     this.statusEl = h('span', { class: 'badge s-running live' }, '실행 중');
-    this.inputRow = h('div', { class: 'term-input' }, input, h('label', null, secret, '비밀번호(숨김)'),
+    this.inputRow = h('div', { class: 'term-input' }, input, h('label', null, secret, '비밀번호(숨김)', help('term_secret')),
       h('button', { class: 'btn btn-sm', type: 'button', onclick: send }, '보내기'),
-      h('button', { class: 'btn btn-sm btn-danger', type: 'button', onclick: () => api('/api/term/kill', { method: 'POST', body: { id: job.id } }).catch(e => toast(e.message, true)) }, '중지'));
+      h('button', { class: 'btn btn-sm btn-danger', type: 'button', 'data-tip': TIPS.term_kill, onclick: () => api('/api/term/kill', { method: 'POST', body: { id: job.id } }).catch(e => toast(e.message, true)) }, '중지'));
     this.termSlot.replaceChildren(h('div', { class: 'card term' },
       h('div', { class: 'viewer-head' }, h('b', null, job.title), this.statusEl,
         job.machine && job.machine !== LOCAL ? h('span', { class: 'muted small' }, machineName(job.machine)) : null,
@@ -1106,7 +1282,7 @@ class UsageView {
     const u = await api('/api/usage', { machine: this.r.machine });
     const cl = u.codex_limits;
     const codexCard = h('div', { class: 'card section-card' },
-      h('div', { class: 'row' }, h('h2', null, 'Codex 구독 한도'), cl && cl.plan_type ? h('span', { class: 'chip' }, cl.plan_type) : null,
+      h('div', { class: 'row' }, h('h2', null, 'Codex 구독 한도', help('codex_limit')), cl && cl.plan_type ? h('span', { class: 'chip' }, cl.plan_type) : null,
         h('span', { class: 'spacer' }), cl && cl.as_of ? h('span', { class: 'muted small' }, `기준 ${fmtWhen(cl.as_of)}`) : null),
       cl ? [cl.primary ? meter('주 한도', cl.primary) : null, cl.secondary ? meter('보조 한도', cl.secondary) : null,
         cl.reached ? h('div', { class: 'alert alert-bad' }, h('b', null, '한도 도달'), h('span', null, cl.reached)) : null]
@@ -1114,7 +1290,7 @@ class UsageView {
       h('p', { class: 'desc' }, 'Codex 가 남긴 마지막 세션 기록 기준입니다(duet 밖에서 쓴 것 포함).'));
     const cw = u.claude_local.windows;
     const claudeCard = h('div', { class: 'card section-card' },
-      h('h2', null, 'Claude Code 사용량'),
+      h('h2', null, 'Claude Code 사용량', help('claude_tokens')),
       h('div', { class: 'stat-grid' }, Object.entries(cw).map(([name, w]) => h('div', { class: 'card stat' },
         h('span', { class: 'k' }, `최근 ${name}`), h('span', { class: 'v' }, `출력 ${fmtTok(w.output_tokens)}`),
         h('span', { class: 's' }, `입력 ${fmtTok(w.input_tokens)} · 응답 ${w.messages}개`)))),
@@ -1132,10 +1308,10 @@ class UsageView {
     const projRows = du.projects.map(p => h('tr', null, h('td', null, h('a', { href: hrefProject(this.r.machine, p.path) }, p.name)),
       ['claude', 'codex'].map(a => h('td', { class: 'num' }, p.by_agent[a] ? `${fmtTok(p.by_agent[a].output_tokens)} (${p.by_agent[a].calls}회)` : '-'))));
     const duetCard = h('div', { class: 'card section-card' },
-      h('h2', null, 'duet 실행이 쓴 양'),
+      h('h2', null, 'duet 실행이 쓴 양', help('duet_usage')),
       agentRows.length ? [
         h('table', { class: 'plain' }, h('thead', null, h('tr', null, h('th', null, '에이전트'), h('th', { class: 'num' }, '호출'),
-          h('th', { class: 'num' }, '입력 토큰'), h('th', { class: 'num' }, '출력 토큰'), h('th', { class: 'num' }, 'API 환산'))), h('tbody', null, agentRows)),
+          h('th', { class: 'num' }, '입력 토큰', help('tokens')), h('th', { class: 'num' }, '출력 토큰'), h('th', { class: 'num' }, 'API 환산', help('usage_cost')))), h('tbody', null, agentRows)),
         h('table', { class: 'plain' }, h('thead', null, h('tr', null, h('th', null, '날짜'), h('th', { class: 'num' }, 'claude 출력'), h('th', { class: 'num' }, 'codex 출력'))), h('tbody', null, dayRows)),
         h('table', { class: 'plain' }, h('thead', null, h('tr', null, h('th', null, '프로젝트'), h('th', { class: 'num' }, 'claude 출력'), h('th', { class: 'num' }, 'codex 출력'))), h('tbody', null, projRows)),
       ] : h('p', { class: 'muted' }, '아직 사용량이 기록된 실행이 없습니다. 이번 업데이트 이후 실행부터 기록됩니다.'),
@@ -1188,7 +1364,7 @@ class SettingsView {
     drawRoots();
     const newRoot = h('input', { type: 'text', placeholder: '~/projects 또는 /절대/경로', spellcheck: 'false' });
     const rootsCard = h('div', { class: 'card section-card' },
-      h('h2', null, '작업 폴더 위치'),
+      h('h2', null, '작업 폴더 위치', help('roots')),
       h('p', { class: 'desc' }, '새 실행 때 이 위치를 고르고 폴더 이름만 쓰면 됩니다. 첫 번째가 기본입니다.'),
       rootList,
       h('div', { class: 'add-form' }, newRoot, h('button', { class: 'btn', type: 'button', onclick: () => {
@@ -1221,21 +1397,22 @@ class SettingsView {
       const ne = effortSelect('codex_effort', 'codex', f.codex_effort.value, sugg, f.codex_model.value);
       f.codex_effort.replaceWith(ne); f.codex_effort = ne;
     });
-    const field = (label, el) => h('label', { class: 'field' }, h('span', { class: 'field-label' }, label), el);
+    const field = (label, el, tipKey) => h('label', { class: 'field' }, h('span', { class: 'field-label' }, label, tipKey ? help(tipKey) : null), el);
     const defaultsCard = h('div', { class: 'card section-card' },
       h('h2', null, '기본 실행 설정'),
       h('p', { class: 'desc' }, 'CLI 와 UI 의 모든 실행에 적용됩니다. 작업 폴더의 duet.toml 이나 실행할 때 고른 값이 더 우선합니다.'),
       h('div', { class: 'form-grid' },
-        field('구현', f.implementer), field('리뷰', f.reviewer), field('설계 종합', f.synth),
-        field('토론 라운드', f.debate_rounds), field('리뷰 최대', f.max_review)),
+        field('구현', f.implementer, 'implementer'), field('리뷰', f.reviewer, 'reviewer'), field('설계 종합', f.synth, 'synth'),
+        field('토론 라운드', f.debate_rounds, 'debate_rounds'), field('리뷰 최대', f.max_review, 'max_review')),
       h('div', { class: 'form-grid' },
-        field('Claude 모델', f.claude_model), field('Claude 추론', f.claude_effort),
-        field('Codex 모델', f.codex_model), field('Codex 추론', f.codex_effort)),
+        field('Claude 모델', f.claude_model, 'claude_model'), field('Claude 추론', f.claude_effort, 'effort'),
+        field('Codex 모델', f.codex_model, 'codex_model'), field('Codex 추론', f.codex_effort, 'effort')),
       h('h3', null, '리뷰·테스트'),
       h('p', { class: 'desc' }, '반려 기준: 이 심각도 이상의 지적이 남아 있으면 반려합니다(P1 핵심 동작·보안, P2 설계 위반·일반 입력 오류, P3 드문 경계 사례). 수렴 판단: 막는 지적 수가 N 라운드 연속 줄지 않으면 멈춥니다(0=끔).'),
       h('div', { class: 'form-grid' },
-        field('테스트 명령', f.test_command), field('반려 기준', f.block_severity), field('수렴 판단 라운드', f.stall_rounds),
-        h('label', { class: 'checkline' }, f.require_tests_pass, '테스트 실패 시 승인 안 함')),
+        field('테스트 명령', f.test_command, 'test_command'), field('반려 기준', f.block_severity, 'block_severity'),
+        field('수렴 판단 라운드', f.stall_rounds, 'stall_rounds'),
+        h('label', { class: 'checkline' }, f.require_tests_pass, '테스트 실패 시 승인 안 함', help('require_tests'))),
       h('div', { class: 'actions' }, h('button', { class: 'btn btn-primary', type: 'button', onclick: () => this.save({ defaults: {
         implementer: f.implementer.value, reviewer: f.reviewer.value, synth: f.synth.value,
         debate_rounds: f.debate_rounds.value, max_review: f.max_review.value,
@@ -1269,8 +1446,8 @@ class SettingsView {
       s.machines.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'plain' },
         h('thead', null, h('tr', null, ['머신', 'SSH', '작업 폴더 위치', 'Python', ''].map(t => h('th', null, t)))),
         h('tbody', null, machineRows))) : null,
-      h('div', { class: 'form-grid' }, field('id (영문 소문자)', mf.id), field('이름', mf.name), field('SSH 대상', mf.ssh),
-        field('포트', mf.port), field('작업 폴더 위치', mf.workspace_root)),
+      h('div', { class: 'form-grid' }, field('id (영문 소문자)', mf.id, 'machine.id'), field('이름', mf.name, 'machine.name'),
+        field('SSH 대상', mf.ssh, 'machine.ssh'), field('포트', mf.port, 'machine.port'), field('작업 폴더 위치', mf.workspace_root, 'machine.root')),
       h('div', { class: 'actions' },
         h('button', { class: 'btn btn-primary', type: 'button', onclick: () => this.saveMachine(mf) }, ed.id ? '수정 저장' : '머신 추가'),
         ed.id ? h('button', { class: 'btn', type: 'button', onclick: () => { this.editing = null; this.render(v); } }, '취소') : null));
@@ -1285,7 +1462,7 @@ class SettingsView {
         h('span', { class: 'chip' }, '설치된 코드 ', h('b', { class: 'mono' }, sv.current || '?')),
         sv.uptime_sec != null ? h('span', { class: 'chip' }, `켜진 지 ${fmtDur(sv.uptime_sec)}`) : null,
         sv.stale ? h('span', { class: 'badge s-done_unapproved' }, '다시 시작 필요') : h('span', { class: 'badge s-ok' }, '최신')),
-      h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', onclick: restartServer }, 'UI 다시 시작')));
+      h('div', { class: 'actions' }, withTip(h('button', { class: 'btn', type: 'button', onclick: restartServer }, 'UI 다시 시작'), 'restart')));
     this.main.replaceChildren(h('div', { class: 'page' },
       h('div', { class: 'page-head' }, h('div', null, h('h1', null, '설정'), h('div', { class: 'muted' }, '~/.duet/settings.json 에 저장됩니다.'))),
       v.error ? errorBox({ message: v.error }) : null, rootsCard, defaultsCard, machinesCard, serverCard));
@@ -1486,6 +1663,7 @@ async function restartServer() {
 $('#restart-btn').addEventListener('click', restartServer);
 
 // =================================================================== boot
+decorateHelp();
 window.addEventListener('hashchange', route);
 checkServer();
 setInterval(checkServer, 20000);

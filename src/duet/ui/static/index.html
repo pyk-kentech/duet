@@ -16,11 +16,11 @@
         <span class="brand-name">duet</span>
         <span class="brand-sub">관리자</span>
       </a>
-      <button type="button" class="btn btn-primary btn-block" id="sidebar-new-run">새 실행</button>
+      <button type="button" class="btn btn-primary btn-block" id="sidebar-new-run" data-tip="두 AI 에게 새 과제를 맡깁니다. 설계 토론 → 구현 → 서로 리뷰 순서로 알아서 진행됩니다.">새 실행</button>
       <div id="update-banner" class="update-banner" hidden>
         <b>duet 가 업데이트됐습니다</b>
         <span>UI 를 다시 시작해야 새 기능이 보입니다. 진행 중인 실행은 그대로 돕니다.</span>
-        <button type="button" class="btn btn-sm btn-primary" id="restart-btn">UI 다시 시작</button>
+        <button type="button" class="btn btn-sm btn-primary" id="restart-btn" data-tip="UI 서버를 다시 켭니다. 같은 주소로 다시 뜨고, 진행 중인 실행은 영향이 없습니다.">UI 다시 시작</button>
       </div>
       <nav class="side-links" aria-label="메뉴">
         <a href="#/" data-nav="home">프로젝트</a>
@@ -45,56 +45,56 @@
       <div class="dialog-body">
         <div class="field-row">
           <label class="field">
-            <span class="field-label">머신</span>
+            <span class="field-label" data-help="machine">머신</span>
             <select name="machine"></select>
           </label>
           <label class="field">
-            <span class="field-label">위치</span>
+            <span class="field-label" data-help="root">위치</span>
             <select name="root"></select>
           </label>
           <label class="field" id="name-field">
-            <span class="field-label">폴더 이름</span>
+            <span class="field-label" data-help="name">폴더 이름</span>
             <input name="name" type="text" placeholder="memo-cli" autocomplete="off" spellcheck="false">
           </label>
         </div>
         <label class="field" id="custom-field">
-          <span class="field-label">작업 폴더 <em>절대 경로</em></span>
+          <span class="field-label" data-help="project">작업 폴더 <em>절대 경로</em></span>
           <input name="project" type="text" placeholder="/home/me/memo-cli" autocomplete="off" spellcheck="false">
         </label>
         <p class="hint" id="path-preview"></p>
         <label class="field">
-          <span class="field-label">과제</span>
+          <span class="field-label" data-help="task">과제</span>
           <textarea name="task" rows="5" required placeholder="마크다운 메모를 태그로 검색하는 CLI"></textarea>
         </label>
         <div class="field-row">
           <label class="field">
-            <span class="field-label">구현</span>
+            <span class="field-label" data-help="implementer">구현</span>
             <select name="implementer"><option value="claude">claude</option><option value="codex">codex</option></select>
           </label>
           <label class="field">
-            <span class="field-label">리뷰</span>
+            <span class="field-label" data-help="reviewer">리뷰</span>
             <select name="reviewer"><option value="codex">codex</option><option value="claude">claude</option></select>
           </label>
           <label class="field">
-            <span class="field-label">설계 종합</span>
+            <span class="field-label" data-help="synth">설계 종합</span>
             <select name="synth"><option value="">리뷰 담당</option><option value="claude">claude</option><option value="codex">codex</option></select>
           </label>
         </div>
         <div class="field-row">
           <label class="field">
-            <span class="field-label">Claude 모델</span>
+            <span class="field-label" data-help="claude_model">Claude 모델</span>
             <input name="claude_model" type="text" list="claude-models" placeholder="기본값" autocomplete="off" spellcheck="false">
           </label>
           <label class="field">
-            <span class="field-label">Claude 추론</span>
+            <span class="field-label" data-help="effort">Claude 추론</span>
             <select name="claude_effort"></select>
           </label>
           <label class="field">
-            <span class="field-label">Codex 모델</span>
+            <span class="field-label" data-help="codex_model">Codex 모델</span>
             <input name="codex_model" type="text" list="codex-models" placeholder="기본값" autocomplete="off" spellcheck="false">
           </label>
           <label class="field">
-            <span class="field-label">Codex 추론</span>
+            <span class="field-label" data-help="effort">Codex 추론</span>
             <select name="codex_effort"></select>
           </label>
         </div>
@@ -102,19 +102,19 @@
         <datalist id="codex-models"></datalist>
         <div class="field-row">
           <label class="field">
-            <span class="field-label">토론 라운드 <em>0–5</em></span>
+            <span class="field-label" data-help="debate_rounds">토론 라운드 <em>0–5</em></span>
             <input name="debate_rounds" type="number" min="0" max="5" value="1">
           </label>
           <label class="field">
-            <span class="field-label">리뷰 최대 <em>1–10</em></span>
+            <span class="field-label" data-help="max_review">리뷰 최대 <em>1–10</em></span>
             <input name="max_review" type="number" min="1" max="10" value="3">
           </label>
           <label class="field">
-            <span class="field-label">수렴 판단 <em>0=끔</em></span>
+            <span class="field-label" data-help="stall_rounds">수렴 판단 <em>0=끔</em></span>
             <input name="stall_rounds" type="number" min="0" max="10" value="2">
           </label>
           <label class="field">
-            <span class="field-label">반려 기준</span>
+            <span class="field-label" data-help="block_severity">반려 기준</span>
             <select name="block_severity">
               <option value="P1">P1 만</option>
               <option value="P2">P1·P2</option>
@@ -123,14 +123,14 @@
           </label>
         </div>
         <label class="field">
-          <span class="field-label">테스트 명령 <em>비우면 설정값(기본: 자동 감지) · none 이면 끔</em></span>
+          <span class="field-label" data-help="test_command">테스트 명령 <em>비우면 설정값(기본: 자동 감지) · none 이면 끔</em></span>
           <input name="test_command" type="text" placeholder="자동 감지 (예: python3 -m pytest -q)" autocomplete="off" spellcheck="false">
         </label>
         <fieldset class="checks">
-          <label><input type="checkbox" name="design_only"> 설계만 <small>토론 후 DESIGN.md만 만들고 끝냄</small></label>
-          <label><input type="checkbox" name="skip_design"> 설계 생략 <small>기존 DESIGN.md로 바로 구현</small></label>
-          <label><input type="checkbox" name="mock"> mock <small>실제 CLI 없이 흐름만 확인</small></label>
-          <label><input type="checkbox" name="force"> 커밋 안 된 변경 무시</label>
+          <label data-help="design_only"><input type="checkbox" name="design_only"> 설계만 <small>토론 후 DESIGN.md만 만들고 끝냄</small></label>
+          <label data-help="skip_design"><input type="checkbox" name="skip_design"> 설계 생략 <small>기존 DESIGN.md로 바로 구현</small></label>
+          <label data-help="mock"><input type="checkbox" name="mock"> mock <small>실제 CLI 없이 흐름만 확인</small></label>
+          <label data-help="force"><input type="checkbox" name="force"> 커밋 안 된 변경 무시</label>
         </fieldset>
         <p class="note" id="run-cost-note">실제 실행은 Claude·ChatGPT 구독 사용량을 씁니다. 처음이면 ‘설계만’으로 시작해 보세요.</p>
         <p class="form-error" id="run-form-error" role="alert" hidden></p>
