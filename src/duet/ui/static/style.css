@@ -464,3 +464,18 @@ table.plain tr:last-child td { border-bottom: 0; }
   box-shadow: 0 6px 20px rgba(0,0,0,.18); pointer-events: none; text-align: left; letter-spacing: 0; }
 [data-tip]:not(.help):not(input):not(select) { cursor: help; }
 button[data-tip], a[data-tip], .btn[data-tip] { cursor: pointer; }
+
+/* 실시간 작업 보기 */
+.activity { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 62vh; overflow: auto; }
+.act { display: grid; grid-template-columns: 64px 52px 1fr; gap: 8px; align-items: baseline; padding: 5px 4px; border-radius: 6px; font-size: 13px; }
+.act:hover { background: var(--panel-2); }
+.act-time { font-family: var(--mono); font-size: 11.5px; color: var(--faint); }
+.act-kind { font-size: 11.5px; font-weight: 700; text-align: center; border-radius: 5px; padding: 1px 0; background: var(--neutral-soft); color: var(--muted); }
+.k-read, .k-search { background: var(--info-soft); color: var(--info); }
+.k-edit { background: var(--warn-soft); color: var(--warn); }
+.k-command { background: var(--purple-soft); color: var(--purple); }
+.k-message { background: var(--ok-soft); color: var(--ok); }
+.act-text { word-break: break-word; }
+.act-text.mono { font-size: 12.5px; }
+.act-detail { color: var(--muted); font-family: var(--sans); }
+.timeline .pending button { cursor: pointer; }

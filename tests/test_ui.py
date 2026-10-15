@@ -420,3 +420,17 @@ def test_every_help_key_has_text():
     missing = sorted(k for k in used if k not in defined)
     assert not missing, f"설명이 없는 키: {missing}"
     assert len(used) > 40
+
+
+def test_activity_api_during_live_run(server, tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("DUET_MOCK_DELAY", "0.8")
+    wd = tmp_path / "live"
+    s, job, _ = call(server, "POST", "/api/actions/run", body={"project": str(wd), "task": "t", "mock": True, "debate_rounds": 0})
+    info = wait_for(lambda: (lambda i: i if i and i.run_id else None)(read_lock(wd)))
+    a = wait_for(lambda: (lambda r: r if r["call"] else None)(
+        call(server, "GET", f"/api/activity?project={wd.resolve()}&run={info.run_id}")[1]))
+    assert a["live"] is True and a["call"]["agent"] in ("claude", "codex") and a["events"] == []
+    call(server, "POST", "/api/actions/stop", body={"project": str(wd.resolve())})
+    wait_for(lambda: read_lock(wd) is None)
+    a = call(server, "GET", f"/api/activity?project={wd.resolve()}&run={info.run_id}")[1]
+    assert a == {"live": False, "call": None, "events": []}

@@ -103,6 +103,8 @@ class Config:
     require_tests_pass: bool = True     # 테스트가 실패하면 리뷰어가 승인해도 승인하지 않음
     block_severity: str = "P2"          # 이 심각도 이상(P1..P2)의 지적이 남아 있으면 반려
     stall_rounds: int = 2               # 막는 지적 수가 N 라운드 연속 최저치를 못 갱신하면 멈춤 (0=끔)
+    review_diff: str = "incremental"    # 2라운드부터 지난 리뷰 이후 바뀐 부분만 diff 로 (full: 매번 전체)
+    repro_tests: bool = True            # 리뷰어의 <repro> 재현 테스트를 저장·실행
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
     claude: AgentConfig = field(default_factory=_default_claude)
     codex: AgentConfig = field(default_factory=_default_codex)
@@ -145,6 +147,10 @@ class Config:
             raise ConfigError("require_tests_pass 는 true/false 여야 합니다")
         if self.block_severity not in SEVERITIES:
             raise ConfigError(f"block_severity 는 {', '.join(SEVERITIES)} 중 하나여야 합니다: {self.block_severity!r}")
+        if self.review_diff not in ("incremental", "full"):
+            raise ConfigError(f"review_diff 는 incremental 또는 full 이어야 합니다: {self.review_diff!r}")
+        if not isinstance(self.repro_tests, bool):
+            raise ConfigError("repro_tests 는 true/false 여야 합니다")
         if not isinstance(self.stall_rounds, int) or not 0 <= self.stall_rounds <= MAX_REVIEW_ROUNDS:
             raise ConfigError(f"stall_rounds 는 0~{MAX_REVIEW_ROUNDS} 사이여야 합니다: {self.stall_rounds}")
         for name in AGENT_NAMES:

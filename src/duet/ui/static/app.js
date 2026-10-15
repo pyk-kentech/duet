@@ -4,6 +4,7 @@
 const TOKEN = document.querySelector('meta[name="duet-token"]').content;
 const $ = (sel, root = document) => root.querySelector(sel);
 const LOCAL = 'local';
+const LIVE = '__live__';   // 타임라인의 '진행 중' 항목
 
 // =================================================================== DOM helpers
 function h(tag, attrs, ...children) {
@@ -37,7 +38,7 @@ const STATUS = {
 };
 const STEP = {
   propose: '설계안', critique: '비판·개정', synthesize: '설계 종합', implement: '구현', fix: '리뷰 반영',
-  review: '리뷰', test: '테스트', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
+  review: '리뷰', test: '테스트', repro: '재현 테스트', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
 };
 const PHASE = { init: '준비', debate: '설계 토론', build: '구현·리뷰', done: '끝' };
 const CHECK_STATUS = { ok: '정상', warn: '확인 필요', missing: '없음', error: '오류' };
@@ -64,6 +65,12 @@ const TEST_STATUS = { passed: '통과', failed: '실패', error: '실행 불가'
 function testTag(status) {
   if (!status) return null;
   return withTip(h('span', { class: `verdict t-${status}` }, `테스트 ${TEST_STATUS[status] || status}`), `test.${status}`);
+}
+const REPRO_LABEL = { failed: '재현됨', passed: '재현 안 됨', not_run: '실행 안 함', error: '실행 불가', timeout: '시간 초과' };
+function reproTag(status) {
+  if (!status || status === 'none') return null;
+  const cls = status === 'failed' ? 'v-CHANGES_REQUESTED' : status === 'passed' ? 'v-APPROVED' : 't-error';
+  return withTip(h('span', { class: `verdict ${cls}` }, REPRO_LABEL[status] || status), `repro.${status}`);
 }
 function decisionTag(hst) {
   if (!hst) return null;
@@ -209,7 +216,16 @@ const TIPS = {
   'step.fix': '리뷰 지적을 반영해 고친 내용의 요약입니다.',
   'step.test': 'duet 가 직접 돌린 테스트 결과입니다. 실패하면 리뷰어가 승인해도 승인되지 않습니다.',
   'step.review': '상대 AI 의 코드 리뷰와 판정입니다.',
-  'step.pending': '지금 이 AI 가 일하는 중입니다. 오른쪽 숫자는 걸린 시간입니다.',
+  'step.pending': '지금 이 AI 가 일하는 중입니다. 누르면 무슨 파일을 읽고 고치는지, 어떤 명령을 돌리는지 실시간으로 봅니다.',
+  'step.repro': '리뷰어가 지적을 글 대신 "실패하는 테스트"로 낸 것입니다. duet 가 저장해서 정말 실패하는지 돌려 봅니다.',
+  'repro.failed': '재현됨: 지금 코드에서 실제로 실패합니다. 리뷰어의 지적이 맞고, 구현자가 이 테스트를 통과시켜야 합니다.',
+  'repro.passed': '재현 안 됨: 지금 코드에서도 통과합니다. 지적이 틀렸거나 테스트가 문제를 못 짚었습니다.',
+  'repro.not_run': '테스트 명령이 없어 재현 테스트를 돌리지 못했습니다.',
+  'repro.error': '재현 테스트를 실행하지 못했습니다(환경 문제일 수 있음).',
+  'repro.timeout': '재현 테스트가 시간 안에 끝나지 않았습니다.',
+  live_view: '에이전트가 남기는 기록을 읽어 2초마다 보여줍니다. 읽기 = 파일을 열어 봄, 수정 = 파일을 고침, 명령 = 터미널 명령 실행.',
+  review_diff: '켜 두면 2번째 리뷰부터 지난 리뷰 이후 바뀐 부분만 리뷰어에게 보여줍니다. 리뷰 한 번에 드는 토큰이 크게 줄어듭니다.',
+  repro_tests: '켜 두면 리뷰어가 지적을 "실패하는 테스트"로 낼 수 있습니다. duet 가 저장해 돌려 보고, 구현자는 그 테스트를 통과시켜야 합니다.',
   approved_star: '리뷰어는 반려했지만, 남은 지적이 반려 기준보다 가벼워서 duet 가 승인했습니다.',
   approved: '승인되었습니다.',
   rejected_n: '반려되었습니다. 숫자는 반려 기준에 걸린 "반드시 고칠 것"의 개수입니다.',
@@ -906,12 +922,13 @@ class RunView {
   roundsSummary() {
     const st = this.data.state;
     const hist = Object.fromEntries((st.review_history || []).map(x => [x.file, x]));
-    const entries = this.data.entries.filter(e => e.meta.step === 'test' || (e.meta.ok !== 'false' && !e.label.endsWith('_failed')));
+    const entries = this.data.entries.filter(e => e.meta.step === 'test' || e.meta.step === 'repro' || (e.meta.ok !== 'false' && !e.label.endsWith('_failed')));
     const items = [];
     for (const e of entries) {
       const s = e.meta.step;
       if (s === 'implement' || s === 'fix') items.push(h('span', { class: 'chip' }, `${e.meta.round}회차 ${STEP[s]}`));
       else if (s === 'test') items.push(h('span', { class: 'arrow' }, '→'), testTag(e.meta.test_status));
+      else if (s === 'repro') items.push(h('span', { class: 'arrow' }, '→'), withTip(h('span', { class: 'chip' }, `재현 테스트 ${e.meta.repro_files || 0}개 `, reproTag(e.meta.repro_status)), 'step.repro'));
       else if (s === 'review') {
         items.push(h('span', { class: 'arrow' }, '→'));
         items.push(h('span', { class: 'chip' }, '리뷰 ', hist[e.name] ? decisionTag(hist[e.name]) : verdictTag(e.verdict)));
@@ -947,11 +964,13 @@ class RunView {
       this.panelBuilt = 'talk';
       force = true;
     }
+    if (d.live && (!this.selected || this.autoLive)) { this.selected = LIVE; this.autoLive = true; }
+    if (!d.live && this.selected === LIVE) this.selected = null;
     if (!this.selected && d.entries.length) this.selected = d.entries[d.entries.length - 1].name;
     this.renderTimeline();
     const changed = d.entries.length !== this.lastEntryCount;
     this.lastEntryCount = d.entries.length;
-    if (force || changed || !this.viewerEl.childNodes.length) await this.renderViewer();
+    if (force || changed || this.selected === LIVE || !this.viewerEl.childNodes.length) await this.renderViewer();
   }
   renderTimeline() {
     const d = this.data;
@@ -963,12 +982,13 @@ class RunView {
       const ph = phaseOf(m.step);
       if (ph !== lastPhase) { items.push(h('li', { class: 'phase-label' }, ph)); lastPhase = ph; }
       const isTest = m.step === 'test';
+      if (m.step === 'repro' && m.repro_files === undefined) m.repro_files = '?';
       const failed = !isTest && (m.ok === 'false' || e.label.endsWith('_failed'));
       const roundTxt = m.round && m.round !== '0' ? `${m.round}회차` : '';
       const hst = (d.state.review_history || []).find(x => x.file === e.name);
       items.push(h('li', { class: failed ? 'failed' : null }, h('button', {
         type: 'button', class: this.selected === e.name ? 'active' : null,
-        onclick: () => { this.selected = e.name; this.renderTimeline(); this.renderViewer(); },
+        onclick: () => { this.selected = e.name; this.autoLive = false; this.renderTimeline(); this.renderViewer(); },
       },
         h('span', { class: 'seq' }, String(e.seq).padStart(2, '0')),
         h('span', { class: 'what' }, agentTag(m.agent), withTip(h('span', { class: 'ellipsis' }, STEP[m.step] || m.step), `step.${m.step}`)),
@@ -978,12 +998,14 @@ class RunView {
           failed ? h('span', null, m.rate_limited === 'true' ? '한도 도달' : m.timed_out === 'true' ? '시간 초과' : `실패 (exit ${m.exit_code})`) : null,
           m.attempt && m.attempt !== '1' ? h('span', null, `재시도 ${Number(m.attempt) - 1}`) : null,
           m.tokens_out ? h('span', { class: 'tok', 'data-tip': `AI 가 쓴 양(출력 토큰). 읽은 양(입력)은 ${fmtTok(m.tokens_in || 0)} 토큰입니다.` }, `출력 ${fmtTok(m.tokens_out)}`) : null,
-          isTest ? testTag(m.test_status) : hst ? decisionTag(hst) : verdictTag(e.verdict)))));
+          isTest ? testTag(m.test_status) : m.step === 'repro' ? reproTag(m.repro_status) : hst ? decisionTag(hst) : verdictTag(e.verdict)))));
     }
     const cc = d.current_call;
     if (d.live) {
       const elapsed = cc ? cc.elapsed_sec + Math.round((Date.now() - this.loadedAt) / 1000) : null;
-      items.push(h('li', { class: 'pending', 'data-tip': TIPS['step.pending'] }, h('button', { type: 'button', disabled: true },
+      items.push(h('li', { class: 'pending', 'data-tip': TIPS['step.pending'] }, h('button', {
+        type: 'button', class: this.selected === LIVE ? 'active' : null,
+        onclick: () => { this.selected = LIVE; this.autoLive = false; this.renderTimeline(); this.renderViewer(); } },
         h('span', { class: 'seq' }, h('span', { class: 'spinner' })),
         h('span', { class: 'what' }, cc ? agentTag(cc.agent) : null, h('span', null, cc ? `${STEP[cc.step] || cc.step} 진행 중` : '준비 중')),
         h('span', { class: 'dur' }, elapsed !== null ? fmtDur(elapsed) : ''),
@@ -992,8 +1014,37 @@ class RunView {
     if (!items.length) items.push(h('li', { class: 'empty-state small' }, '아직 기록이 없습니다.'));
     this.timelineEl.replaceChildren(...items);
   }
+  async renderLive() {
+    let a;
+    try { a = await api('/api/activity', { query: this.q(), machine: this.m }); }
+    catch (e) { this.viewerEl.replaceChildren(errorBox(e)); return; }
+    if (this.selected !== LIVE) return;
+    const c = a.call;
+    const KIND = { read: '읽기', edit: '수정', command: '명령', search: '검색', message: '메시지', tool: '도구' };
+    const pad = n => String(n).padStart(2, '0');
+    const fmtT = ts => { const d = ts ? new Date(ts) : null; return d && !isNaN(d) ? `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` : ''; };
+    const root = String(this.data.project || this.r.project).replace(/\/+$/, '') + '/';
+    const rel = t => String(t).split(root).join('');   // 작업 폴더 경로는 짧게
+    const body = !c ? h('div', { class: 'empty-state' }, '다음 단계를 준비하고 있습니다.')
+      : !a.events.length ? h('div', { class: 'empty-state' }, `${c.agent} 가 시작했습니다. 첫 동작을 기다리는 중…`)
+      : h('ol', { class: 'activity' }, a.events.map(ev => h('li', { class: `act act-${ev.kind}` },
+          h('span', { class: 'act-time' }, fmtT(ev.ts)),
+          h('span', { class: `act-kind k-${ev.kind}` }, KIND[ev.kind] || ev.kind),
+          h('span', { class: ev.kind === 'message' ? 'act-text' : 'act-text mono' }, rel(ev.text),
+            ev.detail ? h('span', { class: 'act-detail' }, ` — ${ev.detail}`) : null))));
+    const atBottom = this.viewerEl.scrollTop + this.viewerEl.clientHeight >= this.viewerEl.scrollHeight - 30;
+    this.viewerEl.replaceChildren(
+      h('div', { class: 'viewer-head' }, h('span', { class: 'spinner' }), c ? agentTag(c.agent) : null,
+        h('b', null, c ? `${STEP[c.step] || c.step} 진행 중` : '준비 중'), help('live_view'),
+        h('span', { class: 'spacer' }), c ? h('span', { class: 'muted small' }, `${c.started} 시작 · ${fmtDur(c.elapsed_sec)}`) : null),
+      h('div', { class: 'viewer-body' }, body));
+    const list = this.viewerEl.querySelector('.activity');
+    if (list && (atBottom || this.firstLive !== false)) list.lastElementChild && list.lastElementChild.scrollIntoView({ block: 'nearest' });
+    this.firstLive = false;
+  }
   async renderViewer() {
     const name = this.selected;
+    if (name === LIVE) return this.renderLive();
     if (!name) { this.viewerEl.replaceChildren(h('div', { class: 'empty-state' }, '왼쪽에서 발언을 고르세요.')); return; }
     let entry = this.entryCache.get(name);
     if (!entry) {
@@ -1388,6 +1439,8 @@ class SettingsView {
       block_severity: sel('block_severity', d.block_severity || '', ['P1', 'P2', 'P3'], `기본값 (${eff.block_severity})`),
       stall_rounds: h('input', { type: 'number', min: 0, max: 10, value: d.stall_rounds ?? '', placeholder: String(eff.stall_rounds) }),
       require_tests_pass: h('input', { type: 'checkbox', checked: (d.require_tests_pass ?? eff.require_tests_pass) ? true : null }),
+      review_diff: h('input', { type: 'checkbox', checked: ((d.review_diff ?? eff.review_diff) || 'incremental') === 'incremental' ? true : null }),
+      repro_tests: h('input', { type: 'checkbox', checked: (d.repro_tests ?? eff.repro_tests ?? true) ? true : null }),
       claude_model: h('input', { type: 'text', list: 'claude-models', value: (d.claude || {}).model || '', placeholder: 'CLI 기본값', spellcheck: 'false' }),
       codex_model: h('input', { type: 'text', list: 'codex-models', value: (d.codex || {}).model || '', placeholder: 'CLI 기본값', spellcheck: 'false' }),
     };
@@ -1412,7 +1465,9 @@ class SettingsView {
       h('div', { class: 'form-grid' },
         field('테스트 명령', f.test_command, 'test_command'), field('반려 기준', f.block_severity, 'block_severity'),
         field('수렴 판단 라운드', f.stall_rounds, 'stall_rounds'),
-        h('label', { class: 'checkline' }, f.require_tests_pass, '테스트 실패 시 승인 안 함', help('require_tests'))),
+        h('label', { class: 'checkline' }, f.require_tests_pass, '테스트 실패 시 승인 안 함', help('require_tests')),
+        h('label', { class: 'checkline' }, f.review_diff, '2번째 리뷰부터 바뀐 부분만', help('review_diff')),
+        h('label', { class: 'checkline' }, f.repro_tests, '리뷰어의 재현 테스트 받기', help('repro_tests'))),
       h('div', { class: 'actions' }, h('button', { class: 'btn btn-primary', type: 'button', onclick: () => this.save({ defaults: {
         implementer: f.implementer.value, reviewer: f.reviewer.value, synth: f.synth.value,
         debate_rounds: f.debate_rounds.value, max_review: f.max_review.value,
@@ -1420,6 +1475,7 @@ class SettingsView {
         codex: { model: f.codex_model.value, effort: f.codex_effort.value },
         test_command: f.test_command.value, block_severity: f.block_severity.value,
         stall_rounds: f.stall_rounds.value, require_tests_pass: f.require_tests_pass.checked,
+        review_diff: f.review_diff.checked ? 'incremental' : 'full', repro_tests: f.repro_tests.checked,
       } }) }, '저장')));
 
     // ---------------- 원격 머신

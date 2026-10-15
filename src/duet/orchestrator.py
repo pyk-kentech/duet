@@ -45,7 +45,8 @@ Printer = Callable[[str], None]
 
 CONFIG_KEYS = ("implementer", "reviewer", "synth", "debate_rounds", "max_review",
                "claude.model", "claude.effort", "codex.model", "codex.effort",
-               "test_command", "block_severity", "stall_rounds", "require_tests_pass")
+               "test_command", "block_severity", "stall_rounds", "require_tests_pass",
+               "review_diff", "repro_tests")
 CONSOLE_LOG = "console.log"
 
 EXIT_OK = 0
@@ -291,6 +292,7 @@ class Orchestrator:
             "codex.model": cfg.codex.model, "codex.effort": cfg.codex.effort,
             "test_command": cfg.test_command, "block_severity": cfg.block_severity,
             "stall_rounds": cfg.stall_rounds, "require_tests_pass": cfg.require_tests_pass,
+            "review_diff": cfg.review_diff, "repro_tests": cfg.repro_tests,
             "design_only": opts.design_only, "skip_design": opts.skip_design, "mock": opts.mock,
         }
 

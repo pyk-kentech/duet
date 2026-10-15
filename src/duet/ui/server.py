@@ -415,6 +415,7 @@ class Handler(BaseHTTPRequestHandler):
         ("POST", "/api/actions/resume"): "resume",
         ("POST", "/api/actions/stop"): "stop",
         ("GET", "/api/usage"): "usage",
+        ("GET", "/api/activity"): "activity",
         ("GET", "/api/doctor"): "doctor",
         ("GET", "/api/defaults"): "defaults",
     }
@@ -484,6 +485,10 @@ def _clean_defaults(d: Any) -> dict[str, Any]:
         out["block_severity"] = str(d["block_severity"])
     if isinstance(d.get("require_tests_pass"), bool):
         out["require_tests_pass"] = d["require_tests_pass"]
+    if d.get("review_diff") in ("incremental", "full"):
+        out["review_diff"] = d["review_diff"]
+    if isinstance(d.get("repro_tests"), bool):
+        out["repro_tests"] = d["repro_tests"]
     for k in ("debate_rounds", "max_review", "timeout_sec", "stall_rounds"):
         if d.get(k) not in (None, ""):
             try:

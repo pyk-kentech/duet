@@ -146,9 +146,14 @@ duet run "..." --workdir ./x --claude-model opus --claude-effort high --codex-mo
 - **심각도 기준**: 리뷰어가 지적마다 P1(핵심 동작·보안)·P2(설계 위반·일반 입력 오류)·P3(드문 경계 사례)를 붙입니다. 기본은 P1·P2가 없으면 승인합니다(`--block-severity P3`면 P3까지 막음).
 - **수렴 안 됨**: 막는 지적 수가 2라운드 연속 줄지 않으면 멈추고 사람에게 넘깁니다(`--stall-rounds`, 0이면 끔). `duet resume`으로 이어갈 수 있습니다.
 
+- **재현 테스트**: 리뷰어가 지적을 실패하는 테스트로 내면 duet가 저장해 정말 실패하는지 돌려 보고, 구현자는 그 테스트를 통과시켜야 합니다.
+- **리뷰 토큰 절약**: 2번째 리뷰부터는 지난 리뷰 이후 바뀐 부분만 보여주고, duet가 이미 돌린 테스트는 다시 돌리지 않게 합니다.
+
 ```bash
 duet run "..." --workdir ./x --test-command "uv run pytest -q" --block-severity P2 --stall-rounds 2
 ```
+
+관리자 UI에서 실행 중인 항목을 열면 AI가 지금 어떤 파일을 읽고 고치는지, 어떤 명령을 돌리는지 실시간으로 보입니다.
 
 ## 관리자 UI
 
@@ -217,6 +222,8 @@ test_timeout_sec = 600
 require_tests_pass = true        # 테스트 실패면 승인 안 함
 block_severity = "P2"            # 이 심각도 이상 지적이 남으면 반려 (P1|P2|P3)
 stall_rounds = 2                 # 막는 지적 수가 N 라운드 연속 안 줄면 멈춤 (0=끔)
+review_diff = "incremental"      # 2번째 리뷰부터 바뀐 부분만 (full: 매번 전체)
+repro_tests = true               # 리뷰어의 재현 테스트를 저장·실행
 max_diff_chars = 60000           # 리뷰 프롬프트에 넣을 diff 최대 길이
 prompt_arg_max_bytes = 100000    # UTF-8 바이트. 넘으면 프롬프트를 stdin으로 전달
 diff_excludes = ["package-lock.json", "yarn.lock", "uv.lock", "poetry.lock", "Cargo.lock", "go.sum", "..."]  # 리뷰 diff 에서 뺄 잠금 파일 (기본값 일부)

@@ -403,6 +403,10 @@ write_args = ["--sandbox", "workspace-write"]
 - `policy.py`(승인 판단·수렴 감지), `testing.py`(테스트 명령 결정·실행), 리뷰·수정·구현 템플릿 개정
 - ✅ 심각도 판정·수렴 감지·테스트 상태 단위 테스트, build 단계 통합(테스트 실패 시 승인 보류, 부산물 정리, duet.toml 명령, 이전 리뷰 전달, 수렴 안 됨 → resume)
 
+### M11. 리뷰 효율 + 재현 테스트 + 실시간 보기 (2026-10-15 사용자 요청으로 추가)
+- 증분 리뷰 diff, 테스트 재실행 안내, `repro.py`, `activity.py`, UI 실시간 작업 보기
+- ✅ 재현 테스트 파싱·흐름, 증분 diff(예전 실행 대비), 두 CLI 세션 기록 파싱, 헤드리스 브라우저 확인
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -522,4 +526,22 @@ memo-cli 실험에서 리뷰 4라운드가 모두 반려됐다(반드시 고칠 
 
 ### 설정
 `test_command = "auto"`, `test_timeout_sec = 600`, `require_tests_pass = true`, `block_severity = "P2"`, `stall_rounds = 2`. CLI: `--test-command`, `--block-severity`, `--stall-rounds`. 실행 상태에 저장해 resume 때 같은 규칙을 쓴다. UI 의 새 실행 창·설정 화면에서도 고른다.
+
+---
+
+## 17. 리뷰 효율, 재현 테스트, 실시간 작업 보기
+
+### 리뷰 토큰
+memo-cli 실측(Codex 세션 기록): 설계 단계 호출은 입력 약 2만 토큰인데 리뷰는 28만~39만 토큰이었다. 리뷰 프롬프트(diff 6만 자)가 리뷰어의 도구 호출마다 다시 입력되기 때문이다.
+- `review_diff = "incremental"`(기본): 2라운드부터 지난 리뷰 시점 커밋(`reviewed_commits[i]`, 없으면 'duet: impl round i' 커밋) 이후의 diff 만 넣고, 처음부터의 변경은 파일 요약(stat)만 준다. `full` 이면 매번 전체.
+- duet 가 테스트를 돌린 라운드에는 리뷰어에게 "전체 테스트를 다시 돌리지 마라, 필요한 것만 좁게"라고 안내한다.
+
+### 재현 테스트 (`repro_tests = true`)
+- 리뷰어는 지적을 `<repro path="tests/test_repro_x.py">…</repro>` 로 낼 수 있다. duet 가 검증(작업 폴더 안 상대 경로, 이름이나 폴더에 test/spec, 새 파일만, 최대 5개·20KB)해 저장하고 'duet: repro tests from review i' 로 커밋한 뒤 테스트 명령을 돌린다.
+- 결과: failed = 재현됨(지적이 맞음), passed = 재현 안 됨. 기록 `NN_repro{i}.md`, `run.json` 의 `repros[i]`.
+- 다음 수정 프롬프트에 파일 목록과 재현 여부를 넣고, 통과시키게 한다(테스트가 틀렸다면 고치고 이유를 IMPLEMENTATION_NOTES.md 에). 다음 라운드의 duet 테스트에 자연히 포함된다.
+
+### 실시간 작업 보기
+- 호출 방식은 그대로 두고, 두 CLI 가 실시간으로 쓰는 세션 기록을 읽는다(`activity.py`). Claude: `~/.claude/projects/<cwd 의 영숫자 외 문자를 '-' 로>/*.jsonl`(없으면 최근 기록 중 cwd 일치), Codex: 세션 기록 중 cwd 일치. 지금 호출 시작 이후의 파일 읽기·수정·명령·검색·메시지를 뽑는다.
+- `GET /api/activity` (원격 머신도 같은 API). UI 는 실행 중이면 타임라인의 '진행 중' 항목을 자동으로 열어 2초마다 갱신한다.
 

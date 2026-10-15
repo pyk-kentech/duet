@@ -17,7 +17,6 @@ import struct
 import subprocess
 import termios
 import threading
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -47,6 +46,7 @@ class TermJob:
     returncode: int | None = None
     _proc: subprocess.Popen | None = None
     _master: int = -1
+    _reader_thread: threading.Thread | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def start(self, cwd: str | None = None) -> "TermJob":
@@ -62,7 +62,8 @@ class TermJob:
         finally:
             os.close(slave)
         self._master = master
-        threading.Thread(target=self._reader, daemon=True).start()
+        self._reader_thread = threading.Thread(target=self._reader, daemon=True)
+        self._reader_thread.start()
         return self
 
     def _reader(self) -> None:
@@ -77,7 +78,9 @@ class TermJob:
             self._append(clean(decoder.decode(data)))
         self._append(clean(decoder.decode(b"", final=True)))
         if self._proc is not None:
-            self.returncode = self._proc.wait()
+            rc = self._proc.wait()
+            with self._lock:
+                self.returncode = rc
         try:
             os.close(self._master)
         except OSError:
@@ -95,7 +98,12 @@ class TermJob:
 
     @property
     def running(self) -> bool:
-        return self.returncode is None and self._proc is not None and self._proc.poll() is None
+        """프로세스가 살아 있거나, 끝났지만 남은 출력을 아직 다 읽지 않았으면 True."""
+        if self._proc is None:
+            return False
+        if self._proc.poll() is None:
+            return True
+        return self.returncode is None
 
     def write(self, line: str) -> None:
         if not self.running:
@@ -107,13 +115,17 @@ class TermJob:
             kill_process_group(self._proc)
 
     def snapshot(self, offset: int = 0) -> dict[str, Any]:
+        # 프로세스가 끝났으면 리더가 남은 출력을 다 붙일 때까지 기다린 뒤에 텍스트와 종료 코드를 함께 읽는다.
+        # (먼저 텍스트를 읽고 나중에 종료 코드를 읽으면 '끝남'인데 마지막 줄이 빠진 상태가 보일 수 있다)
+        if self._proc is not None and self._proc.poll() is not None and self._reader_thread is not None:
+            self._reader_thread.join(2.0)
         with self._lock:
             start = max(0, offset - self.dropped)
             chunk = self.text[start:]
             end = self.dropped + len(self.text)
             urls = list(dict.fromkeys(URL_RE.findall(self.text)))[-5:]
-        if self.returncode is None and self._proc is not None and self._proc.poll() is not None:
-            time.sleep(0.05)  # 리더 스레드가 마지막 출력을 붙일 시간
+            returncode = self.returncode
+        running = returncode is None and self._proc is not None and self._proc.poll() is None
         return {"id": self.id, "title": self.title, "machine": self.machine, "note": self.note,
-                "started_at": self.started_at, "running": self.running, "returncode": self.returncode,
+                "started_at": self.started_at, "running": running, "returncode": returncode,
                 "text": chunk, "offset": end, "urls": urls}

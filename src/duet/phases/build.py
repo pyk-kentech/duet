@@ -28,10 +28,11 @@ from duet.phases.common import PhaseContext
 from duet.phases.debate import DESIGN_FILENAME
 from duet.policy import decide, stalled
 from duet.prompts import render
+from duet.repro import parse_repros, write_repros
 from duet.testing import STATUS_KO, describe_for_prompt, resolve_command, run_tests
 from duet.state import DONE_APPROVED, DONE_UNAPPROVED, PHASE_BUILD, PHASE_DONE
 from duet.verdict import parse_verdict
-from duet.workspace import Workspace
+from duet.workspace import GitError, Workspace
 
 DIFF_EXCLUDES = (DESIGN_FILENAME,)
 TRUNCATED_NOTE = "\n... (diff가 길어 잘림. 위의 변경 파일 요약을 보고 나머지는 파일을 직접 열어 확인)"
@@ -98,7 +99,8 @@ class BuildPhase:
                         ctx.log(f"[{i}/{self.max_review}] 리뷰 반영: {self.implementer}")
                         review_text = ctx.transcript.read(st.last_review)
                         prompt = render("fix", ctx.workdir, task=ctx.task, review=review_text,
-                                        reviewer_name=self.reviewer, tests=self._tests_text(i - 1))
+                                        reviewer_name=self.reviewer, tests=self._tests_text(i - 1),
+                                        repro=self._repro_text(i - 1))
                     out = ctx.call(self.implementer, step, prompt, Mode.WRITE,
                                    label=f"impl{i}_{self.implementer}", round_=i)
                     st.last_impl = out.file
@@ -121,11 +123,14 @@ class BuildPhase:
                 ctx.set_position(PHASE_BUILD, "review", i)
                 ctx.save()
                 self._preserve_pending_changes(i)
-                diff = build_review_diff(self.ws, base, self.cfg.diff_excludes, self.cfg.max_diff_chars)
-                ctx.log(f"[{i}/{self.max_review}] 리뷰: {self.reviewer} (diff {len(diff):,}자)")
-                prompt = render("review", ctx.workdir, task=ctx.task, diff=diff,
+                diff_title, diff = self._review_diff(i, base)
+                ctx.log(f"[{i}/{self.max_review}] 리뷰: {self.reviewer} (diff {len(diff):,}자{', 지난 리뷰 이후만' if '이후' in diff_title else ''})")
+                prompt = render("review", ctx.workdir, task=ctx.task, diff=diff, diff_title=diff_title,
                                 implementer_name=self.implementer,
-                                tests=self._tests_text(i), previous_review=self._previous_must_fix())
+                                tests=self._tests_text(i), test_instruction=self._test_instruction(i),
+                                previous_review=self._previous_must_fix(),
+                                repro_instruction=REPRO_INSTRUCTION if self.cfg.repro_tests else "")
+                st.reviewed_commits[str(i)] = self.ws.head()
                 out = ctx.call(self.reviewer, "review", prompt, Mode.READ,
                                label=f"review{i}_{self.reviewer}", round_=i)
                 self._undo_reviewer_changes()
@@ -151,6 +156,11 @@ class BuildPhase:
                     ctx.set_position(PHASE_DONE, "approved", i)
                     ctx.save()
                     return True
+                ctx.save()
+                if self.cfg.repro_tests and not st.is_done(f"repro:{i}"):
+                    self._handle_repros(i, out.text)
+                    st.mark_done(f"repro:{i}")
+                    ctx.save()
                 if self._is_stalled():
                     st.status = DONE_UNAPPROVED
                     st.stop_reason = "stalled"
@@ -198,6 +208,89 @@ class BuildPhase:
             return self.ctx.transcript.read(t["file"]).strip()
         except (OSError, KeyError):
             return f"명령: {t.get('command')}\n결과: {STATUS_KO.get(t.get('status'), t.get('status'))}"
+
+    def _test_instruction(self, i: int) -> str:
+        if self.state.tests.get(str(i)):
+            return ("위 테스트는 duet 가 방금 직접 실행했다. 전체 테스트를 다시 돌리지 마라. "
+                    "특정 동작을 확인해야 할 때만 그 부분만 좁게 실행해라.")
+        return "duet 가 테스트를 돌리지 않았다. 필요하면 직접 실행해도 된다."
+
+    # ---------------------------------------------------------------- diff
+    def _reviewed_commit(self, i: int) -> str | None:
+        """i 라운드 리뷰 시점의 HEAD. 기록이 없으면(예전 실행) 그 라운드 구현 커밋을 메시지로 찾는다."""
+        c = self.state.reviewed_commits.get(str(i))
+        if c:
+            return c
+        try:
+            out = self.ws.git("log", "-1", "--format=%h", f"--grep=^duet: impl round {i}$", "HEAD")
+        except GitError:
+            return None
+        return out.strip() or None
+
+    def _review_diff(self, i: int, base: str) -> tuple[str, str]:
+        full_title = "구현 전체 diff"
+        if self.cfg.review_diff != "incremental" or i <= 1:
+            return full_title, build_review_diff(self.ws, base, self.cfg.diff_excludes, self.cfg.max_diff_chars)
+        prev = self._reviewed_commit(i - 1)
+        if not prev:
+            return full_title, build_review_diff(self.ws, base, self.cfg.diff_excludes, self.cfg.max_diff_chars)
+        stat = self.ws.diff_stat(base, "HEAD", exclude=DIFF_EXCLUDES)
+        body = self.ws.diff(prev, "HEAD", exclude=DIFF_EXCLUDES, exclude_globs=self.cfg.diff_excludes)
+        note = (f"아래 diff 는 지난 리뷰(커밋 {prev}) 이후 바뀐 부분만이다. 처음부터의 전체 변경은 "
+                f"`git diff {base} HEAD` 로 볼 수 있다. 바뀐 부분과 그 영향을 받는 코드 위주로 리뷰해라.\n\n"
+                f"[처음부터의 변경 파일 요약]\n{stat.rstrip() or '(없음)'}\n")
+        budget = max(1000, self.cfg.max_diff_chars - len(note))
+        text = note + "\n" + (truncate_diff(body, budget) if body.strip() else "(지난 리뷰 이후 바뀐 코드 없음)")
+        return f"지난 리뷰 이후 바뀐 부분 (diff)", text
+
+    # ---------------------------------------------------------------- repro
+    def _handle_repros(self, i: int, review_text: str) -> None:
+        ctx, st = self.ctx, self.state
+        parsed = parse_repros(review_text, ctx.workdir)
+        if not parsed.files and not parsed.rejected:
+            return
+        record: dict = {"files": [f.path for f in parsed.files], "rejected": parsed.rejected}
+        lines = [f"# 리뷰어가 낸 재현 테스트 ({i}회차 리뷰)", ""]
+        if parsed.files:
+            write_repros(parsed.files, ctx.workdir)
+            commit = self.ws.commit_all(f"duet: repro tests from review {i}")
+            record["commit"] = commit
+            lines += ["저장한 파일:", *[f"- `{f}`" for f in record["files"]], ""]
+            resolved = resolve_command(ctx.workdir, self.cfg.test_command)
+            if resolved is None:
+                record["status"] = "not_run"
+                lines.append("테스트 명령이 없어 실행하지 못했다.")
+            else:
+                result = run_tests(ctx.workdir, resolved[0], resolved[1], self.cfg.test_timeout_sec)
+                if self.ws.dirty():
+                    self.ws.restore_clean()
+                record.update(status=result.status, summary=result.summary, command=result.command)
+                verdict = {"failed": "재현됨: 지금 코드에서 실패한다. 리뷰어의 지적이 맞다.",
+                           "passed": "재현 안 됨: 지금 코드에서도 통과한다. 지적이 틀렸거나 테스트가 문제를 못 짚었다.",
+                           "timeout": "시간 초과", "error": "실행 불가(환경 문제일 수 있음)"}[result.status]
+                lines += [f"결과: {verdict}", "", describe_for_prompt(result)]
+            ctx.log(f"[{i}/{self.max_review}] 재현 테스트 {len(record['files'])}개 저장"
+                    + (f" → {STATUS_KO.get(record.get('status'), '실행 안 함')}" if record.get("status") else ""))
+        if parsed.rejected:
+            lines += ["", "받지 않은 블록:", *[f"- {r}" for r in parsed.rejected]]
+            ctx.log(f"[{i}/{self.max_review}] 재현 테스트 거절 {len(parsed.rejected)}개: {parsed.rejected[0]}")
+        path = ctx.transcript.save(f"repro{i}", "\n".join(lines), {
+            "agent": "duet", "adapter": "duet", "step": "repro", "mode": "run", "round": i,
+            "exit_code": 0, "ok": True, "repro_status": record.get("status", "none"),
+            "repro_files": len(record["files"]), "rate_limited": False, "timed_out": False})
+        record["file"] = path.name
+        st.repros[str(i)] = record
+
+    def _repro_text(self, i: int) -> str:
+        r = self.state.repros.get(str(i))
+        if not r or not r.get("files"):
+            return "(없음)"
+        status = {"failed": "지금 코드에서 실패함 — 재현됨", "passed": "지금 코드에서도 통과함 — 재현 안 됨",
+                  "timeout": "시간 초과", "error": "실행 불가", "not_run": "실행 안 함"}.get(r.get("status"), "?")
+        files = "\n".join(f"- {f}" for f in r["files"])
+        return (f"리뷰어가 아래 테스트를 냈고 duet 가 작업 폴더에 저장했다 ({status}).\n{files}\n"
+                "이 테스트가 통과하도록 코드를 고쳐라. 테스트 자체가 틀렸다고 판단되면 테스트를 고치거나 지우되, "
+                "이유를 IMPLEMENTATION_NOTES.md 에 적어라.")
 
     def _previous_must_fix(self) -> str:
         if not self.state.last_review:
@@ -260,3 +353,14 @@ def extract_section(text: str, title: str) -> str:
         if inside:
             out.append(ln)
     return "\n".join(out).strip()
+
+
+REPRO_INSTRUCTION = """'반드시 고칠 것' 중 코드로 재현할 수 있는 것은, 지금 코드에서 실패하는 테스트를 아래 형식으로 함께 내라.
+duet 가 새 파일로 저장해 실제로 실패하는지 돌려 보고, 구현자는 이 테스트를 통과시켜야 한다.
+
+<repro path="tests/test_repro_짧은이름.py">
+(프로젝트의 테스트 방식대로 작성한, 지금은 실패하는 테스트 코드)
+</repro>
+
+- 프로젝트의 테스트 폴더와 프레임워크를 따라라. 이미 있는 파일 경로는 쓰지 마라(새 파일만).
+- 한 번에 최대 5개. 코드로 재현하기 어려운 지적은 글로만 써도 된다."""

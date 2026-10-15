@@ -73,7 +73,26 @@ def test_fix_prompt_contains_previous_review(tmp_path: Path):
     assert "DESIGN.md를 읽고" in implement_p and "[리뷰]" not in implement_p
     assert "고유한지적#1" in fix_p and "리뷰어(codex)" in fix_p
     assert "+v1" in review1_p and "구현자(claude)" in review1_p
-    assert "+v2" in review2_p and "v1" not in review2_p   # base 대비 누적 diff (중간 상태는 안 보임)
+    # 2라운드는 지난 리뷰 이후 바뀐 부분만 (v1 → v2), 파일 요약은 처음부터 기준
+    assert "[지난 리뷰 이후 바뀐 부분 (diff)]" in review2_p and "-v1" in review2_p and "+v2" in review2_p
+    assert "[처음부터의 변경 파일 요약]" in review2_p
+
+
+def test_full_review_diff_mode(tmp_path: Path):
+    prompts = []
+
+    def impl(req, n):
+        (req.cwd / "main.py").write_text(f"v{n}\n", encoding="utf-8")
+        return "done"
+
+    def rev(req, n):
+        prompts.append(req.prompt)
+        return "<verdict>\nstatus: CHANGES_REQUESTED\nmust_fix: 1\n</verdict>" if n == 1 else "<verdict>\nstatus: APPROVED\nmust_fix: 0\n</verdict>"
+
+    agents = {"claude": MockAdapter(label="claude", responder=impl), "codex": MockAdapter(label="codex", responder=rev)}
+    ctx = prepare(tmp_path, agents, review_diff="full")
+    assert BuildPhase(ctx).run()
+    assert "[구현 전체 diff]" in prompts[1] and "+v2" in prompts[1] and "-v1" not in prompts[1]
 
 
 def test_reviewer_changes_are_reverted(tmp_path: Path):

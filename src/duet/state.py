@@ -64,6 +64,8 @@ class RunState:
     review_history: list[dict] = field(default_factory=list)  # 라운드별 판정·막는 지적 수
     stop_reason: str | None = None                            # "max_review" | "stalled"
     stall_baseline_round: int = 0                             # resume 때 수렴 판단을 이 라운드부터 다시
+    reviewed_commits: dict[str, str] = field(default_factory=dict)  # round → 리뷰한 시점의 HEAD (증분 diff 기준)
+    repros: dict[str, dict] = field(default_factory=dict)     # round → 리뷰어가 낸 재현 테스트 처리 결과
     calls: list[CallRecord] = field(default_factory=list)
     error: str | None = None
     created_at: str = field(default_factory=lambda: dt.datetime.now().isoformat(timespec="seconds"))

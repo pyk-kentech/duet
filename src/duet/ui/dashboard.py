@@ -20,6 +20,7 @@ from pathlib import Path
 from subprocess import Popen
 from typing import Any
 
+from duet.activity import agent_activity, call_start_epoch
 from duet.config import AGENT_NAMES, ConfigError, MAX_DEBATE_ROUNDS, MAX_REVIEW_ROUNDS, load_config
 from duet.lock import read_lock
 from duet.orchestrator import CONSOLE_LOG
@@ -169,6 +170,19 @@ class Dashboard:
             "resume": self._resume_hint(st, wd),
             "now": dt.datetime.now().isoformat(timespec="seconds"),
         }
+
+    def activity(self, project: str | None, run_id: str | None) -> dict[str, Any]:
+        """지금 진행 중인 호출에서 에이전트가 하는 일(파일 읽기·수정·명령·메시지)."""
+        wd = self.project(project)
+        rd = self.run_dir(wd, run_id)
+        live = self._live(wd)
+        if not live or live.get("run_id") != rd.name:
+            return {"live": False, "call": None, "events": []}
+        call = current_call(rd / CONSOLE_LOG)
+        if not call:
+            return {"live": True, "call": None, "events": []}
+        since = call_start_epoch(call["started"])
+        return {"live": True, "call": call, "events": agent_activity(call["agent"], wd, since)}
 
     def entry(self, project: str | None, run_id: str | None, name: str | None) -> dict[str, Any]:
         wd = self.project(project)
@@ -462,6 +476,7 @@ class Dashboard:
                 "codex": {"model": cfg.codex.model, "effort": cfg.codex.effort},
                 "test_command": cfg.test_command, "block_severity": cfg.block_severity,
                 "stall_rounds": cfg.stall_rounds, "require_tests_pass": cfg.require_tests_pass,
+                "review_diff": cfg.review_diff, "repro_tests": cfg.repro_tests,
                 "limits": {"debate_rounds": MAX_DEBATE_ROUNDS, "max_review": MAX_REVIEW_ROUNDS}}
 
     # ================================================================ usage
@@ -570,6 +585,7 @@ API_METHODS: dict[str, Any] = {
     "resume": lambda d, a: d.resume(a),
     "stop": lambda d, a: d.stop(a),
     "usage": lambda d, a: d.usage_summary(),
+    "activity": lambda d, a: d.activity(a.get("project"), a.get("run")),
     "doctor": lambda d, a: d.doctor(),
     "defaults": lambda d, a: d._defaults(None),
 }
