@@ -13,6 +13,7 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import json
+import os
 import secrets
 import sys
 import threading
@@ -26,7 +27,8 @@ from urllib.parse import parse_qs, urlsplit
 
 from duet.config import CLAUDE_MODEL_SUGGESTIONS, EFFORT_SUGGESTIONS
 from duet.doctor import ACTIONS, PATH_PREFIX, action_shell
-from duet.remote import Remote, RemoteError
+from duet import __version__
+from duet.remote import Remote, RemoteError, package_digest
 from duet.settings import LOCAL_MACHINE, SettingsError, load_settings, save_settings, validate_machine
 from duet.ui.dashboard import ApiError, Dashboard, dispatch
 from duet.ui.terminal import TermJob
@@ -59,6 +61,37 @@ class DuetServer(ThreadingHTTPServer):
         self.terms: dict[str, TermJob] = {}
         self._terms_lock = threading.Lock()
         self._remote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.loaded_hash = package_digest()
+        self.started_at = time.time()
+        self.restart_fn: Callable[["DuetServer"], None] = exec_restart
+        self._digest_cache: tuple[float, str] = (0.0, self.loaded_hash)
+
+    # ================================================================ 서버 자신
+    def current_hash(self) -> str:
+        at, h = self._digest_cache
+        if time.monotonic() - at > 5:
+            h = package_digest()
+            self._digest_cache = (time.monotonic(), h)
+        return h
+
+    def server_info(self) -> dict[str, Any]:
+        cur = self.current_hash()
+        running = [t.title for t in self.terms.values() if t.running]
+        return {"version": __version__, "loaded": self.loaded_hash[:12], "current": cur[:12],
+                "stale": bool(cur and self.loaded_hash and cur != self.loaded_hash),
+                "uptime_sec": int(time.time() - self.started_at), "running_terms": running}
+
+    def restart(self) -> dict[str, Any]:
+        running = [t.title for t in self.terms.values() if t.running]
+        if running:
+            raise ApiError(409, f"진행 중인 터미널 작업이 있어 다시 시작할 수 없습니다: {', '.join(running)}")
+
+        def later() -> None:
+            time.sleep(0.4)  # 응답이 브라우저에 도착할 시간
+            self.restart_fn(self)
+
+        threading.Thread(target=later, daemon=True).start()
+        return {"restarting": True}
 
     @property
     def port(self) -> int:
@@ -337,6 +370,8 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_BODY:
             raise ApiError(413, "요청이 너무 큽니다.")
+        if length == 0:
+            return {}
         if "application/json" not in (self.headers.get("Content-Type") or ""):
             raise ApiError(415, "JSON 요청만 받습니다.")
         raw = self.rfile.read(length) if length else b"{}"
@@ -390,6 +425,8 @@ class Handler(BaseHTTPRequestHandler):
         machine = str(args.pop("machine", "") or LOCAL_MACHINE)
         special = {
             ("GET", "/api/projects"): lambda: srv.all_projects(),
+            ("GET", "/api/server"): lambda: srv.server_info(),
+            ("POST", "/api/server/restart"): lambda: srv.restart(),
             ("GET", "/api/settings"): lambda: srv.settings_view(),
             ("POST", "/api/settings"): lambda: srv.save_settings(body),
             ("POST", "/api/machines"): lambda: srv.upsert_machine(body),
@@ -497,6 +534,23 @@ def make_server(host: str = "127.0.0.1", port: int = 8787, *, dashboard: Dashboa
     raise OSError(f"포트를 열 수 없습니다 ({host}:{port}~): {last_err}")
 
 
+RESTART_TOKEN_ENV = "DUET_UI_TOKEN"
+RESTART_PORT_ENV = "DUET_UI_EXACT_PORT"
+
+
+def exec_restart(server: "DuetServer") -> None:
+    """같은 포트·토큰으로 자기 자신을 다시 실행한다(바뀐 duet 코드를 읽도록). 실행 중인 duet run 은 별도 프로세스라 영향 없음."""
+    host, port = server.server_address[0], server.port
+    env = dict(os.environ)
+    env[RESTART_TOKEN_ENV] = server.token
+    env[RESTART_PORT_ENV] = "1"
+    argv = [sys.executable, "-m", "duet", "ui", "--no-browser", "--host", str(host), "--port", str(port)]
+    sys.stdout.flush()
+    print("\nUI 를 다시 시작합니다 (같은 주소)...", flush=True)
+    server.server_close()
+    os.execve(sys.executable, argv, env)
+
+
 def _print_flush(line: str) -> None:
     # 파이프로 보낼 때(duet ui | tee ...) 접속 주소가 버퍼에 갇히지 않게
     print(line, flush=True)
@@ -507,7 +561,19 @@ def serve(host: str, port: int, *, open_browser: bool = True, extra_projects: li
     dashboard = Dashboard()
     for p in extra_projects:
         dashboard.registry.add(p)
-    server = make_server(host, port, dashboard=dashboard)
+    # UI 의 '다시 시작'으로 뜬 경우: 같은 토큰·같은 포트 (자식 프로세스에 토큰이 새지 않게 환경에서 뺀다)
+    token = os.environ.pop(RESTART_TOKEN_ENV, None)
+    exact = os.environ.pop(RESTART_PORT_ENV, None) == "1"
+    server = None
+    if exact:
+        for _ in range(25):
+            try:
+                server = make_server(host, port, dashboard=dashboard, token=token, port_tries=1)
+                break
+            except OSError:
+                time.sleep(0.2)
+    if server is None:
+        server = make_server(host, port, dashboard=dashboard, token=token)
     url = server.url()
     if not server.loopback:
         printer(f"⚠️  {host} 에 바인딩합니다. 같은 네트워크에서 주소와 토큰을 아는 사람은 실행을 시작할 수 있습니다.")

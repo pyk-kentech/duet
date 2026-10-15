@@ -45,19 +45,36 @@ class RemoteError(Exception):
 _PYZ_CACHE: tuple[bytes, str] | None = None
 
 
-def build_pyz() -> tuple[bytes, str]:
-    """설치된 duet 패키지로 실행 가능한 zip 을 만든다. (내용, sha256). 내용이 같으면 해시도 같다."""
-    global _PYZ_CACHE
+def _package_files() -> tuple[Path, list[Path]]:
     pkg = Path(duet.__file__).parent
     if not pkg.is_dir():
         raise RemoteError("이 duet 는 zip 에서 실행 중이라 원격 배포 파일을 만들 수 없습니다.", 500)
     files = sorted(f for f in pkg.rglob("*")
                    if f.is_file() and f.suffix in PYZ_EXTS and "__pycache__" not in f.parts)
+    return pkg, files
+
+
+def package_digest() -> str:
+    """설치된 duet 코드의 내용 해시. 코드가 바뀌었는지(UI 다시 시작 필요) 판단에도 쓴다."""
+    try:
+        pkg, files = _package_files()
+    except RemoteError:
+        return ""
     digest = hashlib.sha256()
     for f in files:
         digest.update(f.relative_to(pkg).as_posix().encode())
-        digest.update(f.read_bytes())
-    key = digest.hexdigest()
+        try:
+            digest.update(f.read_bytes())
+        except OSError:
+            pass
+    return digest.hexdigest()
+
+
+def build_pyz() -> tuple[bytes, str]:
+    """설치된 duet 패키지로 실행 가능한 zip 을 만든다. (내용, sha256). 내용이 같으면 해시도 같다."""
+    global _PYZ_CACHE
+    pkg, files = _package_files()
+    key = package_digest()
     if _PYZ_CACHE and _PYZ_CACHE[1] == key:
         return _PYZ_CACHE
     buf = io.BytesIO()

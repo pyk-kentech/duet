@@ -17,6 +17,11 @@
         <span class="brand-sub">관리자</span>
       </a>
       <button type="button" class="btn btn-primary btn-block" id="sidebar-new-run">새 실행</button>
+      <div id="update-banner" class="update-banner" hidden>
+        <b>duet 가 업데이트됐습니다</b>
+        <span>UI 를 다시 시작해야 새 기능이 보입니다. 진행 중인 실행은 그대로 돕니다.</span>
+        <button type="button" class="btn btn-sm btn-primary" id="restart-btn">UI 다시 시작</button>
+      </div>
       <nav class="side-links" aria-label="메뉴">
         <a href="#/" data-nav="home">프로젝트</a>
         <a href="#/setup" data-nav="setup">환경·로그인</a>
@@ -105,6 +110,10 @@
             <input name="max_review" type="number" min="1" max="10" value="3">
           </label>
           <label class="field">
+            <span class="field-label">수렴 판단 <em>0=끔</em></span>
+            <input name="stall_rounds" type="number" min="0" max="10" value="2">
+          </label>
+          <label class="field">
             <span class="field-label">반려 기준</span>
             <select name="block_severity">
               <option value="P1">P1 만</option>
@@ -134,5 +143,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div id="restart-overlay" class="restart-overlay" hidden><div class="card card-pad"><span class="spinner"></span> UI 를 다시 시작하는 중…</div></div>
 </body>
 </html>

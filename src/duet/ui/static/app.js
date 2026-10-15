@@ -123,7 +123,7 @@ async function api(path, { method = 'GET', body, query, machine } = {}) {
   if (machine && machine !== LOCAL && method === 'GET') q.machine = machine;
   for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);
   const opts = { method, headers: { 'X-Duet-Token': TOKEN } };
-  if (body !== undefined || (machine && machine !== LOCAL && method !== 'GET')) {
+  if (body !== undefined || method === 'POST' || (machine && machine !== LOCAL && method !== 'GET')) {
     const b = { ...(body || {}) };
     if (machine && machine !== LOCAL) b.machine = machine;
     opts.headers['Content-Type'] = 'application/json';
@@ -1171,6 +1171,7 @@ class SettingsView {
   showError(e) { this.main.replaceChildren(h('div', { class: 'page' }, h('h1', null, '설정'), errorBox(e))); }
   async load() {
     const v = await loadSettings(true);
+    await checkServer();
     modelDatalists(v.suggestions);
     this.render(v);
   }
@@ -1274,9 +1275,20 @@ class SettingsView {
         h('button', { class: 'btn btn-primary', type: 'button', onclick: () => this.saveMachine(mf) }, ed.id ? '수정 저장' : '머신 추가'),
         ed.id ? h('button', { class: 'btn', type: 'button', onclick: () => { this.editing = null; this.render(v); } }, '취소') : null));
 
+    const sv = app.server || {};
+    const serverCard = h('div', { class: 'card section-card' },
+      h('h2', null, 'UI 서버'),
+      h('p', { class: 'desc' }, 'duet 코드를 바꾸거나 업데이트한 뒤에는 다시 시작해야 반영됩니다. 같은 주소로 다시 뜨고, 진행 중인 실행은 그대로 돕니다.'),
+      h('div', { class: 'chips' },
+        h('span', { class: 'chip' }, '버전 ', h('b', null, sv.version || '?')),
+        h('span', { class: 'chip' }, '실행 중 코드 ', h('b', { class: 'mono' }, sv.loaded || '?')),
+        h('span', { class: 'chip' }, '설치된 코드 ', h('b', { class: 'mono' }, sv.current || '?')),
+        sv.uptime_sec != null ? h('span', { class: 'chip' }, `켜진 지 ${fmtDur(sv.uptime_sec)}`) : null,
+        sv.stale ? h('span', { class: 'badge s-done_unapproved' }, '다시 시작 필요') : h('span', { class: 'badge s-ok' }, '최신')),
+      h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', onclick: restartServer }, 'UI 다시 시작')));
     this.main.replaceChildren(h('div', { class: 'page' },
       h('div', { class: 'page-head' }, h('div', null, h('h1', null, '설정'), h('div', { class: 'muted' }, '~/.duet/settings.json 에 저장됩니다.'))),
-      v.error ? errorBox({ message: v.error }) : null, rootsCard, defaultsCard, machinesCard));
+      v.error ? errorBox({ message: v.error }) : null, rootsCard, defaultsCard, machinesCard, serverCard));
   }
   async save(body) {
     try { app.settings = await api('/api/settings', { method: 'POST', body }); toast('저장했습니다.'); this.render(app.settings); }
@@ -1360,6 +1372,7 @@ async function openRunDialog({ machine = LOCAL, project = '', defaults = null, h
   f.debate_rounds.value = eff.debate_rounds;
   f.max_review.value = eff.max_review;
   f.block_severity.value = eff.block_severity || 'P2';
+  f.stall_rounds.value = eff.stall_rounds ?? 2;
   f.test_command.value = '';
   f.test_command.placeholder = eff.test_command && eff.test_command !== 'auto' ? `설정값: ${eff.test_command}` : '자동 감지 (예: python3 -m pytest -q)';
   f.claude_model.value = (eff.claude || {}).model || '';
@@ -1401,7 +1414,7 @@ form.addEventListener('submit', async ev => {
     debate_rounds: f.debate_rounds.value, max_review: f.max_review.value,
     claude_model: f.claude_model.value.trim(), claude_effort: f.claude_effort.value,
     codex_model: f.codex_model.value.trim(), codex_effort: f.codex_effort.value,
-    test_command: f.test_command.value.trim(), block_severity: f.block_severity.value,
+    test_command: f.test_command.value.trim(), block_severity: f.block_severity.value, stall_rounds: f.stall_rounds.value,
     design_only: f.design_only.checked, skip_design: f.skip_design.checked, mock: f.mock.checked, force: f.force.checked,
   };
   const problem = !body.project ? (f.root.value === CUSTOM ? '작업 폴더 경로를 입력하세요.' : '폴더 이름을 입력하세요.')
@@ -1445,7 +1458,36 @@ async function followNewRun(job, machine) {
   }
 }
 
+// =================================================================== UI 서버 업데이트·다시 시작
+async function checkServer() {
+  try { app.server = await api('/api/server'); } catch { return; }
+  $('#update-banner').hidden = !app.server.stale;
+}
+async function restartServer() {
+  const running = (app.server && app.server.running_terms) || [];
+  if (running.length) { toast(`진행 중인 터미널 작업이 있습니다: ${running.join(', ')}`, true); return; }
+  if (!confirm('UI 를 다시 시작할까요? 같은 주소로 다시 뜨고, 진행 중인 실행은 그대로 돕니다.')) return;
+  try { await api('/api/server/restart', { method: 'POST' }); }
+  catch (e) { toast(e.message, true); return; }
+  $('#restart-overlay').hidden = false;
+  const before = app.server ? app.server.uptime_sec : null;
+  const deadline = Date.now() + 30000;
+  await new Promise(r => setTimeout(r, 800));
+  while (Date.now() < deadline) {
+    try {
+      const s = await api('/api/server');
+      if (before === null || s.uptime_sec < before || !s.stale) { location.reload(); return; }
+    } catch { /* 아직 다시 뜨는 중 */ }
+    await new Promise(r => setTimeout(r, 500));
+  }
+  $('#restart-overlay').hidden = true;
+  toast('UI 가 다시 뜨지 않았습니다. duet ui 를 실행한 터미널을 확인하세요.', true);
+}
+$('#restart-btn').addEventListener('click', restartServer);
+
 // =================================================================== boot
 window.addEventListener('hashchange', route);
+checkServer();
+setInterval(checkServer, 20000);
 api('/api/setup/actions').then(a => { app.actions = a.actions; }).catch(() => {});
 route();

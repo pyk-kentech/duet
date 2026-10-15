@@ -346,3 +346,58 @@ def test_current_call_parsing(tmp_path: Path):
     log.write_text("[23:59:30] claude ← fix 실행 중...\n", encoding="utf-8")
     assert current_call(log, dt.datetime(2026, 10, 16, 0, 0, 30))["elapsed_sec"] == 60
     assert current_call(tmp_path / "nope.log") is None
+
+
+# ====================================================================== UI 서버 업데이트·다시 시작
+def test_server_info_and_restart(server):
+    s, info, _ = call(server, "GET", "/api/server")
+    assert s == 200 and info["stale"] is False and info["loaded"] == info["current"] and info["version"]
+    server.loaded_hash = "0" * 64           # 코드가 바뀐 것처럼
+    assert call(server, "GET", "/api/server")[1]["stale"] is True
+    called = []
+    server.restart_fn = lambda srv: called.append(srv.port)
+    s, r, _ = call(server, "POST", "/api/server/restart", body={})
+    assert s == 200 and r == {"restarting": True}
+    wait_for(lambda: called == [server.port])
+
+
+def test_restart_refused_while_terminal_job_runs(server):
+    from duet.ui.terminal import TermJob
+    job = TermJob(id="t", title="Claude 로그인", argv=["sh", "-c", "sleep 30"]).start()
+    server.terms["t"] = job
+    server.restart_fn = lambda srv: (_ for _ in ()).throw(AssertionError("다시 시작하면 안 됨"))
+    s, r, _ = call(server, "POST", "/api/server/restart", body={})
+    assert s == 409 and "Claude 로그인" in r["error"]
+    assert call(server, "GET", "/api/server")[1]["running_terms"] == ["Claude 로그인"]
+
+
+def test_serve_reuses_token_and_port_after_restart(monkeypatch, tmp_path):
+    import duet.ui.server as srv_mod
+    seen = {}
+
+    class Fake:
+        loopback = True
+        def url(self): return "http://x"
+        def serve_forever(self, poll_interval): raise KeyboardInterrupt
+        def server_close(self): pass
+
+    def fake_make(host, port, *, dashboard=None, token=None, port_tries=20):
+        seen.update(token=token, port=port, tries=port_tries)
+        return Fake()
+
+    monkeypatch.setattr(srv_mod, "make_server", fake_make)
+    monkeypatch.setenv("DUET_UI_TOKEN", "keep-me")
+    monkeypatch.setenv("DUET_UI_EXACT_PORT", "1")
+    srv_mod.serve("127.0.0.1", 8799, open_browser=False, printer=lambda line: None)
+    assert seen == {"token": "keep-me", "port": 8799, "tries": 1}
+    import os
+    assert "DUET_UI_TOKEN" not in os.environ   # 자식 프로세스로 새지 않게 지움
+
+
+def test_post_without_body_is_accepted(server):
+    """본문 없는 POST(예: 다시 시작 버튼)는 Content-Type 없이도 받는다. 본문이 있으면 JSON 이어야 한다."""
+    server.restart_fn = lambda srv: None
+    url = f"http://127.0.0.1:{server.port}/api/server/restart"
+    req = urllib.request.Request(url, data=b"", method="POST", headers={"X-Duet-Token": TOKEN})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        assert r.status == 200

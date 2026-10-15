@@ -79,6 +79,8 @@
 }
 
 * { box-sizing: border-box; }
+/* display 를 지정한 클래스가 있어도 hidden 속성이 항상 이기게 */
+[hidden] { display: none !important; }
 html, body { margin: 0; height: 100%; }
 body {
   background: var(--bg);
@@ -444,3 +446,10 @@ table.plain tr:last-child td { border-bottom: 0; }
 .t-failed, .t-timeout { background: var(--bad-soft); color: var(--bad); }
 .t-error { background: var(--warn-soft); color: var(--warn); }
 .checkline { display: inline-flex; gap: 8px; align-items: center; font-size: 13.5px; }
+
+.update-banner { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 10px;
+  background: var(--info-soft); color: var(--info); font-size: 12.5px; }
+.update-banner b { font-size: 13px; }
+.update-banner span { color: var(--muted); }
+.restart-overlay { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; background: rgba(10, 14, 20, .35); }
+.restart-overlay .card { display: flex; gap: 10px; align-items: center; font-weight: 600; }
