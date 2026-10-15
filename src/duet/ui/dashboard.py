@@ -1,0 +1,466 @@
+"""관리자 UI 의 데이터·동작 계층. HTTP 와 분리해 단위 테스트할 수 있게 한다.
+
+모든 경로 인자(project, run, file, commit)는 여기서 검증한다:
+- project 는 등록된 작업 폴더여야 한다.
+- run 은 그 폴더의 .duet/runs 아래 실제 실행이어야 한다.
+- file 은 그 실행의 기록 파일(NN_*.md) 이름이어야 한다.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import os
+import re
+import signal
+import sys
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+from subprocess import Popen
+from typing import Any
+
+from duet.config import AGENT_NAMES, ConfigError, MAX_DEBATE_ROUNDS, MAX_REVIEW_ROUNDS, load_config
+from duet.lock import read_lock
+from duet.orchestrator import CONSOLE_LOG
+from duet.phases.build import build_review_diff
+from duet.phases.debate import BACKUP_FILENAME, DESIGN_FILENAME
+from duet.registry import Registry, normalize
+from duet.runner import ExecutableNotFound, pid_alive, spawn_detached
+from duet.state import DONE_UNAPPROVED, DUET_DIR, RUNNING, RunState, list_run_dirs
+from duet.transcript import Transcript, split_header
+from duet.verdict import parse_verdict
+from duet.workspace import GitError, Workspace, WorkdirRefused, check_workdir
+
+RUN_ID_RE = re.compile(r"^\d{8}-\d{6}(?:-\d+)?$")
+ENTRY_RE = re.compile(r"^\d{2,}_[\w.\-]+\.md$")
+COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
+MAX_DIFF_BYTES = 400_000
+MAX_CONSOLE_CHUNK = 200_000
+MAX_TASK_CHARS = 200_000
+UI_DIR = "ui"
+
+
+class ApiError(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+@dataclass
+class Job:
+    id: int
+    kind: str              # "run" | "resume"
+    project: str
+    argv: list[str]
+    log_path: Path
+    popen: Popen
+    started_at: str
+    returncode: int | None = None
+
+    def poll(self) -> None:
+        if self.returncode is None:
+            self.returncode = self.popen.poll()
+
+    def to_dict(self) -> dict[str, Any]:
+        self.poll()
+        try:
+            tail = self.log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+        except OSError:
+            tail = ""
+        return {"id": self.id, "kind": self.kind, "project": self.project, "pid": self.popen.pid,
+                "running": self.returncode is None, "returncode": self.returncode,
+                "started_at": self.started_at, "log_tail": tail, "log_path": str(self.log_path)}
+
+
+@dataclass
+class Dashboard:
+    registry: Registry = field(default_factory=Registry)
+    python: str = sys.executable
+    jobs: list[Job] = field(default_factory=list)
+    _jobs_lock: threading.Lock = field(default_factory=threading.Lock)
+    _verdict_cache: dict[tuple[str, float], dict] = field(default_factory=dict)
+
+    # ================================================================ validation
+    def project(self, path: str | None) -> Path:
+        if not path:
+            raise ApiError(400, "project 가 필요합니다.")
+        p = normalize(path)
+        if p not in self.registry.list():
+            raise ApiError(404, f"등록되지 않은 프로젝트입니다: {p}")
+        return Path(p)
+
+    def run_dir(self, project: Path, run_id: str | None) -> Path:
+        if not run_id or not RUN_ID_RE.match(run_id):
+            raise ApiError(400, "run 형식이 잘못되었습니다.")
+        for d in list_run_dirs(project):
+            if d.name == run_id:
+                return d
+        raise ApiError(404, f"실행을 찾을 수 없습니다: {run_id}")
+
+    # ================================================================ projects
+    def projects(self) -> list[dict[str, Any]]:
+        self.reap()
+        out = []
+        for p in self.registry.list():
+            path = Path(p)
+            runs = list_run_dirs(path) if path.is_dir() else []
+            latest = self._run_summary(path, runs[-1]) if runs else None
+            out.append({"path": p, "name": path.name or p, "exists": path.is_dir(),
+                        "run_count": len(runs), "latest": latest, "live": self._live(path)})
+        return out
+
+    def add_project(self, path: str | None) -> dict[str, Any]:
+        if not path or not str(path).strip():
+            raise ApiError(400, "경로를 입력하세요.")
+        raw = Path(str(path).strip()).expanduser()
+        if not raw.is_absolute():
+            raise ApiError(400, "절대 경로를 입력하세요 (예: /home/me/proj).")
+        try:
+            wd = check_workdir(raw, force=True)
+        except WorkdirRefused as e:
+            raise ApiError(400, str(e)) from e
+        return {"path": self.registry.add(wd)}
+
+    def remove_project(self, path: str | None) -> dict[str, Any]:
+        p = self.project(path)
+        self.registry.remove(p)
+        return {"removed": str(p)}
+
+    # ================================================================ runs
+    def runs(self, project: str | None) -> dict[str, Any]:
+        wd = self.project(project)
+        runs = [self._run_summary(wd, d) for d in reversed(list_run_dirs(wd))]
+        return {"project": str(wd), "live": self._live(wd), "runs": runs,
+                "has_design": (wd / DESIGN_FILENAME).is_file(), "defaults": self._defaults(wd)}
+
+    def run(self, project: str | None, run_id: str | None) -> dict[str, Any]:
+        wd = self.project(project)
+        rd = self.run_dir(wd, run_id)
+        st = RunState.load(rd)
+        live = self._live(wd)
+        entries = []
+        for e in Transcript(rd).entries():
+            item: dict[str, Any] = {"name": e.name, "seq": e.seq, "label": e.label, "meta": e.meta}
+            if e.meta.get("step") == "review" and e.meta.get("exit_code") == "0":
+                item["verdict"] = self._verdict(e.path)
+            entries.append(item)
+        console = rd / CONSOLE_LOG
+        return {
+            "project": str(wd), "run_dir": str(rd), "state": st.to_dict(), "entries": entries,
+            "live": bool(live and live.get("run_id") == st.run_id),
+            "live_pid": live.get("pid") if live and live.get("run_id") == st.run_id else None,
+            "stale": st.status == RUNNING and not (live and live.get("run_id") == st.run_id),
+            "console_size": console.stat().st_size if console.is_file() else 0,
+            "has_design_backup": (rd / BACKUP_FILENAME).is_file(),
+            "current_call": current_call(console) if live and live.get("run_id") == st.run_id else None,
+            "resume": self._resume_hint(st, wd),
+            "now": dt.datetime.now().isoformat(timespec="seconds"),
+        }
+
+    def entry(self, project: str | None, run_id: str | None, name: str | None) -> dict[str, Any]:
+        wd = self.project(project)
+        rd = self.run_dir(wd, run_id)
+        if not name or not ENTRY_RE.match(name) or not (rd / name).is_file():
+            raise ApiError(404, "기록 파일을 찾을 수 없습니다.")
+        meta, body = split_header((rd / name).read_text(encoding="utf-8", errors="replace"))
+        return {"name": name, "meta": meta, "body": body}
+
+    def console(self, project: str | None, run_id: str | None, offset: int = 0) -> dict[str, Any]:
+        wd = self.project(project)
+        rd = self.run_dir(wd, run_id)
+        path = rd / CONSOLE_LOG
+        if not path.is_file():
+            return {"text": "", "offset": 0, "size": 0}
+        size = path.stat().st_size
+        offset = max(0, min(int(offset), size))
+        if size - offset > MAX_CONSOLE_CHUNK:
+            offset = size - MAX_CONSOLE_CHUNK
+        with path.open("rb") as f:
+            f.seek(offset)
+            data = f.read(MAX_CONSOLE_CHUNK)
+        return {"text": data.decode("utf-8", errors="replace"), "offset": offset + len(data), "size": size}
+
+    def design(self, project: str | None, run_id: str | None = None, which: str = "current") -> dict[str, Any]:
+        wd = self.project(project)
+        if which == "backup":
+            rd = self.run_dir(wd, run_id)
+            path = rd / BACKUP_FILENAME
+        else:
+            path = wd / DESIGN_FILENAME
+        if not path.is_file():
+            return {"text": None, "path": str(path)}
+        return {"text": path.read_text(encoding="utf-8", errors="replace"), "path": str(path)}
+
+    # ================================================================ git
+    def commits(self, project: str | None, run_id: str | None) -> dict[str, Any]:
+        wd = self.project(project)
+        st = RunState.load(self.run_dir(wd, run_id))
+        ws = Workspace(wd)
+        if not st.base_commit or not ws.is_repo():
+            return {"base": None, "commits": []}
+        try:
+            fmt = "%H%x1f%h%x1f%s%x1f%cI"
+            out = ws.git("log", f"--format={fmt}", f"{st.base_commit}^!", "--")
+            out += ws.git("log", "--reverse", f"--format={fmt}", f"{st.base_commit}..HEAD", "--")
+        except GitError as e:
+            raise ApiError(500, str(e)) from e
+        commits = []
+        for line in out.splitlines():
+            parts = line.split("\x1f")
+            if len(parts) == 4:
+                commits.append({"sha": parts[0], "short": parts[1], "subject": parts[2], "date": parts[3]})
+        return {"base": st.base_commit, "commits": commits}
+
+    def diff(self, project: str | None, run_id: str | None, commit: str | None = None) -> dict[str, Any]:
+        wd = self.project(project)
+        st = RunState.load(self.run_dir(wd, run_id))
+        ws = Workspace(wd)
+        if not st.base_commit or not ws.is_repo():
+            return {"text": "", "truncated": False, "title": "아직 커밋이 없습니다."}
+        try:
+            if commit:
+                if not COMMIT_RE.match(commit):
+                    raise ApiError(400, "commit 형식이 잘못되었습니다.")
+                if ws.git("cat-file", "-t", commit, check=False).strip() != "commit":
+                    raise ApiError(404, "커밋을 찾을 수 없습니다.")
+                text = ws.git("show", "--no-color", "--format=commit %H%n%s%n", commit)
+                title = f"커밋 {commit[:7]}"
+            else:
+                try:
+                    globs = load_config(wd).diff_excludes
+                except ConfigError:
+                    globs = []
+                text = build_review_diff(ws, st.base_commit, globs, MAX_DIFF_BYTES * 2)
+                if text == "(변경 없음)":
+                    text = ""
+                title = f"기준 {st.base_commit} 대비 전체 변경 (리뷰어가 받는 diff 와 같은 규칙: DESIGN.md·잠금 파일 제외)"
+        except GitError as e:
+            raise ApiError(500, str(e)) from e
+        truncated = len(text) > MAX_DIFF_BYTES
+        return {"text": text[:MAX_DIFF_BYTES], "truncated": truncated, "title": title}
+
+    # ================================================================ actions
+    def start_run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        task = str(payload.get("task") or "").strip()
+        if not task:
+            raise ApiError(400, "과제를 입력하세요.")
+        if len(task) > MAX_TASK_CHARS:
+            raise ApiError(400, "과제가 너무 깁니다.")
+        raw = str(payload.get("project") or "").strip()
+        if not raw or not Path(raw).expanduser().is_absolute():
+            raise ApiError(400, "작업 폴더는 절대 경로여야 합니다.")
+        design_only, skip_design = bool(payload.get("design_only")), bool(payload.get("skip_design"))
+        mock, force = bool(payload.get("mock")), bool(payload.get("force"))
+        if design_only and skip_design:
+            raise ApiError(400, "'설계만'과 '설계 생략'은 함께 고를 수 없습니다.")
+        try:
+            wd = check_workdir(Path(raw), force=force, allow=(DESIGN_FILENAME,) if skip_design else ())
+        except WorkdirRefused as e:
+            raise ApiError(400, str(e)) from e
+        overrides: dict[str, Any] = {}
+        for key in ("implementer", "reviewer", "synth"):
+            v = payload.get(key)
+            if v:
+                if v not in AGENT_NAMES:
+                    raise ApiError(400, f"{key} 값이 잘못되었습니다: {v}")
+                overrides[key] = v
+        for key in ("debate_rounds", "max_review"):
+            v = payload.get(key)
+            if v not in (None, ""):
+                try:
+                    overrides[key] = int(v)
+                except (TypeError, ValueError):
+                    raise ApiError(400, f"{key} 는 숫자여야 합니다.") from None
+        try:
+            load_config(wd if wd.is_dir() else None, overrides)
+        except ConfigError as e:
+            raise ApiError(400, f"설정 오류: {e}") from e
+        if skip_design and not (wd / DESIGN_FILENAME).is_file():
+            raise ApiError(400, f"'설계 생략'인데 {wd / DESIGN_FILENAME} 이 없습니다.")
+        self._ensure_not_busy(wd)
+
+        wd.mkdir(parents=True, exist_ok=True)
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        task_file = wd / DUET_DIR / UI_DIR / "tasks" / f"{stamp}.md"
+        task_file.parent.mkdir(parents=True, exist_ok=True)
+        task_file.write_text(task, encoding="utf-8")
+
+        argv = ["run", f"@{task_file}", "--workdir", str(wd)]
+        for key, flag in (("implementer", "--implementer"), ("reviewer", "--reviewer"), ("synth", "--synth"),
+                          ("debate_rounds", "--debate-rounds"), ("max_review", "--max-review")):
+            if key in overrides:
+                argv += [flag, str(overrides[key])]
+        for on, flag in ((design_only, "--design-only"), (skip_design, "--skip-design"),
+                         (mock, "--mock"), (force, "--force")):
+            if on:
+                argv.append(flag)
+        self.registry.add(wd)
+        return self._spawn("run", wd, argv)
+
+    def resume(self, payload: dict[str, Any]) -> dict[str, Any]:
+        wd = self.project(payload.get("project"))
+        rd = self.run_dir(wd, payload.get("run"))
+        argv = ["resume", "--workdir", str(wd), "--run", rd.name]
+        mr = payload.get("max_review")
+        if mr not in (None, ""):
+            try:
+                mr = int(mr)
+            except (TypeError, ValueError):
+                raise ApiError(400, "max_review 는 숫자여야 합니다.") from None
+            if not 1 <= mr <= MAX_REVIEW_ROUNDS:
+                raise ApiError(400, f"max_review 는 1~{MAX_REVIEW_ROUNDS} 사이여야 합니다.")
+            argv += ["--max-review", str(mr)]
+        st = RunState.load(rd)
+        hint = self._resume_hint(st, wd)
+        if not hint["possible"]:
+            raise ApiError(400, hint["reason"])
+        if hint["needs_max_review"] and (mr in (None, "") or int(mr) <= hint["current_max_review"]):
+            raise ApiError(400, f"리뷰 상한을 {hint['current_max_review']}보다 크게 지정하세요.")
+        self._ensure_not_busy(wd)
+        return self._spawn("resume", wd, argv)
+
+    def stop(self, payload: dict[str, Any]) -> dict[str, Any]:
+        wd = self.project(payload.get("project"))
+        info = read_lock(wd)
+        if info is None:
+            raise ApiError(409, "실행 중인 duet 가 없습니다.")
+        if not _looks_like_duet(info.pid):
+            raise ApiError(409, f"pid {info.pid} 가 duet 프로세스가 아닌 것 같아 중지하지 않았습니다.")
+        try:
+            os.kill(info.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            raise ApiError(409, "이미 끝난 실행입니다.") from None
+        return {"stopped": info.pid, "run_id": info.run_id}
+
+    def jobs_list(self) -> list[dict[str, Any]]:
+        self.reap()
+        with self._jobs_lock:
+            return [j.to_dict() for j in reversed(self.jobs[-20:])]
+
+    def reap(self) -> None:
+        with self._jobs_lock:
+            for j in self.jobs:
+                j.poll()
+
+    # ================================================================ helpers
+    def _spawn(self, kind: str, wd: Path, argv: list[str]) -> dict[str, Any]:
+        log_dir = wd / DUET_DIR / UI_DIR / "jobs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        log_path = log_dir / f"{stamp}-{kind}.log"
+        cmd = [self.python, "-m", "duet", *argv]
+        try:
+            with log_path.open("ab") as log_file:
+                popen = spawn_detached(cmd, wd, log_file=log_file, env={"PYTHONUNBUFFERED": "1"})
+        except ExecutableNotFound as e:
+            raise ApiError(500, str(e)) from e
+        with self._jobs_lock:
+            job = Job(id=len(self.jobs) + 1, kind=kind, project=str(wd), argv=argv, log_path=log_path,
+                      popen=popen, started_at=dt.datetime.now().isoformat(timespec="seconds"))
+            self.jobs.append(job)
+        return job.to_dict()
+
+    def _ensure_not_busy(self, wd: Path) -> None:
+        info = read_lock(wd)
+        if info is not None:
+            raise ApiError(409, f"이 작업 폴더에서 이미 실행 중입니다 (pid {info.pid}, 실행 {info.run_id}).")
+        with self._jobs_lock:
+            for j in self.jobs:
+                j.poll()
+                if j.project == str(wd) and j.returncode is None:
+                    raise ApiError(409, "이 작업 폴더에서 UI 가 시작한 실행이 아직 끝나지 않았습니다.")
+
+    def _live(self, wd: Path) -> dict[str, Any] | None:
+        info = read_lock(wd)
+        if info is None:
+            return None
+        return {"pid": info.pid, "run_id": info.run_id, "started_at": info.started_at}
+
+    def _run_summary(self, wd: Path, rd: Path) -> dict[str, Any]:
+        try:
+            st = RunState.load(rd)
+        except (OSError, ValueError, TypeError) as e:
+            return {"run_id": rd.name, "status": "broken", "error": str(e)}
+        live = self._live(wd)
+        is_live = bool(live and live.get("run_id") == st.run_id)
+        return {
+            "run_id": st.run_id, "status": st.status, "phase": st.phase, "step": st.step, "round": st.round,
+            "task": st.task[:300], "created_at": st.created_at, "updated_at": st.updated_at,
+            "calls": len(st.calls), "total_sec": round(sum(c.sec for c in st.calls), 1),
+            "last_verdict": st.last_verdict, "config": st.config, "error": st.error,
+            "live": is_live, "stale": st.status == RUNNING and not is_live,
+        }
+
+    def _resume_hint(self, st: RunState, wd: Path) -> dict[str, Any]:
+        cur = int(st.config.get("max_review") or 0)
+        if st.status == DONE_UNAPPROVED:
+            return {"possible": cur < MAX_REVIEW_ROUNDS, "needs_max_review": True, "current_max_review": cur,
+                    "reason": "리뷰 상한이 최대치입니다." if cur >= MAX_REVIEW_ROUNDS else ""}
+        if st.finished:
+            return {"possible": False, "needs_max_review": False, "current_max_review": cur,
+                    "reason": "이미 끝난 실행입니다."}
+        live = self._live(wd)
+        if live and live.get("run_id") == st.run_id:
+            return {"possible": False, "needs_max_review": False, "current_max_review": cur,
+                    "reason": "지금 실행 중입니다."}
+        return {"possible": True, "needs_max_review": False, "current_max_review": cur, "reason": ""}
+
+    def _defaults(self, wd: Path) -> dict[str, Any]:
+        try:
+            cfg = load_config(wd if wd.is_dir() else None)
+        except ConfigError as e:
+            return {"error": str(e)}
+        return {"implementer": cfg.implementer, "reviewer": cfg.reviewer, "synth": cfg.synth_name,
+                "debate_rounds": cfg.debate_rounds, "max_review": cfg.max_review,
+                "limits": {"debate_rounds": MAX_DEBATE_ROUNDS, "max_review": MAX_REVIEW_ROUNDS}}
+
+    def _verdict(self, path: Path) -> dict[str, Any]:
+        key = (str(path), path.stat().st_mtime)
+        if key not in self._verdict_cache:
+            v = parse_verdict(split_header(path.read_text(encoding="utf-8", errors="replace"))[1])
+            self._verdict_cache[key] = {"status": v.status.value, "must_fix": v.must_fix, "source": v.source,
+                                        "parse_failed": v.parse_failed, "contradiction": v.contradiction}
+        return self._verdict_cache[key]
+
+
+def _looks_like_duet(pid: int) -> bool:
+    if not pid_alive(pid):
+        return False
+    cmdline = Path(f"/proc/{pid}/cmdline")
+    if not cmdline.exists():
+        return True  # /proc 가 없는 OS: 잠금 파일을 믿는다
+    try:
+        return b"duet" in cmdline.read_bytes()
+    except OSError:
+        return False
+
+
+_CALL_START_RE = re.compile(r"^\[(\d{2}):(\d{2}):(\d{2})\] (\w+) ← (\w+)(?: \(재시도 (\d+)\))? 실행 중")
+_CALL_END_RE = re.compile(r"^\[\d{2}:\d{2}:\d{2}\] (\w+) ← (\w+)(?: \(재시도 \d+\))? (완료|실패)")
+
+
+def current_call(console: Path, now: dt.datetime | None = None) -> dict[str, Any] | None:
+    """console.log 끝부분에서 '지금 진행 중인 호출'을 찾는다."""
+    try:
+        with console.open("rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 16_384))
+            tail = f.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(tail):
+        if _CALL_END_RE.match(line):
+            return None
+        m = _CALL_START_RE.match(line)
+        if m:
+            hh, mm, ss, agent, step, retry = m.groups()
+            now = now or dt.datetime.now()
+            started = now.replace(hour=int(hh), minute=int(mm), second=int(ss), microsecond=0)
+            elapsed = (now - started).total_seconds()
+            if elapsed < 0:  # 자정을 넘김
+                elapsed += 86_400
+            return {"agent": agent, "step": step, "retry": int(retry or 0),
+                    "started": f"{hh}:{mm}:{ss}", "elapsed_sec": int(elapsed)}
+    return None

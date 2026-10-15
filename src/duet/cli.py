@@ -55,6 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_log.add_argument("--run", metavar="RUN_ID", help="특정 실행 ID (기본: 마지막 실행)")
     p_log.add_argument("--all", action="store_true", help="모든 실행을 한 줄씩 나열")
     p_log.set_defaults(func=cmd_log)
+
+    p_ui = sub.add_parser("ui", help="관리자 UI(로컬 웹 대시보드) 실행")
+    p_ui.add_argument("--host", default="127.0.0.1", help="바인딩 주소 (기본: 127.0.0.1)")
+    p_ui.add_argument("--port", type=int, default=8787, help="포트 (기본: 8787, 사용 중이면 다음 번호)")
+    p_ui.add_argument("--workdir", action="append", default=[], metavar="PATH",
+                      help="목록에 추가할 작업 폴더 (여러 번 지정 가능)")
+    p_ui.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않음")
+    p_ui.set_defaults(func=cmd_ui)
     return parser
 
 
@@ -94,6 +102,17 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_resume(args: argparse.Namespace) -> int:
     return Orchestrator().resume(Path(args.workdir), args.run, max_review=args.max_review).exit_code
+
+
+# ---------------------------------------------------------------------- ui
+def cmd_ui(args: argparse.Namespace) -> int:
+    from duet.ui.server import serve
+
+    try:
+        serve(args.host, args.port, open_browser=not args.no_browser, extra_projects=args.workdir)
+    except OSError as e:
+        raise OrchestratorError(str(e)) from e
+    return EXIT_OK
 
 
 # ---------------------------------------------------------------------- log

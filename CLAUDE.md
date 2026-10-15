@@ -23,3 +23,5 @@
 - 설치: `pip install -e ".[dev]"`
 - 테스트: `pytest -q`
 - 수동 확인: `duet run "할일 CLI" --workdir /tmp/duet-try --mock`
+- 관리자 UI: `duet ui` (느린 mock 으로 화면 확인: `DUET_MOCK_DELAY=1 duet ui`)
+- UI 테스트는 `tests/test_ui.py`(HTTP 수준). 테스트는 `DUET_HOME` 을 임시 폴더로 바꿔 사용자의 `~/.duet` 을 건드리지 않는다.

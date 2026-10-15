@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="duet-token" content="__DUET_TOKEN__">
+  <title>duet 관리자</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <a class="brand" href="#/">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span></span>
+        <span class="brand-name">duet</span>
+        <span class="brand-sub">관리자</span>
+      </a>
+      <button type="button" class="btn btn-primary btn-block" id="sidebar-new-run">새 실행</button>
+      <nav class="side-nav" aria-label="프로젝트">
+        <div class="side-title">프로젝트</div>
+        <ul id="side-projects" class="side-projects"></ul>
+      </nav>
+      <div class="side-foot" id="side-foot">연결 중…</div>
+    </aside>
+    <main id="main" class="main" tabindex="-1"></main>
+  </div>
+
+  <dialog id="run-dialog" class="dialog" aria-labelledby="run-dialog-title">
+    <form id="run-form" method="dialog" novalidate>
+      <header class="dialog-head">
+        <h2 id="run-dialog-title">새 실행</h2>
+        <button type="button" class="icon-btn" data-close aria-label="닫기">×</button>
+      </header>
+      <div class="dialog-body">
+        <label class="field">
+          <span class="field-label">작업 폴더 <em>절대 경로</em></span>
+          <input name="project" type="text" required placeholder="/home/me/memo-cli" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="field">
+          <span class="field-label">과제</span>
+          <textarea name="task" rows="5" required placeholder="마크다운 메모를 태그로 검색하는 CLI"></textarea>
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">구현</span>
+            <select name="implementer"><option value="claude">claude</option><option value="codex">codex</option></select>
+          </label>
+          <label class="field">
+            <span class="field-label">리뷰</span>
+            <select name="reviewer"><option value="codex">codex</option><option value="claude">claude</option></select>
+          </label>
+          <label class="field">
+            <span class="field-label">설계 종합</span>
+            <select name="synth"><option value="">리뷰 담당</option><option value="claude">claude</option><option value="codex">codex</option></select>
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">토론 라운드 <em>0–5</em></span>
+            <input name="debate_rounds" type="number" min="0" max="5" value="1">
+          </label>
+          <label class="field">
+            <span class="field-label">리뷰 최대 <em>1–10</em></span>
+            <input name="max_review" type="number" min="1" max="10" value="3">
+          </label>
+        </div>
+        <fieldset class="checks">
+          <label><input type="checkbox" name="design_only"> 설계만 <small>토론 후 DESIGN.md만 만들고 끝냄</small></label>
+          <label><input type="checkbox" name="skip_design"> 설계 생략 <small>기존 DESIGN.md로 바로 구현</small></label>
+          <label><input type="checkbox" name="mock"> mock <small>실제 CLI 없이 흐름만 확인</small></label>
+          <label><input type="checkbox" name="force"> 커밋 안 된 변경 무시</label>
+        </fieldset>
+        <p class="note" id="run-cost-note">실제 실행은 Claude·ChatGPT 구독 사용량을 씁니다. 처음이면 ‘설계만’으로 시작해 보세요.</p>
+        <p class="form-error" id="run-form-error" role="alert" hidden></p>
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn" data-close>취소</button>
+        <button type="submit" class="btn btn-primary" id="run-submit">시작</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>
