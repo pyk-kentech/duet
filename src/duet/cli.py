@@ -44,6 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_resume = sub.add_parser("resume", help="중단된 마지막 실행을 이어서 진행")
     _add_workdir(p_resume)
     p_resume.add_argument("--run", metavar="RUN_ID", help="특정 실행 ID (기본: 마지막 실행)")
+    p_resume.add_argument("--max-review", type=int,
+                          help="구현-리뷰 상한을 늘려서 이어감 (미승인으로 끝난 실행을 계속할 때 필요, 최대 10)")
     p_resume.set_defaults(func=cmd_resume)
 
     p_log = sub.add_parser("log", help="지난 실행 기록 보기")
@@ -90,7 +92,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
-    return Orchestrator().resume(Path(args.workdir), args.run).exit_code
+    return Orchestrator().resume(Path(args.workdir), args.run, max_review=args.max_review).exit_code
 
 
 # ---------------------------------------------------------------------- log

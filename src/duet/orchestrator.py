@@ -109,22 +109,37 @@ class Orchestrator:
         return self._execute(workdir, run_dir, cfg, agents, state)
 
     # ---------------------------------------------------------------- resume
-    def resume(self, workdir: Path, run_id: str | None = None) -> RunOutcome:
+    def resume(self, workdir: Path, run_id: str | None = None,
+               max_review: int | None = None) -> RunOutcome:
         workdir = Path(workdir).expanduser().resolve()
         run_dir = self._find_run(workdir, run_id)
         state = RunState.load(run_dir)
-        if state.finished:
+        prev_max = int(state.config.get("max_review") or 0)
+
+        if state.status == DONE_UNAPPROVED:
+            # 리뷰 상한을 다 쓴 실행: 상한을 늘려 주면 마지막 리뷰를 반영하는 라운드부터 이어간다
+            if max_review is None or max_review <= prev_max:
+                raise OrchestratorError(
+                    f"마지막 실행({state.run_id})은 리뷰 {prev_max}회를 모두 써서 미승인으로 끝났습니다. "
+                    f"이어가려면 상한을 늘리세요: duet resume --workdir {workdir} --max-review {prev_max + 1}"
+                )
+        elif state.finished:
             raise OrchestratorError(
                 f"마지막 실행({state.run_id})은 이미 끝났습니다 (status={state.status}). "
                 "새로 시작하려면 `duet run` 을 쓰세요."
             )
+
         overrides = {k: state.config.get(k) for k in CONFIG_KEYS}
+        if max_review is not None:
+            overrides["max_review"] = max_review
         cfg = self._load_config(workdir, overrides)
+        state.config["max_review"] = cfg.max_review
         mock = bool(state.config.get("mock"))
         agents = self._make_agents(cfg, mock)
 
         self.log(f"이어하기: {state.run_id}  (이전 status={state.status}, phase={state.phase}, "
-                 f"step={state.step}, round={state.round})")
+                 f"step={state.step}, round={state.round})"
+                 + (f" / 리뷰 상한 {prev_max} → {cfg.max_review}회" if cfg.max_review != prev_max else ""))
         state.status = RUNNING
         state.error = None
         state.save(run_dir)

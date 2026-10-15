@@ -44,6 +44,9 @@ duet run "..." --workdir ./x --implementer codex --reviewer claude
 # 중단된 실행 이어하기 (마지막 run 기준, --run <id> 로 특정 run)
 duet resume --workdir ./x
 
+# 리뷰 상한을 다 써서 미승인으로 끝난 실행을, 상한을 늘려 마지막 리뷰 반영부터 이어가기
+duet resume --workdir ./x --max-review 3
+
 # 지난 실행 기록 보기
 duet log --workdir ./x            # 최근 run 요약
 duet log --workdir ./x --full     # 전체 발언을 순서대로 출력
@@ -230,6 +233,7 @@ BuildPhase
 ```
 
 - 각 스텝 직후 `RunState`를 갱신 저장. resume은 마지막 완료 스텝 다음부터 이어간다.
+- `done_unapproved`로 끝난 실행은 `resume --max-review N`(N > 기존 상한)으로만 이어갈 수 있다. 이때 다음 라운드는 마지막 리뷰를 반영하는 `fix`로 시작한다. 상한을 늘리지 않으면 안내 메시지와 함께 거부한다.
 - 같은 에이전트가 두 번 연속 실패(비정상 종료)하면 1회 재시도 후 상태 저장하고 종료.
 
 ---

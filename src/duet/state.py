@@ -83,6 +83,7 @@ class RunState:
 
     @property
     def resumable(self) -> bool:
+        """그대로 이어갈 수 있는 상태. done_unapproved 는 max_review 를 늘리면 이어갈 수 있다(Orchestrator 가 판단)."""
         return self.status in (RUNNING, STOPPED_RATE_LIMIT, FAILED)
 
     # ---------------------------------------------------------------- io

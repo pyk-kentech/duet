@@ -191,3 +191,52 @@ def test_console_entrypoint_subprocess(tmp_path: Path):
                         "--design-only", "--debate-rounds", "0"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert "설계만 완료" in r.stdout
+
+
+def test_resume_unapproved_with_higher_max_review(tmp_path: Path, monkeypatch, capsys):
+    wd = tmp_path / "x"
+    first = {"claude": MockAdapter(label="claude"), "codex": MockAdapter(label="codex", approve_on_review=0)}
+    second = {"claude": MockAdapter(label="claude"), "codex": MockAdapter(label="codex", approve_on_review=1)}
+    it = iter([first, second])
+    monkeypatch.setattr(orch_mod, "make_agents", lambda cfg, *, mock: next(it))
+    assert run_cli("run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", "--max-review", "1") == 1
+    run_dir = only_run(wd)
+    assert RunState.load(run_dir).status == DONE_UNAPPROVED
+    capsys.readouterr()
+
+    # 상한을 안 늘리면 거부 (같거나 작아도 거부)
+    assert run_cli("resume", "--workdir", str(wd)) == 2
+    assert "--max-review 2" in capsys.readouterr().err
+    assert run_cli("resume", "--workdir", str(wd), "--max-review", "1") == 2
+    capsys.readouterr()
+    # 범위 밖
+    assert run_cli("resume", "--workdir", str(wd), "--max-review", "11") == 2
+    capsys.readouterr()
+
+    assert run_cli("resume", "--workdir", str(wd), "--max-review", "3") == 0
+    out = capsys.readouterr().out
+    assert "리뷰 상한 1 → 3회" in out and "[2/3] 리뷰 반영: claude" in out and "✅" in out
+    st = RunState.load(run_dir)
+    assert st.status == DONE_APPROVED and st.config["max_review"] == 3
+    assert file_names(run_dir) == ["01_propose_claude.md", "02_propose_codex.md", "03_synthesize_codex.md",
+                                   "04_impl1_claude.md", "05_review1_codex.md",
+                                   "06_impl2_claude.md", "07_review2_codex.md"]
+    assert [c.step for c in second["claude"].calls] == ["fix"]        # 구현이 아니라 리뷰 반영
+    assert "## 반드시 고칠 것" in second["claude"].calls[0].prompt      # 이전 리뷰가 프롬프트에 들어감
+    assert Workspace(wd).commit_count() == 3
+    assert len(list_run_dirs(wd)) == 1
+
+    # 승인된 실행은 상한을 늘려도 resume 불가
+    assert run_cli("resume", "--workdir", str(wd), "--max-review", "5") == 2
+    assert "이미 끝났습니다" in capsys.readouterr().err
+
+
+def test_resume_running_run_can_raise_max_review(tmp_path: Path, monkeypatch):
+    wd = tmp_path / "x"
+    first = {"claude": MockAdapter(label="claude"), "codex": MockAdapter(label="codex", fail_on_calls={3, 4})}
+    second = {"claude": MockAdapter(label="claude"), "codex": MockAdapter(label="codex", approve_on_review=2)}
+    it = iter([first, second])
+    monkeypatch.setattr(orch_mod, "make_agents", lambda cfg, *, mock: next(it))
+    assert run_cli("run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", "--max-review", "1") == 3
+    assert run_cli("resume", "--workdir", str(wd), "--max-review", "2") == 0
+    assert RunState.load(only_run(wd)).config["max_review"] == 2

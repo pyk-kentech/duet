@@ -59,6 +59,9 @@ duet run "..." --workdir ./x --implementer codex --reviewer claude --debate-roun
 # 중단된 실행 이어하기 (마지막 run 기준, --run <id> 로 특정 run)
 duet resume --workdir ./x
 
+# 리뷰 상한을 다 써서 미승인으로 끝났을 때: 상한을 늘려 마지막 리뷰 반영부터 이어가기
+duet resume --workdir ./x --max-review 3
+
 # 기록 보기
 duet log --workdir ./x            # 최근 run 요약
 duet log --workdir ./x --full     # 전체 발언을 순서대로 출력
@@ -83,7 +86,7 @@ duet run "..." --workdir ./x --mock
 | 코드 | 의미 |
 |---|---|
 | 0 | 리뷰 승인으로 완료, 또는 `--design-only` 완료 |
-| 1 | `max_review` 안에 승인되지 않음 (마지막 리뷰 파일 경로를 출력) |
+| 1 | `max_review` 안에 승인되지 않음 (마지막 리뷰 파일 경로를 출력). `resume --max-review N`으로 이어갈 수 있음 |
 | 2 | 사용 오류 (설정 값, 작업 폴더 가드, CLI 미설치 등) |
 | 3 | 중단됨 (구독 한도 도달 또는 에이전트 반복 실패) → `duet resume` |
 
