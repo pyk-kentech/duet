@@ -14,6 +14,7 @@ from typing import Callable, Mapping
 
 from duet.agents.base import AgentAdapter, AgentRequest, AgentResult, Mode
 from duet.config import Config
+from duet.runner import RunnerError
 from duet.state import FAILED, STOPPED_RATE_LIMIT, RunState
 from duet.transcript import Transcript
 
@@ -87,7 +88,14 @@ class PhaseContext:
             attempt += 1
             started = time.monotonic()
             self.log(f"{agent_name} ← {step}" + (f" (재시도 {attempt - 1})" if attempt > 1 else "") + " 실행 중...")
-            result = agent.ask(req)
+            try:
+                result = agent.ask(req)
+            except (OSError, RunnerError) as e:
+                # 실행 자체가 안 됨(인자 길이 초과, 실행 파일 사라짐 등). 재시도해도 같으므로 바로 멈춘다.
+                self.state.status = FAILED
+                self.state.error = f"{agent_name} {step} 실행 불가: {e}"
+                self.save()
+                raise AgentFailed(agent_name, step, f"실행 불가: {e}") from e
             elapsed = result.duration_sec or (time.monotonic() - started)
 
             meta = {
@@ -95,6 +103,7 @@ class PhaseContext:
                 "round": round_, "attempt": attempt,
                 "duration_sec": elapsed, "exit_code": result.exit_code,
                 "rate_limited": result.rate_limited, "timed_out": result.timed_out,
+                "ok": result.ok,
                 **(extra_meta or {}),
             }
             body = result.text if result.ok else _failure_body(result)

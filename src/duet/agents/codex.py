@@ -1,7 +1,7 @@
 """Codex CLI 어댑터.
 
 호출 형태(codex-cli 0.16x 기준, `codex exec --help`로 확인):
-  codex exec --skip-git-repo-check -C <cwd> [모드별 플래그] -o <last_msg_file> <prompt>
+  codex exec --skip-git-repo-check -C <cwd> [모드별 플래그] -o <last_msg_file> -- <prompt>
 - 결과: `-o/--output-last-message` 파일 내용. 비어 있으면 stdout 전체.
 - 긴 프롬프트: 프롬프트 자리에 `-`를 주면 stdin에서 읽는다.
 """
@@ -63,9 +63,10 @@ class CodexAdapter:
             *mode_args,
             "--output-last-message", str(last_message_path),
         ]
-        if len(req.prompt) > self.cfg.prompt_arg_max_chars:
+        if len(req.prompt.encode("utf-8")) > self.cfg.prompt_arg_max_bytes:
             return [*cmd, STDIN_MARKER], req.prompt
-        return [*cmd, req.prompt], None
+        # '-' 로 시작하는 프롬프트가 옵션으로 읽히지 않게 (codex-cli 0.162.1 에서 `--` 동작 확인)
+        return [*cmd, "--", req.prompt], None
 
     # ---------------------------------------------------------------- ask
     def ask(self, req: AgentRequest) -> AgentResult:

@@ -27,6 +27,16 @@ DEFAULT_RATE_LIMIT_PATTERNS = [
 ]
 
 
+DEFAULT_DIFF_EXCLUDES = [
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb", "npm-shrinkwrap.json",
+    "uv.lock", "poetry.lock", "Pipfile.lock", "pdm.lock",
+    "Cargo.lock", "go.sum", "composer.lock", "Gemfile.lock", "mix.lock", "pubspec.lock",
+]
+
+# 이름이 바뀐 설정 키 (예전 duet.toml 호환)
+RENAMED_KEYS = {"prompt_arg_max_chars": "prompt_arg_max_bytes"}
+
+
 class ConfigError(Exception):
     """설정 값이 잘못됨."""
 
@@ -69,8 +79,11 @@ class Config:
     max_review: int = 3
     timeout_sec: int = 1200
     max_diff_chars: int = 60_000
-    # 프롬프트가 이 길이를 넘으면 인자 대신 stdin으로 전달
-    prompt_arg_max_chars: int = 100_000
+    # 프롬프트가 이 크기(UTF-8 바이트)를 넘으면 인자 대신 stdin으로 전달.
+    # Linux 는 인자 하나를 128KiB 로 제한하고 한글은 글자당 3바이트라 '글자 수'로 재면 넘친다.
+    prompt_arg_max_bytes: int = 100_000
+    # 리뷰 diff 에서 뺄 경로(glob). 잠금 파일은 크고 이름순으로 앞에 와서 실제 코드를 밀어낸다.
+    diff_excludes: list[str] = field(default_factory=lambda: list(DEFAULT_DIFF_EXCLUDES))
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
     claude: AgentConfig = field(default_factory=_default_claude)
     codex: AgentConfig = field(default_factory=_default_codex)
@@ -101,8 +114,10 @@ class Config:
             raise ConfigError(f"timeout_sec는 양수여야 합니다: {self.timeout_sec}")
         if self.max_diff_chars <= 0:
             raise ConfigError(f"max_diff_chars는 양수여야 합니다: {self.max_diff_chars}")
-        if self.prompt_arg_max_chars <= 0:
-            raise ConfigError(f"prompt_arg_max_chars는 양수여야 합니다: {self.prompt_arg_max_chars}")
+        if not (0 < self.prompt_arg_max_bytes <= 120_000):
+            raise ConfigError(f"prompt_arg_max_bytes는 1~120000 사이여야 합니다: {self.prompt_arg_max_bytes}")
+        if not isinstance(self.diff_excludes, list) or not all(isinstance(x, str) for x in self.diff_excludes):
+            raise ConfigError("diff_excludes는 문자열 리스트여야 합니다")
         for name in AGENT_NAMES:
             ac = self.agent(name)
             if not ac.bin:
@@ -151,6 +166,7 @@ def _read_toml(path: Path) -> dict[str, Any]:
 def _apply(cfg: Config, data: Mapping[str, Any], *, source: str) -> Config:
     top: dict[str, Any] = {}
     for key, value in data.items():
+        key = RENAMED_KEYS.get(key, key)
         if key in AGENT_NAMES:
             if not isinstance(value, Mapping):
                 raise ConfigError(f"{source}: [{key}] 는 테이블이어야 합니다")

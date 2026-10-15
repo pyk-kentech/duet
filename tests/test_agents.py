@@ -54,7 +54,7 @@ class TestClaude:
 
     def test_long_prompt_goes_to_stdin(self, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
         monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
-        cfg = load_config(None, {"claude": {"bin": fake_cfg.claude.bin}, "prompt_arg_max_chars": 100})
+        cfg = load_config(None, {"claude": {"bin": fake_cfg.claude.bin}, "prompt_arg_max_bytes": 100})
         long_prompt = "가" * 101
         a = ClaudeCodeAdapter(cfg)
         cmd, stdin = a.build_command(req(tmp_path, prompt=long_prompt))
@@ -153,7 +153,7 @@ class TestCodex:
             "-C", str(tmp_path),
             "--sandbox", "read-only",
             "--output-last-message", "/tmp/last.md",
-            "안녕",
+            "--", "안녕",
         ]
 
     def test_write_command(self, fake_cfg: Config, tmp_path: Path):
@@ -177,7 +177,7 @@ class TestCodex:
 
     def test_long_prompt_goes_to_stdin(self, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
         monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
-        cfg = load_config(None, {"codex": {"bin": fake_cfg.codex.bin}, "prompt_arg_max_chars": 100})
+        cfg = load_config(None, {"codex": {"bin": fake_cfg.codex.bin}, "prompt_arg_max_bytes": 100})
         long_prompt = "나" * 500
         r = CodexAdapter(cfg).ask(req(tmp_path, prompt=long_prompt))
         assert r.ok

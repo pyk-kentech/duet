@@ -54,7 +54,7 @@ class ClaudeCodeAdapter:
         """(명령어, stdin 텍스트)를 돌려준다. 프롬프트가 길면 stdin으로 넘긴다."""
         mode_args = self.agent_cfg.read_args if req.mode is Mode.READ else self.agent_cfg.write_args
         cmd = [self.agent_cfg.bin, *self.agent_cfg.base_args, *mode_args]
-        if len(req.prompt) > self.cfg.prompt_arg_max_chars:
+        if len(req.prompt.encode("utf-8")) > self.cfg.prompt_arg_max_bytes:
             return cmd, req.prompt
         # `--allowedTools <tools...>` 같은 가변 인자 옵션이 프롬프트를 삼키지 않도록 옵션 종료자를 넣는다
         return [*cmd, "--", req.prompt], None

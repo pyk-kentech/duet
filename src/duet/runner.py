@@ -13,6 +13,7 @@ import logging
 import os
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,6 +27,8 @@ TIMEOUT_EXIT_CODE = -1
 KILL_GRACE_SEC = 3.0
 # 그룹을 죽인 뒤 남은 출력을 모으는 최대 시간
 DRAIN_SEC = 5.0
+# 프로세스가 정상 종료한 뒤 출력 파이프가 닫히기를 기다리는 시간
+PIPE_GRACE_SEC = 2.0
 
 
 class RunnerError(Exception):
@@ -96,27 +99,91 @@ def run_process(
     except FileNotFoundError as e:
         raise ExecutableNotFound(cmd[0]) from e
 
+    io = _PipeIO(proc, stdin_text)
     try:
-        stdout, stderr = proc.communicate(stdin_text, timeout=timeout_sec)
+        # communicate() 는 '파이프가 닫힐 때'까지 기다린다. 에이전트가 띄운 백그라운드 프로세스가
+        # 출력 파이프를 물고 있으면 정상 종료한 호출도 타임아웃이 된다. 그래서 '프로세스 종료'를 기다린다.
+        proc.wait(timeout=timeout_sec)
     except subprocess.TimeoutExpired:
         log.warning("시간 초과(%ss): %s", timeout_sec, _fmt_cmd(cmd))
         kill_process_group(proc)
-        stdout, stderr = _drain(proc)
+        stdout, stderr = io.finish(DRAIN_SEC)
         return ProcessResult(
             cmd=cmd, stdout=stdout, stderr=stderr, exit_code=TIMEOUT_EXIT_CODE,
             duration_sec=time.monotonic() - started, timed_out=True, stdin_text=stdin_text,
         )
     except BaseException:
         kill_process_group(proc)
-        _drain(proc)
+        io.finish(DRAIN_SEC)
         raise
 
+    stdout, stderr = io.finish(PIPE_GRACE_SEC)
+    if io.leaked:
+        # 리더는 끝났는데 같은 그룹의 자식이 파이프를 잡고 있다 → 정리
+        log.warning("종료 후에도 출력 파이프를 잡은 하위 프로세스를 정리합니다: %s", _fmt_cmd(cmd))
+        kill_process_group(proc)
+        more_out, more_err = io.finish(DRAIN_SEC)
+        stdout, stderr = more_out, more_err
     duration = time.monotonic() - started
     log.debug("done: exit=%s, %.1fs", proc.returncode, duration)
     return ProcessResult(
         cmd=cmd, stdout=stdout, stderr=stderr, exit_code=proc.returncode,
         duration_sec=duration, stdin_text=stdin_text,
     )
+
+
+class _PipeIO:
+    """stdin 쓰기와 stdout/stderr 읽기를 스레드로 처리한다(서로 막지 않게)."""
+
+    def __init__(self, proc: subprocess.Popen, stdin_text: str | None):
+        self.proc = proc
+        self.out: list[str] = []
+        self.err: list[str] = []
+        self.threads = [
+            threading.Thread(target=self._read, args=(proc.stdout, self.out), daemon=True),
+            threading.Thread(target=self._read, args=(proc.stderr, self.err), daemon=True),
+        ]
+        if stdin_text is not None:
+            self.threads.append(threading.Thread(target=self._write, args=(stdin_text,), daemon=True))
+        for t in self.threads:
+            t.start()
+        self.leaked = False
+
+    @staticmethod
+    def _read(pipe: IO[str] | None, sink: list[str]) -> None:
+        if pipe is None:
+            return
+        try:
+            while True:
+                chunk = pipe.read(65536)
+                if not chunk:
+                    break
+                sink.append(chunk)
+        except (ValueError, OSError):
+            pass
+
+    def _write(self, text: str) -> None:
+        pipe = self.proc.stdin
+        if pipe is None:
+            return
+        try:
+            pipe.write(text)
+            pipe.close()
+        except (BrokenPipeError, ValueError, OSError):
+            pass
+
+    def finish(self, grace: float) -> tuple[str, str]:
+        """읽기 스레드가 끝나기를 grace 초까지 기다린다.
+
+        파이프를 직접 닫지 않는다: 다른 스레드가 read() 중인 버퍼를 close() 하면 그 read 가
+        끝날 때까지 막힌다. 대신 호출한 쪽이 프로세스 그룹을 죽여 파이프가 닫히게 한다.
+        그래도 안 닫히면(그룹 밖으로 도망간 프로세스) 데몬 스레드를 버리고 지금까지 읽은 것만 돌려준다.
+        """
+        deadline = time.monotonic() + grace
+        for t in self.threads:
+            t.join(max(0.0, deadline - time.monotonic()))
+        self.leaked = any(t.is_alive() for t in self.threads)
+        return "".join(self.out), "".join(self.err)
 
 
 def kill_process_group(proc: subprocess.Popen) -> None:
@@ -138,27 +205,6 @@ def kill_process_group(proc: subprocess.Popen) -> None:
         os.killpg(pgid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
-
-
-def _drain(proc: subprocess.Popen) -> tuple[str, str]:
-    """죽인 프로세스의 남은 출력을 모은다. 그룹 밖으로 도망간 프로세스가 파이프를 잡고 있으면 포기한다."""
-    try:
-        out, err = proc.communicate(timeout=DRAIN_SEC)
-        return out or "", err or ""
-    except subprocess.TimeoutExpired as e:
-        for pipe in (proc.stdin, proc.stdout, proc.stderr):
-            try:
-                if pipe:
-                    pipe.close()
-            except OSError:
-                pass
-        try:
-            proc.wait(timeout=DRAIN_SEC)
-        except subprocess.TimeoutExpired:
-            pass
-        return _as_text(e.stdout), _as_text(e.stderr)
-    except (ValueError, OSError):
-        return "", ""
 
 
 def spawn_detached(

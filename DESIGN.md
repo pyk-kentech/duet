@@ -188,7 +188,7 @@ class AgentAdapter(Protocol):
 | WRITE 모드 | `--permission-mode acceptEdits --allowedTools Read,Edit,Write,Glob,Grep,Bash` | `--sandbox workspace-write` |
 
 - 플래그는 어댑터 안에 하드코딩하지 말고 `config.py`의 기본값으로 두어, 버전 차이가 나면 `duet.toml`로 덮어쓸 수 있게 한다.
-- 프롬프트가 매우 길어질 수 있으므로(설계안 2개 + 비판), `prompt_arg_max_chars`(기본 100,000자)를 넘으면 stdin으로 폴백한다. 두 CLI 모두 `--help`에 명시된 방식이다:
+- 프롬프트가 매우 길어질 수 있으므로(설계안 2개 + 비판), `prompt_arg_max_bytes`(기본 100,000 바이트, UTF-8 기준)를 넘으면 stdin으로 폴백한다. Linux 의 인자 하나 한도는 128KiB 이고 한글은 글자당 3바이트라 글자 수로 재면 안 된다. 두 CLI 모두 `--help`에 명시된 방식이다:
   - Claude Code: `-p`에서 위치 인자 프롬프트를 생략하면 stdin을 프롬프트로 읽는다.
   - Codex: 프롬프트 자리에 `-`를 주면 stdin에서 읽는다.
 - **Claude 는 프롬프트 앞에 `--` 가 필수**: `--allowedTools <tools...>` 가 공백 구분 가변 인자라서 뒤따르는 프롬프트를 도구 이름으로 삼킨다(첫 실제 실행에서 "Input must be provided..." 로 발견). `--` 를 넣으면 파싱을 통과함을 잘못된 API 키 + `--bare` 로 확인(인증 단계에서 실패하므로 사용량 소모 없음). JSON 의 `is_error: true` 는 exit 0 이어도 실패로 본다.
@@ -210,6 +210,7 @@ must_fix: 3
 ```
 
 - 파싱 실패 시 레거시 형식 `VERDICT: APPROVED` 한 줄도 허용.
+- 모델이 붙이는 마크다운 장식(`**status:** APPROVED`, `` `APPROVED` ``, `- status: ...`)은 무시하고 읽는다.
 - 둘 다 없으면 `CHANGES_REQUESTED`로 간주하되, Transcript에 `parse_failed` 표시.
 - `status: APPROVED`인데 `must_fix > 0`이면 모순 → `CHANGES_REQUESTED`로 처리.
 
@@ -227,7 +228,8 @@ BuildPhase
   loop i in 1..max_review:
     implementer.ask(implement 또는 fix)          # WRITE
     commit("duet: impl round i")
-    diff = workspace.diff(base, HEAD, exclude=[DESIGN.md])
+    (리뷰 전 커밋 안 된 변경이 있으면 보존 커밋)
+    diff = 변경 파일 요약(stat) + workspace.diff(base, HEAD, exclude=[DESIGN.md, 잠금 파일들])
     reviewer.ask(review)                          # READ
     if workspace.dirty(): 경고 + 되돌림
     verdict → APPROVED면 종료
@@ -290,6 +292,7 @@ BuildPhase
 - 사용자가 `<workdir>/.duet/templates/`에 같은 이름의 파일을 두면 그걸 우선 사용(커스터마이즈).
 - 초기 문구는 `prototype/agent_team.py`의 `P_*` 상수를 기반으로 하되, 판정 블록을 5.3 형식으로 바꾼다.
 - 비판 프롬프트의 개정안 추출은 `## 개정안` 헤더 기준. 없으면 응답 전체를 개정안으로 사용.
+- 개정안·비판 요약은 **성공한** 기록(메타 `ok: true`) 중 같은 (에이전트, 라운드)의 마지막 것을 쓴다. 한도·타임아웃으로 실패한 기록은 exit 0 이어도 쓰지 않는다.
 
 ---
 
@@ -306,7 +309,8 @@ max_review = 3
 timeout_sec = 1200
 max_diff_chars = 60000
 
-prompt_arg_max_chars = 100000   # 넘으면 stdin 폴백
+prompt_arg_max_bytes = 100000   # UTF-8 바이트. 넘으면 stdin 폴백 (최대 120000)
+diff_excludes = ["package-lock.json", "yarn.lock", "uv.lock", "poetry.lock", "Cargo.lock", "go.sum", "..."]  # 리뷰 diff 에서 뺄 파일
 
 [claude]
 bin = "claude"
@@ -330,7 +334,9 @@ write_args = ["--sandbox", "workspace-write"]
 ## 9. 안전장치
 
 - **작업 폴더 가드**: workdir이 홈 디렉터리 자체이거나 `/`이면 거부. 기존 git 저장소인데 커밋 안 된 변경이 있으면 거부(`--force`로 무시 가능). 단 `.duet/` 아래 변경은 항상 무시하고, `--skip-design` 일 때는 `DESIGN.md` 변경도 무시한다(설계만 → 사람이 수정 → 구현 흐름).
-- **프로세스 정리**: claude/codex 는 새 프로세스 그룹으로 띄우고, 타임아웃·중단 시 그룹 전체를 SIGTERM → SIGKILL 한다. 에이전트가 띄운 테스트나 셸 명령이 남지 않는다.
+- **프로세스 정리**: claude/codex 는 새 프로세스 그룹으로 띄우고, 타임아웃·중단 시 그룹 전체를 SIGTERM → SIGKILL 한다. 에이전트가 띄운 테스트나 셸 명령이 남지 않는다. 출력 파이프가 닫히기가 아니라 **프로세스 종료**를 기다리므로, 백그라운드 프로세스가 파이프를 물고 있어도 정상 종료한 호출이 타임아웃으로 처리되지 않는다(2초 유예 후 그룹 정리).
+- **git 오류**: 에이전트가 하위 저장소를 만들었거나 커밋이 실패하면 `failed` 로 저장하고 안내 후 종료. 구현 호출이 성공한 뒤 커밋 전에 실패하면 `impl:i:called` 가 남아 resume 때 구현을 다시 부르지 않는다. duet 커밋은 `commit.gpgsign=false` 로 한다.
+- **resume 때 사용자 수정 보존**: 리뷰 직전에 커밋 안 된 변경이 있으면 'duet: uncommitted changes before review i' 로 커밋한 뒤 리뷰한다(리뷰어가 바꾼 것으로 오인해 지우지 않음).
 - **동시 실행 방지**: `.duet/lock.json` 잠금.
 - **반복 상한**: `debate_rounds`, `max_review` 상한을 각각 5, 10으로 강제.
 - **리뷰어 쓰기 차단**: READ 모드 + 리뷰 후 `git status` 검사 → 변경 있으면 경고 후 `checkout`/`clean`으로 되돌림(`.duet/` 제외).

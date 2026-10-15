@@ -47,15 +47,24 @@ class Verdict:
 
 
 _BLOCK_RE = re.compile(r"<verdict>(.*?)</verdict>", re.IGNORECASE | re.DOTALL)
-_STATUS_RE = re.compile(r"^\s*status\s*:\s*(APPROVED|CHANGES_REQUESTED)\b", re.IGNORECASE | re.MULTILINE)
-_MUST_FIX_RE = re.compile(r"^\s*must_fix\s*:\s*(\d+)", re.IGNORECASE | re.MULTILINE)
-_LEGACY_RE = re.compile(r"VERDICT\s*:\s*\**\s*(APPROVED|CHANGES_REQUESTED)\b", re.IGNORECASE)
+_LIST = r"(?:[-*+>]\s*|\d+[.)]\s*)?"
+_STATUS_RE = re.compile(r"^\s*" + _LIST + r"status\s*:\s*(APPROVED|CHANGES_REQUESTED)\b",
+                        re.IGNORECASE | re.MULTILINE)
+_MUST_FIX_RE = re.compile(r"^\s*" + _LIST + r"must_fix\s*:\s*(\d+)", re.IGNORECASE | re.MULTILINE)
+_LEGACY_RE = re.compile(r"VERDICT\s*:\s*(APPROVED|CHANGES_REQUESTED)\b", re.IGNORECASE)
+# 모델이 즐겨 붙이는 강조 기호: **status:** APPROVED, `APPROVED` (밑줄은 CHANGES_REQUESTED 의 일부라 건드리지 않음)
+_DECORATION_RE = re.compile(r"[*`]")
+
+
+def _plain(text: str) -> str:
+    return _DECORATION_RE.sub("", text)
 
 
 def parse_verdict(text: str) -> Verdict:
     """리뷰 응답 전체에서 판정을 뽑는다. 여러 개면 마지막 것을 쓴다."""
     blocks = _BLOCK_RE.findall(text or "")
     for body in reversed(blocks):
+        body = _plain(body)
         m = _STATUS_RE.search(body)
         if not m:
             continue
@@ -66,7 +75,7 @@ def parse_verdict(text: str) -> Verdict:
             return Verdict(Status.CHANGES_REQUESTED, must_fix, "block", contradiction=True)
         return Verdict(status, must_fix, "block")
 
-    legacy = _LEGACY_RE.findall(text or "")
+    legacy = _LEGACY_RE.findall(_plain(text or ""))
     if legacy:
         return Verdict(Status(legacy[-1].upper()), None, "legacy")
 

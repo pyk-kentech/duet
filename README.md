@@ -125,7 +125,8 @@ debate_rounds = 1                # 0~5
 max_review = 3                   # 1~10
 timeout_sec = 1200               # 호출 1회 제한
 max_diff_chars = 60000           # 리뷰 프롬프트에 넣을 diff 최대 길이
-prompt_arg_max_chars = 100000    # 넘으면 프롬프트를 stdin으로 전달
+prompt_arg_max_bytes = 100000    # UTF-8 바이트. 넘으면 프롬프트를 stdin으로 전달
+diff_excludes = ["package-lock.json", "yarn.lock", "uv.lock", "poetry.lock", "Cargo.lock", "go.sum", "..."]  # 리뷰 diff 에서 뺄 잠금 파일 (기본값 일부)
 
 [claude]
 bin = "claude"

@@ -23,6 +23,7 @@ from duet.lock import LockBusy, RunLock
 from duet.phases.build import BuildPhase
 from duet.phases.common import PhaseContext, PhaseStop
 from duet.phases.debate import DESIGN_FILENAME, DebatePhase
+from duet.registry import register_quietly
 from duet.state import (
     DONE_APPROVED,
     DONE_DESIGN,
@@ -38,7 +39,7 @@ from duet.state import (
     list_run_dirs,
 )
 from duet.transcript import Transcript
-from duet.workspace import WorkdirRefused, check_workdir
+from duet.workspace import GitError, WorkdirRefused, check_workdir
 
 Printer = Callable[[str], None]
 
@@ -124,6 +125,7 @@ class Orchestrator:
         agents = self._make_agents(cfg, opts.mock)
 
         with self._locked(workdir, "run") as lock:
+            register_quietly(workdir)
             run_dir = create_run_dir(workdir)
             lock.set_run(run_dir.name)
             state = RunState(run_id=run_dir.name, task=opts.task, config=self._snapshot(cfg, opts))
@@ -171,6 +173,7 @@ class Orchestrator:
             # 잠금을 잡은 뒤 다시 읽는다(그 사이 다른 프로세스가 바꿨을 수 있음)
             state = RunState.load(run_dir)
             lock.set_run(run_dir.name)
+            register_quietly(workdir)
             state.config["max_review"] = cfg.max_review
             with self._console_to(run_dir):
                 self.log(f"이어하기: {state.run_id}  (이전 status={state.status}, phase={state.phase}, "
@@ -207,6 +210,14 @@ class Orchestrator:
                 self.log(f"실패 기록을 확인한 뒤 `duet resume --workdir {workdir}` 으로 다시 시도할 수 있습니다.")
             self.log(f"기록: {run_dir}")
             return RunOutcome(state, run_dir, stop)
+        except GitError as e:
+            state.status = FAILED
+            state.error = f"git 오류: {e}"
+            state.save(run_dir)
+            self.log(f"중단: git 오류 — {e}")
+            self.log("작업 폴더의 git 상태를 확인한 뒤(예: 에이전트가 만든 하위 저장소, 서명 설정) "
+                     f"`duet resume --workdir {workdir}` 으로 이어서 실행할 수 있습니다.")
+            return RunOutcome(state, run_dir)
         except KeyboardInterrupt:
             # Ctrl-C 또는 UI 의 중지(SIGTERM → KeyboardInterrupt). 진행 중이던 호출은 runner 가 이미 종료함.
             state.status = STOPPED_USER
@@ -214,6 +225,13 @@ class Orchestrator:
             state.save(run_dir)
             self.log(f"사용자 중단. `duet resume --workdir {workdir}` 으로 이어서 실행할 수 있습니다.")
             return RunOutcome(state, run_dir)
+        except Exception as e:
+            # 예상 못 한 오류도 상태는 남긴다(running 으로 남으면 UI/resume 가 헷갈림)
+            state.status = FAILED
+            state.error = f"내부 오류: {type(e).__name__}: {e}"
+            state.save(run_dir)
+            self.log(f"중단: 내부 오류 — {type(e).__name__}: {e}")
+            raise
 
         if approved:
             self.log("✅ 리뷰 승인으로 종료")

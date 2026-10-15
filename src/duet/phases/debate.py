@@ -15,6 +15,7 @@ from duet.agents.base import Mode
 from duet.phases.common import PhaseContext
 from duet.prompts import render
 from duet.state import PHASE_DEBATE
+from duet.transcript import Entry
 
 DESIGN_FILENAME = "DESIGN.md"
 BACKUP_FILENAME = "DESIGN.prev.md"
@@ -110,22 +111,40 @@ class DebatePhase:
         return final
 
     # ---------------------------------------------------------------- helpers
+    def _successful_critiques(self) -> dict[tuple[str, int], Entry]:
+        """(agent, round) → 성공한 비판 기록. 재시도·resume 로 여러 개면 마지막 것."""
+        found: dict[tuple[str, int], Entry] = {}
+        for entry in self.ctx.transcript.entries():
+            m = entry.meta
+            if m.get("step") != "critique" or not is_success(entry):
+                continue
+            try:
+                found[(m.get("agent", ""), int(m.get("round", "0")))] = entry
+            except ValueError:
+                continue
+        return found
+
     def _revision_text(self, name: str, round_: int) -> str:
         """round_ 라운드까지 반영된 name 의 설계안 텍스트."""
         if round_ <= 0:
             return self.ctx.transcript.read(self.state.proposals[name]).strip()
-        for entry in self.ctx.transcript.entries():
-            m = entry.meta
-            if m.get("step") == "critique" and m.get("agent") == name and m.get("round") == str(round_) \
-                    and m.get("exit_code") == "0":
-                return split_revision(entry.body())
-        raise RuntimeError(f"기록을 찾을 수 없음: {name} 라운드 {round_} 비판")
+        entry = self._successful_critiques().get((name, round_))
+        if entry is None:
+            raise RuntimeError(f"기록을 찾을 수 없음: {name} 라운드 {round_} 비판")
+        return split_revision(entry.body())
 
     def _critique_summary(self) -> str:
-        parts = []
-        for entry in self.ctx.transcript.entries():
-            m = entry.meta
-            if m.get("step") != "critique" or m.get("exit_code") != "0":
-                continue
-            parts.append(f"### R{m.get('round')} {m.get('agent')}의 비판\n{split_critique(entry.body())}")
-        return "\n\n".join(parts)
+        items = sorted(self._successful_critiques().items(), key=lambda kv: (kv[0][1], kv[1].seq))
+        return "\n\n".join(
+            f"### R{rnd} {agent}의 비판\n{split_critique(entry.body())}" for (agent, rnd), entry in items
+        )
+
+
+def is_success(entry: Entry) -> bool:
+    """성공한 호출의 기록인가. 실패 기록은 exit 0 이어도(한도·타임아웃) `_failed` 로 저장된다."""
+    if entry.label.endswith("_failed"):
+        return False
+    m = entry.meta
+    if "ok" in m:
+        return m["ok"] == "true"
+    return m.get("exit_code") == "0" and m.get("rate_limited") != "true" and m.get("timed_out") != "true"

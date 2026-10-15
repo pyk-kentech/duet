@@ -10,6 +10,14 @@ from duet.config import Config, load_config
 FAKE_BIN = Path(__file__).parent / "fake_bin"
 
 
+@pytest.fixture(autouse=True)
+def isolated_duet_home(tmp_path_factory, monkeypatch) -> Path:
+    """테스트가 사용자의 ~/.duet/projects.json 을 건드리지 않게 한다."""
+    home = tmp_path_factory.mktemp("duet-home")
+    monkeypatch.setenv("DUET_HOME", str(home))
+    return home
+
+
 @pytest.fixture
 def fake_bin() -> Path:
     return FAKE_BIN

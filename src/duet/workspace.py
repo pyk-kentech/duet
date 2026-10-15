@@ -10,7 +10,9 @@ from duet.state import DUET_DIR
 
 GIT_IDENTITY = ["-c", "user.name=duet", "-c", "user.email=duet@local",
                 # 한글 등 비ASCII 파일 이름을 "\355\225..." 로 이스케이프하지 않게
-                "-c", "core.quotepath=off"]
+                "-c", "core.quotepath=off",
+                # 사용자 전역 설정의 commit.gpgsign=true 때문에 duet 커밋이 실패하지 않게
+                "-c", "commit.gpgsign=false"]
 GITIGNORE_LINE = f"{DUET_DIR}/"
 
 
@@ -93,9 +95,19 @@ class Workspace:
             return 0
         return int(self.git("rev-list", "--count", "HEAD").strip())
 
-    def diff(self, base: str, head: str = "HEAD", exclude: Iterable[str] = ()) -> str:
-        pathspec = [".", *(f":(exclude){e}" for e in exclude)]
-        return self.git("diff", "--no-color", base, head, "--", *pathspec)
+    @staticmethod
+    def _pathspec(exclude: Iterable[str], exclude_globs: Iterable[str]) -> list[str]:
+        spec = [".", *(f":(exclude,literal){e}" for e in exclude)]
+        for g in exclude_globs:
+            spec.append(f":(exclude,glob){g}" if "/" in g else f":(exclude,glob)**/{g}")
+        return spec
+
+    def diff(self, base: str, head: str = "HEAD", exclude: Iterable[str] = (),
+             exclude_globs: Iterable[str] = ()) -> str:
+        return self.git("diff", "--no-color", base, head, "--", *self._pathspec(exclude, exclude_globs))
+
+    def diff_stat(self, base: str, head: str = "HEAD", exclude: Iterable[str] = ()) -> str:
+        return self.git("diff", "--no-color", "--stat=200,150", base, head, "--", *self._pathspec(exclude, ()))
 
     # ---------------------------------------------------------------- restore
     def restore_clean(self, keep: Sequence[str] = (DUET_DIR,)) -> None:
