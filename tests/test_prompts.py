@@ -17,7 +17,8 @@ def test_render_task():
 
 def test_review_template_has_verdict_block():
     out = render("review", task="t", diff="d", implementer_name="claude", tests="T", previous_review="P",
-                 diff_title="구현 전체 diff", test_instruction="I", repro_instruction="R")
+                 diff_title="구현 전체 diff", test_instruction="I", repro_instruction="R",
+                 design_doc="DESIGN.md", design_note="")
     assert "<verdict>" in out and "must_fix" in out and "p3:" in out and "[P1]" in out
 
 

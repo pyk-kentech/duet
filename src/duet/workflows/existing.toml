@@ -1,5 +1,5 @@
 name = "existing"
-description = "기존 코드베이스에서 작업할 때: Codex 가 먼저 코드를 조사하고, 그 결과로 설계 토론 → 구현 → 리뷰"
+description = "기존 코드베이스에서 작업할 때: Codex 가 먼저 코드를 조사하고, 이번 변경만 설계(DESIGN.md 는 그대로, docs/changes/ 에 저장) → 구현 → 리뷰"
 
 [roles.scout]
 agent = "codex"
@@ -19,6 +19,7 @@ role = "scout"
 kind = "debate"
 proposers = ["claude", "codex"]
 synth = "codex"
+output = "change"
 
 [[steps]]
 kind = "build"

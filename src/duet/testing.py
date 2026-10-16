@@ -46,21 +46,28 @@ def resolve_command(workdir: Path, configured: str) -> tuple[str, str] | None:
     c = (configured or "auto").strip()
     if c.lower() == "none":
         return None
+    v = _toml_test_command(workdir)
     if c.lower() != "auto":
-        return c, "설정"
-    toml = workdir / "duet.toml"
-    if toml.is_file():
-        try:
-            v = tomllib.loads(toml.read_text(encoding="utf-8")).get("test_command")
-        except (OSError, tomllib.TOMLDecodeError):
-            v = None
-        if isinstance(v, str) and v.strip():
-            if v.strip().lower() == "none":
-                return None
-            if v.strip().lower() != "auto":
-                return v.strip(), "duet.toml"
+        # 작업 폴더 duet.toml 의 값은 설정 층으로도 읽힌다. 같은 값이면 출처를 duet.toml 로 (DESIGN.md 19.7)
+        return c, "duet.toml" if v is not None and v.strip() == c else "설정"
+    if v is not None and v.strip():
+        if v.strip().lower() == "none":
+            return None
+        if v.strip().lower() != "auto":
+            return v.strip(), "duet.toml"
     detected = detect_command(workdir)
     return (detected, "자동 감지") if detected else None
+
+
+def _toml_test_command(workdir: Path) -> str | None:
+    toml = workdir / "duet.toml"
+    if not toml.is_file():
+        return None
+    try:
+        v = tomllib.loads(toml.read_text(encoding="utf-8")).get("test_command")
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return v if isinstance(v, str) else None
 
 
 def _has_tool(name: str) -> bool:

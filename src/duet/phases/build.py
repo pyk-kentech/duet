@@ -55,10 +55,14 @@ def truncate_diff(diff: str, max_chars: int) -> str:
     return diff[:max_chars] + TRUNCATED_NOTE
 
 
-def build_review_diff(ws: Workspace, base: str, excludes_glob: list[str], max_chars: int) -> str:
-    """리뷰어에게 줄 diff. 맨 앞의 파일 요약(stat)은 잘리지 않게 두고, 본문 diff 만 자른다."""
-    stat = ws.diff_stat(base, "HEAD", exclude=DIFF_EXCLUDES)
-    body = ws.diff(base, "HEAD", exclude=DIFF_EXCLUDES, exclude_globs=excludes_glob)
+def build_review_diff(ws: Workspace, base: str, excludes_glob: list[str], max_chars: int,
+                      exclude: tuple[str, ...] = DIFF_EXCLUDES) -> str:
+    """리뷰어에게 줄 diff. 맨 앞의 파일 요약(stat)은 잘리지 않게 두고, 본문 diff 만 자른다.
+
+    exclude: 빼는 파일(설계 문서). 변경 설계면 DESIGN.md 대신 docs/changes/<run>.md (DESIGN.md 19.5).
+    """
+    stat = ws.diff_stat(base, "HEAD", exclude=exclude)
+    body = ws.diff(base, "HEAD", exclude=exclude, exclude_globs=excludes_glob)
     if not stat.strip() and not body.strip():
         return "(변경 없음)"
     header = "[변경 파일 요약]\n" + stat.rstrip() + "\n"
@@ -191,7 +195,7 @@ class BuildPhase:
                     f"{', 지난 리뷰 이후만' if '이후' in diff_title else ''})")
             prompt = ctx.prompt(role, "review", task=ctx.task, diff=diff, diff_title=diff_title,
                                 implementer_name=self.implementer,
-                                tests=self._tests_text(i), test_instruction=self._test_instruction(i),
+                                tests=self._tests_text(i), test_instruction=self._test_instruction(i, role),
                                 previous_review=self._previous_must_fix(role),
                                 repro_instruction=REPRO_INSTRUCTION if self.cfg.repro_tests else "")
             st.reviewed_commits[str(i)] = self.ws.head()
@@ -297,8 +301,15 @@ class BuildPhase:
         except (OSError, KeyError):
             return f"명령: {t.get('command')}\n결과: {STATUS_KO.get(t.get('status'), t.get('status'))}"
 
-    def _test_instruction(self, i: int) -> str:
-        if self.state.tests.get(str(i)):
+    def _test_instruction(self, i: int, role: str | None = None) -> str:
+        ran = bool(self.state.tests.get(str(i)))
+        if role is not None and not self.ctx.can_run_commands(role):
+            # Claude 읽기 모드는 명령을 못 돌린다 (DESIGN.md 19.6)
+            head = "위 테스트는 duet 가 방금 직접 실행했다. " if ran else "duet 가 테스트를 돌리지 않았다. "
+            tail = ("재현 테스트로 내라." if self.cfg.repro_tests else "P3 로 적어라.")
+            return (head + "너는 이 호출에서 명령을 실행할 수 없다(읽기 전용). 코드와 위 테스트 결과로 판단하고, "
+                    "실행해 봐야 알 수 있는 의심은 추측으로 반려하지 말고 " + tail)
+        if ran:
             return ("위 테스트는 duet 가 방금 직접 실행했다. 전체 테스트를 다시 돌리지 마라. "
                     "특정 동작을 확인해야 할 때만 그 부분만 좁게 실행해라.")
         return "duet 가 테스트를 돌리지 않았다. 필요하면 직접 실행해도 된다."
@@ -317,13 +328,16 @@ class BuildPhase:
 
     def _review_diff(self, i: int, base: str) -> tuple[str, str]:
         full_title = "구현 전체 diff"
+        exclude = (self.ctx.design_doc,)
         if self.cfg.review_diff != "incremental" or i <= 1:
-            return full_title, build_review_diff(self.ws, base, self.cfg.diff_excludes, self.cfg.max_diff_chars)
+            return full_title, build_review_diff(self.ws, base, self.cfg.diff_excludes, self.cfg.max_diff_chars,
+                                                 exclude)
         prev = self._reviewed_commit(i - 1)
         if not prev:
-            return full_title, build_review_diff(self.ws, base, self.cfg.diff_excludes, self.cfg.max_diff_chars)
-        stat = self.ws.diff_stat(base, "HEAD", exclude=DIFF_EXCLUDES)
-        body = self.ws.diff(prev, "HEAD", exclude=DIFF_EXCLUDES, exclude_globs=self.cfg.diff_excludes)
+            return full_title, build_review_diff(self.ws, base, self.cfg.diff_excludes, self.cfg.max_diff_chars,
+                                                 exclude)
+        stat = self.ws.diff_stat(base, "HEAD", exclude=exclude)
+        body = self.ws.diff(prev, "HEAD", exclude=exclude, exclude_globs=self.cfg.diff_excludes)
         note = (f"아래 diff 는 지난 리뷰(커밋 {prev}) 이후 바뀐 부분만이다. 처음부터의 전체 변경은 "
                 f"`git diff {base} HEAD` 로 볼 수 있다. 바뀐 부분과 그 영향을 받는 코드 위주로 리뷰해라.\n\n"
                 f"[처음부터의 변경 파일 요약]\n{stat.rstrip() or '(없음)'}\n")

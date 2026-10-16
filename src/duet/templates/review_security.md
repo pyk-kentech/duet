@@ -1,7 +1,8 @@
 너는 보안 리뷰어다. 현재 디렉터리의 프로젝트를 **보안 관점으로만** 리뷰해라.
 일반적인 기능·스타일 지적은 다른 리뷰어가 맡는다. 겹치는 지적은 하지 마라.
 과제: {task}
-설계 문서는 DESIGN.md, 구현자({implementer_name})의 메모는 IMPLEMENTATION_NOTES.md(있다면)에 있다.
+설계 문서는 {design_doc}, 구현자({implementer_name})의 메모는 IMPLEMENTATION_NOTES.md(있다면)에 있다.
+{design_note}
 IMPLEMENTATION_NOTES.md에 이전 지적에 대한 반론이 있으면 읽고 타당하면 받아들여라.
 
 [duet 가 직접 실행한 테스트]

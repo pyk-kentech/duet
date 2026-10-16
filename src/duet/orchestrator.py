@@ -52,6 +52,7 @@ CONFIG_KEYS = ("workflow", "implementer", "reviewer", "synth", "debate_rounds", 
                "test_command", "block_severity", "stall_rounds", "require_tests_pass",
                "review_diff", "repro_tests")
 CONSOLE_LOG = "console.log"
+CHANGES_DIR = "docs/changes"   # 기존 프로젝트의 변경 설계를 두는 곳 (DESIGN.md 19.5)
 
 EXIT_OK = 0
 EXIT_UNAPPROVED = 1
@@ -145,6 +146,9 @@ class Orchestrator:
             lock.set_run(run_dir.name)
             state = RunState(run_id=run_dir.name, task=opts.task, config=self._snapshot(cfg, opts),
                              workflow=None if wf.is_classic else wf.to_dict())
+            debate = wf.first("debate")
+            if debate is not None and debate.output == "change" and not opts.skip_design:
+                state.design_doc = f"{CHANGES_DIR}/{run_dir.name}.md"   # DESIGN.md 19.5
             if opts.skip_design:
                 state.mark_done("debate")
             state.save(run_dir)
@@ -316,8 +320,9 @@ class Orchestrator:
         state.status = DONE_DESIGN
         ctx.set_position(PHASE_DONE, "design_only", state.round)
         state.save(run_dir)
-        if state.is_done("debate") and (workdir / DESIGN_FILENAME).is_file():
-            self.log(f"설계만 완료. {workdir / DESIGN_FILENAME} 를 확인하세요.")
+        doc = workdir / (state.design_doc or DESIGN_FILENAME)
+        if state.is_done("debate") and doc.is_file():
+            self.log(f"설계만 완료. {doc} 를 확인하세요.")
         else:
             self.log(f"구현 단계가 없는 워크플로라 여기서 끝납니다. 기록: {run_dir}")
         return RunOutcome(state, run_dir)

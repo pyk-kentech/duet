@@ -116,6 +116,13 @@ class DebatePhase:
     def _write_design(self) -> str:
         ctx, st = self.ctx, self.state
         final = ctx.transcript.read(st.final_design)  # type: ignore[arg-type]
+        if ctx.change_mode:
+            # 기존 프로젝트의 변경 설계: DESIGN.md 는 그대로 두고 따로 저장 (DESIGN.md 19.5)
+            path = ctx.workdir / ctx.design_doc
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(final, encoding="utf-8")
+            ctx.log(f"변경 설계 저장: {ctx.design_doc} ({DESIGN_FILENAME} 는 그대로)")
+            return final
         design_path = ctx.workdir / DESIGN_FILENAME
         if design_path.is_file():
             old = design_path.read_text(encoding="utf-8")

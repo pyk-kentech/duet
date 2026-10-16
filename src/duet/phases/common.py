@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 Logger = Callable[[str], None]
 EXPLORE_NOTE_MAX = 20_000   # 사전 조사 결과를 프롬프트에 붙일 때 최대 길이
+DESIGN_DOC_DEFAULT = "DESIGN.md"
 
 
 class PhaseStop(Exception):
@@ -74,11 +75,47 @@ class PhaseContext:
             return self.workflow.roles[role].agent
         return role
 
+    @property
+    def design_doc(self) -> str:
+        """설계 문서 경로(작업 폴더 기준). 변경 설계면 docs/changes/<run>.md (DESIGN.md 19.5)."""
+        return self.state.design_doc or DESIGN_DOC_DEFAULT
+
+    @property
+    def change_mode(self) -> bool:
+        return bool(self.state.design_doc) and self.state.design_doc != DESIGN_DOC_DEFAULT
+
+    def design_note(self) -> str:
+        if not self.change_mode:
+            return ""
+        return (f"이번 작업은 기존 프로젝트를 바꾸는 것이다. 이번 변경의 설계는 {self.design_doc} 에 있다. "
+                "프로젝트 전체 설계(DESIGN.md, 있다면)와 기존 코드의 관례를 함께 따르고, "
+                "과제에 필요하지 않은 기존 동작은 바꾸지 마라.")
+
+    def can_run_commands(self, role: str) -> bool:
+        """읽기 모드에서 이 역할이 명령을 실행할 수 있는가 (DESIGN.md 19.6).
+
+        Claude 는 read_args 에 Bash 가 있을 때만(기본 Read,Glob,Grep 이라 불가), Codex read-only 샌드박스는 가능.
+        """
+        cli = self.cli_of(role)
+        if cli != "claude":
+            return True
+        if self.workflow is not None and role in self.workflow.roles:
+            ac = self.workflow.roles[role].agent_config(self.cfg)
+        else:
+            ac = self.cfg.agent(cli)
+        return any("Bash" in a for a in ac.read_args)
+
     def prompt(self, role: str, step: str, **values: object) -> str:
-        """step 의 프롬프트. 역할이 템플릿을 바꿨으면 그것을 쓰고, 사전 조사·역할 지시를 붙인다."""
+        """step 의 프롬프트. 역할이 템플릿을 바꿨으면 그것을 쓰고, 사전 조사·변경 설계 안내·역할 지시를 붙인다."""
         r = self.workflow.roles.get(role) if self.workflow is not None else None
         name = r.templates.get(step, step) if r is not None else step
+        values.setdefault("design_doc", self.design_doc)
+        values.setdefault("design_note", self.design_note())
         text = render(name, self.workdir, **values)
+        if self.change_mode and step in ("propose", "critique", "synthesize"):
+            text += ("\n\n## 기존 프로젝트의 변경\n\n이 과제는 기존 프로젝트를 바꾸는 작업이다. 프로젝트 전체를 다시 "
+                     "설계하지 말고 이번 변경만 설계해라: 바꿀 파일·함수, 지켜야 할 기존 동작, 테스트, 문서 갱신. "
+                     f"결과는 {self.design_doc} 에 저장되고 DESIGN.md 는 덮어쓰지 않는다.")
         if step in ("propose", "implement"):
             notes = self._explore_notes()
             if notes:

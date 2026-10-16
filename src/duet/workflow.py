@@ -42,7 +42,7 @@ SOURCE_LABELS = {"config": "기본", "builtin": "내장", "user": "내 템플릿
 _ROLE_KEYS = {"agent", "model", "effort", "step_effort", "instructions", "templates"}
 _STEP_KEYS = {
     "explore": {"kind", "id", "role"},
-    "debate": {"kind", "id", "proposers", "rounds", "synth"},
+    "debate": {"kind", "id", "proposers", "rounds", "synth", "output"},
     "build": {"kind", "id", "implementer", "reviewers", "max_review"},
     "audit": {"kind", "id", "roles"},
 }
@@ -96,6 +96,7 @@ class Step:
     proposers: list[str] = field(default_factory=list)       # debate
     synth: str | None = None
     rounds: int | None = None
+    output: str | None = None                                # None/"design": DESIGN.md, "change": 변경 설계 (19.5)
     implementer: str | None = None                           # build
     reviewers: list[str] = field(default_factory=list)
     max_review: int | None = None
@@ -123,6 +124,8 @@ class Step:
                 parts += f" → {self.synth}"
             if self.rounds is not None:
                 parts += f", {self.rounds}R"
+            if self.output == "change":
+                parts += ", 변경 설계"
             return f"debate({parts})"
         if self.kind == "build":
             extra = f", 최대 {self.max_review}회" if self.max_review is not None else ""
@@ -308,6 +311,10 @@ def _parse_step(i: int, sdata: Any, roles: Mapping[str, Role], err) -> Step:
             raise err(f"{label}: 제안자가 1명이면 synth 를 쓰지 않습니다 (그 제안이 그대로 DESIGN.md 가 됩니다)")
         elif step.rounds:
             raise err(f"{label}: 제안자가 1명이면 비판 라운드(rounds)를 쓸 수 없습니다")
+        output = sdata.get("output")
+        if output not in (None, "design", "change"):
+            raise err(f"{label}: output 은 design 또는 change 여야 합니다: {output!r}")
+        step.output = None if output in (None, "design") else output
     elif kind == "build":
         step.implementer = _need_role(sdata.get("implementer"), label, roles, err)
         step.reviewers = _role_list(sdata, "reviewers", label, roles, err, lo=1, hi=MAX_REVIEWERS)

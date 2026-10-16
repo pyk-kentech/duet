@@ -609,9 +609,9 @@ memo-cli 실측(Codex 세션 기록): 설계 단계 호출은 입력 약 2만 �
 | kind | 키 | 하는 일 | resume 키 |
 |---|---|---|---|
 | `explore` | `id`, `role` | 읽기 전용으로 기존 코드를 조사(`explore` 템플릿). 결과를 이후 propose·implement 프롬프트 끝에 "사전 조사"로 붙인다 | `explore:<id>` |
-| `debate` | `proposers`(1~2), `rounds`, `synth` | 지금의 설계 토론. 제안자가 1명이면 비판 없이, `synth` 가 없으면 그 제안을 그대로 DESIGN.md 로 | `debate` (+ 기존 세부 키) |
+| `debate` | `proposers`(1~2), `rounds`, `synth`, `output` | 지금의 설계 토론. 제안자가 1명이면 비판 없이, `synth` 가 없으면 그 제안을 그대로 설계 문서로. `output = "change"` 면 기존 프로젝트의 변경 설계(19.5) | `debate` (+ 기존 세부 키) |
 | `build` | `implementer`, `reviewers`(1~3), `max_review` | 지금의 구현·테스트·리뷰 루프. 리뷰어가 여럿이면 아래 19.3 | 기존 키 + `review:i:<역할>` |
-| `audit` | `id`, `roles`(1~3) | build 가 승인으로 끝난 뒤, 기준 커밋부터 전체 diff 를 한 번 감사(`audit` 템플릿). **참고용**: 결과는 기록·로그·`run.json` 의 `audits` 에 남고 실행 상태는 바꾸지 않는다 | `audit:<id>` |
+| `audit` | `id`, `roles`(1~3) | build 가 승인으로 끝난 뒤, 기준 커밋부터 전체 diff 를 한 번 감사(`audit` 템플릿). **참고용**: 결과는 기록·로그·`run.json` 의 `audits` 에 남고 실행 상태는 바꾸지 않는다. 로그는 `문제 없음` 또는 `확인 필요 — P1=… P2=… P3=… (참고용)` 으로, '반려'라고 쓰지 않는다 | `audit:<id>` |
 
 - 규칙: 단계 1개 이상, `debate`·`build` 는 각각 최대 1개, `debate` 는 `build` 앞, `audit` 은 `build` 뒤, `explore` 는 `build` 앞. `id` 는 같은 kind 안에서 겹치지 않음(기본값 kind 이름). 참조하는 역할은 모두 정의돼 있어야 하고, 한 단계 안에서 역할이 겹치면 안 된다(리뷰어 목록에 구현자 불가).
 - `rounds`·`max_review` 를 템플릿에 쓰면 그 값이 duet.toml·전역 설정보다 우선하고, CLI `--debate-rounds`·`--max-review` 가 그보다 우선한다. 정해진 값은 실행 상태에 저장한다.
@@ -628,7 +628,24 @@ memo-cli 실측(Codex 세션 기록): 설계 단계 호출은 입력 약 2만 �
 - 선택: CLI `--workflow 이름`, 설정 `workflow = "이름"`(duet.toml·전역 설정). 기본 `classic`.
 - **`classic`** 은 파일이 아니라 설정에서 만든다: 역할 `claude`·`codex`(설정 그대로), `debate(proposers=[claude, codex], synth=synth, rounds=debate_rounds)` → `build(implementer, [reviewer], max_review)`. 기록 이름·resume 키·출력이 M12 와 완전히 같다. `--implementer/--reviewer/--synth` 는 classic 에서만 쓸 수 있다(다른 템플릿과 함께 주면 사용 오류).
 - 실행 시작 때 고른 템플릿을 해석한 정의 전체를 `run.json` 의 `workflow` 에 저장하고, resume 은 파일이 아니라 이 저장본을 쓴다. 예전 실행(`workflow` 없음)은 classic.
-- 내장 템플릿: `secure`(classic + 보안 리뷰어 + 마지막 감사), `existing`(기존 코드 조사 → 설계 토론 → 구현), `lean`(제안자 1명, 토론 없음, 리뷰어 1명. 가장 쌈).
+- 내장 템플릿: `secure`(classic + 보안 리뷰어 + 마지막 감사), `existing`(기존 코드 조사 → 변경 설계 토론(`output = "change"`) → 구현), `lean`(제안자 1명, 토론 없음, 리뷰어 1명. 가장 쌈).
 - 프롬프트 템플릿 찾는 곳도 같은 순서로 넓힌다: `<workdir>/.duet/templates/` → `$DUET_HOME/templates/` → 내장. 내장에 `explore.md`, `audit.md`, `review_security.md` 추가. 이름은 `[a-z][a-z0-9_]*`.
 - `duet workflows [--workdir P]`: 쓸 수 있는 템플릿 목록(이름, 출처, 설명, 역할·단계 요약). `duet workflows show 이름` 은 해석한 정의를 보여 준다.
 - UI: 새 실행 창에 워크플로 선택(설명·역할·단계 미리보기), 실행 상세에 워크플로 이름과 역할 표시. 지금 호출의 실시간 보기는 역할 → CLI 로 바꿔 세션 기록을 찾는다.
+
+### 19.5 기존 프로젝트의 변경 설계 (`output = "change"`)
+실제 실행(existing 워크플로)에서 설계 단계가 프로젝트 전체 설계인 DESIGN.md(122줄)를 이번 기능만 다룬 설계(334줄)로 덮어썼다. 설계 단계가 새 프로젝트를 전제로 만들어졌기 때문이다.
+- debate 단계에 `output = "change"` 를 주면 설계 결과를 `<workdir>/docs/changes/<run_id>.md` 에 쓰고 **DESIGN.md 는 건드리지 않는다**. 파일은 기준 커밋('duet: design')에 들어간다. 기본값 `output = "design"` 은 예전처럼 DESIGN.md(덮어쓸 때 백업).
+- 실행 상태 `design_doc` 에 이 경로(작업 폴더 기준 상대 경로)를 저장해 resume 때도 같은 파일을 쓴다. 없으면 `DESIGN.md`.
+- 프롬프트: 구현·수정·리뷰·감사 템플릿은 `DESIGN.md` 대신 `{design_doc}` 를 가리키고, 변경 설계일 때 `{design_note}` 에 "기존 프로젝트의 변경이다. 이번 변경의 설계는 그 파일, 프로젝트 전체 설계(DESIGN.md, 있다면)와 기존 코드 관례를 따르고, 과제에 필요하지 않은 기존 동작은 바꾸지 마라"를 넣는다(새 프로젝트면 빈 줄). 설계안·비판·종합 프롬프트 끝에는 "프로젝트 전체를 다시 설계하지 말고 이번 변경만 설계해라(바꿀 파일·함수, 지킬 기존 동작, 테스트, 문서 갱신)"를 붙인다.
+- 구현자가 고치면 안 되는 파일은 `{design_doc}` 이다. 변경 설계에서는 DESIGN.md 가 프로젝트 문서이므로, 변경에 필요하면 구현자가 갱신할 수 있다.
+- 리뷰 diff 에서 빼는 파일도 `{design_doc}` (새 프로젝트면 DESIGN.md, 변경 설계면 변경 설계 파일. DESIGN.md 갱신은 리뷰 대상).
+- `--design-only` 의 끝 안내와 UI '설계 문서' 탭은 그 실행의 `design_doc` 을 보여 준다.
+
+### 19.6 명령을 실행할 수 없는 리뷰어·감사자
+실제 실행에서 Claude 감사자가 "실행 권한이 없어 정적으로만 봤다"고 답했다. Claude 의 읽기 모드는 `--allowedTools Read,Glob,Grep` 이라 명령을 못 돌리는데, 프롬프트는 "필요한 부분만 좁게 확인해라"고 했다. Codex 의 `--sandbox read-only` 는 명령을 돌릴 수 있다.
+- 역할이 읽기 모드에서 명령을 실행할 수 있는지: Claude 는 `read_args` 에 `Bash` 가 있을 때만, Codex 는 항상.
+- 리뷰의 `{test_instruction}` 과 감사의 `{run_instruction}` 을 이에 맞춘다. 실행할 수 없으면 "너는 이 호출에서 명령을 실행할 수 없다. 코드와 duet 테스트 결과로 판단하고, 실행해 봐야 알 수 있는 의심은 추측으로 반려하지 말고 재현 테스트로 내라(재현 테스트를 끈 실행이면 P3 로)".
+
+### 19.7 테스트 명령의 출처 표시
+작업 폴더 `duet.toml` 의 `test_command` 는 설정 층으로도 읽히므로 출처가 `설정` 으로 찍혔다. 설정값이 작업 폴더 `duet.toml` 의 값과 같으면 출처를 `duet.toml` 로 표시한다.

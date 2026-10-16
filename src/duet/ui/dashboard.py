@@ -239,7 +239,9 @@ class Dashboard:
             rd = self.run_dir(wd, run_id)
             path = rd / BACKUP_FILENAME
         else:
-            path = wd / DESIGN_FILENAME
+            # 변경 설계로 끝난 실행은 그 실행의 docs/changes/<run>.md (DESIGN.md 19.5)
+            doc = RunState.load(self.run_dir(wd, run_id)).design_doc if run_id else None
+            path = wd / (doc or DESIGN_FILENAME)
         if not path.is_file():
             return {"text": None, "path": str(path)}
         return {"text": path.read_text(encoding="utf-8", errors="replace"), "path": str(path)}
