@@ -205,13 +205,16 @@ def _row(task: Task, workflow: str, rep: int, wd: Path, seconds: float, outcome:
                stop_reason=st.stop_reason, rounds=len(st.review_history), calls=len(st.calls),
                usage=_usage(st), cost_usd=round(cost, 4), run_dir=str(outcome.run_dir),
                own_tests=last_test.get("status") if last_test else None, hidden=hidden, error=st.error)
+    if st.limit_waited_sec:
+        row["limit_wait_sec"] = round(st.limit_waited_sec, 1)   # 소요 시간에서 뺄 수 있게 (DESIGN.md 25.1)
     return row
 
 
 def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC_WORKFLOW,),
               task_names: Sequence[str] | None = None, repeat: int = 1, max_review: int | None = None,
               out_root: Path, mock: bool = False, printer: Printer = print, verbose: bool = False,
-              pytest_cmd: Sequence[str] | None = None, now: dt.datetime | None = None) -> Path:
+              pytest_cmd: Sequence[str] | None = None, now: dt.datetime | None = None,
+              wait_on_limit: bool = False) -> Path:
     """벤치마크를 돌리고 결과 폴더를 돌려준다. 한도 도달·사용자 중단이면 거기서 멈춘다."""
     from duet.orchestrator import Orchestrator, OrchestratorError, RunOptions
 
@@ -220,7 +223,8 @@ def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC
     result_dir = Path(out_root).expanduser() / (now or dt.datetime.now()).strftime("%Y%m%d-%H%M%S")
     result_dir.mkdir(parents=True, exist_ok=False)
     meta = {"suite": suite, "workflows": list(workflows), "tasks": [t.name for t in tasks], "repeat": repeat,
-            "max_review": max_review, "mock": mock, "started": dt.datetime.now().isoformat(timespec="seconds")}
+            "max_review": max_review, "mock": mock, "wait_on_limit": wait_on_limit,
+            "started": dt.datetime.now().isoformat(timespec="seconds")}
     rows: list[dict[str, Any]] = []
     printer(f"벤치마크: 과제 {len(tasks)}개 × 워크플로 {len(workflows)}개 × {repeat}회 = {len(plan)}번 실행"
             + (" (mock)" if mock else "") + f" → {result_dir}")
@@ -230,6 +234,8 @@ def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC
         prepare_workdir(task, wd)
         orch = Orchestrator(printer=printer if verbose else (lambda line: None))
         overrides: dict[str, Any] = {"workflow": workflow}
+        if wait_on_limit:
+            overrides["wait_on_limit"] = True
         if max_review or task.max_review:
             overrides["max_review"] = max_review or task.max_review
         if task.timeout_sec:
@@ -312,7 +318,7 @@ def summarize(data: dict[str, Any]) -> str:
             f"| {w} | {len(rs)} | {sum(r['approved'] for r in rs)}/{len(rs)} | "
             f"{sum(1 for r in rs if r.get('arbiter') == 'arbiter')} | "
             f"{rate:.0f}% ({len(graded)}개 채점) | {all_pass}/{len(graded)} | {missed} | "
-            f"{_mean([r.get('rounds') or 0 for r in rs]):.1f} | {_fmt_sec(_mean([r.get('seconds') or 0 for r in rs]))} | "
+            f"{_mean([r.get('rounds') or 0 for r in rs]):.1f} | {_fmt_sec(_mean([(r.get('seconds') or 0) - (r.get('limit_wait_sec') or 0) for r in rs]))} | "
             f"{_mean([r.get('calls') or 0 for r in rs]):.1f} | {tok['claude']:,.0f} / {tok['codex']:,.0f} | {out_tok:,.0f} |")
     lines += ["", "## 실행별", "", "| 과제 | 워크플로 | # | 결과 | 라운드 | 숨은 테스트 | 자체 테스트 | 시간 | 호출 | 입력 토큰 |",
               "|---|---|---|---|---|---|---|---|---|---|"]

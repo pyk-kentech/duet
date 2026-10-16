@@ -896,6 +896,8 @@ class RunView {
       h('span', null, `리뷰가 수렴하지 않아 중재자가 열린 지적을 정리했고, 막는 지적이 남지 않아 승인했습니다 (완화 ${(arb.downgraded || []).join(', ') || '-'}, 기각 ${(arb.rejected || []).join(', ') || '-'}). 중재 결과(${arb.file || ''})를 확인하세요.`)));
     if ((st.stop_reason === 'arbiter_upheld' || st.stop_reason === 'arbiter_final') && !d.live) alerts.push(h('div', { class: 'alert alert-warn' }, h('b', null, '중재 뒤에도 미승인'),
       h('span', null, `중재자가 유지한 지적(${(arb.upheld || []).join(', ') || '테스트 실패'})이 해결되지 않았습니다. 중재 결과와 마지막 리뷰를 보고 직접 판단하세요.`)));
+    if (st.limit_wait && d.live) alerts.push(h('div', { class: 'alert alert-warn' }, h('b', null, '한도 대기 중'),
+      h('span', null, `${st.limit_wait.role || st.limit_wait.agent} 의 구독 한도에 걸려 ${String(st.limit_wait.until || '').replace('T', ' ').slice(5, 16)} 에 다시 시도합니다 (${st.limit_wait.reason || ''}). 지금 멈추려면 중지를 누르세요.`)));
     const guards = Object.entries(st.test_guard || {}).filter(([, g]) => (g.signals || []).length);
     if (guards.length) alerts.push(h('div', { class: 'alert alert-warn' }, h('b', null, '테스트 변경 감지'),
       h('span', null, `구현자가 테스트를 지우거나 약하게 바꾼 흔적이 있습니다 (${guards.map(([r, g]) => `${r}라운드 ${g.signals.length}건`).join(', ')}). 리뷰어에게 경고로 전달했습니다. 기록(${guards.map(([, g]) => g.file).join(', ')})을 확인하세요.`)));

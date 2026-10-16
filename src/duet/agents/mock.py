@@ -101,7 +101,8 @@ class MockAdapter:
                 findings = [] if approve else [{"id": "", "severity": "P2", "new": self.reviews == 1,
                                                 "title": "예외 처리 없음", "file": self.write_file,
                                                 "detail": "입력 오류를 처리하지 않는다",
-                                                "evidence": f"{self.write_file}:1 입력 검사 없음"}]
+                                                "evidence": f"{self.write_file}:1 입력 검사 없음",
+                                                "basis": "correctness", "requirement": ""}]
                 return json.dumps({"status": "APPROVED" if approve else "CHANGES_REQUESTED",
                                    "summary": f"{self.name} 리뷰", "findings": findings, "repro": []},
                                   ensure_ascii=False)

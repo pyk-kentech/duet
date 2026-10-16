@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help='구현 후 duet 가 돌릴 테스트 명령 (기본: auto = duet.toml → 자동 감지, "none" 이면 끔)')
     p_run.add_argument("--block-severity", choices=["P1", "P2", "P3"],
                        help="이 심각도 이상의 지적이 남아 있으면 반려 (기본: P2 → P3 만 남으면 승인)")
+    p_run.add_argument("--wait-on-limit", action="store_true",
+                       help="구독 한도에 걸리면 재개 시각까지 기다렸다가 이어서 실행 (최대 limit_wait_max_min 분)")
     p_run.add_argument("--claude-sandbox", action="store_true",
                        help="Claude 구현자의 명령을 OS 샌드박스 안에서 실행 (Linux: bubblewrap·socat 필요)")
     p_run.add_argument("--no-arbiter", action="store_true",
@@ -94,6 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
     b_run.add_argument("--repeat", type=int, default=1, help="같은 조합 반복 횟수 (기본 1)")
     b_run.add_argument("--max-review", type=int, help="구현-리뷰 최대 반복 (기본: 과제·설정 값)")
     b_run.add_argument("--out", help="결과 폴더 (기본: ~/.duet/bench)")
+    b_run.add_argument("--wait-on-limit", action="store_true",
+                       help="한도에 걸리면 멈추지 않고 재개 시각까지 기다렸다가 이어감")
     b_run.add_argument("--mock", action="store_true", help="실제 CLI 호출 없이 흐름만 확인")
     b_run.add_argument("--yes", action="store_true", help="실제 구독을 쓰는 실행에 동의")
     b_run.add_argument("--verbose", action="store_true", help="각 실행의 진행 로그도 출력")
@@ -166,6 +170,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "stall_rounds": args.stall_rounds,
             "arbiter": False if args.no_arbiter else None,
             "claude_sandbox": True if args.claude_sandbox else None,
+            "wait_on_limit": True if args.wait_on_limit else None,
         },
     )
     return Orchestrator().run(opts).exit_code
@@ -216,7 +221,8 @@ def cmd_bench_run(args: argparse.Namespace) -> int:
     out = Path(args.out).expanduser() if args.out else duet_home() / "bench"
     try:
         run_bench(suite=args.suite, workflows=workflows, task_names=args.task, repeat=args.repeat,
-                  max_review=args.max_review, out_root=out, mock=args.mock, verbose=args.verbose)
+                  max_review=args.max_review, out_root=out, mock=args.mock, verbose=args.verbose,
+                  wait_on_limit=args.wait_on_limit)
     except BenchError as e:
         raise OrchestratorError(str(e)) from e
     return EXIT_OK

@@ -333,6 +333,7 @@ class BuildPhase:
                 continue
             json_mode = self.cfg.review_json and self._template_has(role, "review", "{output_instruction}")
             use_gates = json_mode and self.cfg.review_gates
+            spec_text = self._spec_text() if use_gates and self.cfg.spec_gate else None
             repro_text = REPRO_INSTRUCTION if self.cfg.repro_tests else ""
             open_now = gates.open_issues(st, role) if use_gates else []
             focus = self._focus_ids(i) if use_gates else None
@@ -347,7 +348,7 @@ class BuildPhase:
                                        + " 만 막는 기준이다. 그 밖의 지적은 P3 로 처리된다)\n"
                                        + gates.format_open(open_now)),
                           output_instruction=output_instruction(json_mode, self.cfg.repro_tests, repro_text,
-                                                                gates=use_gates))
+                                                                gates=use_gates, spec=spec_text is not None))
             full_prompt = ctx.prompt(role, "review", diff=diff, diff_title=diff_title, call_sites=sites_full,
                                      previous_review=self._previous_must_fix(role), **common)
             resume_id = self._resumable_session(role, i, json_mode)
@@ -366,11 +367,11 @@ class BuildPhase:
                 ids = {x["id"] for x in open_now}
                 first = gates.next_number(st)
 
-                def transform(r, changed=changed, ids=ids, first=first, focus=focus):
+                def transform(r, changed=changed, ids=ids, first=first, focus=focus, spec_text=spec_text):
                     if r.structured is None:
                         return r.text
                     res = gates.apply_gates(r.structured, round_=i, open_ids=ids, changed_files=changed,
-                                            first_number=first, only_ids=focus)
+                                            first_number=first, only_ids=focus, spec_text=spec_text)
                     rendered = render_review(res.data)
                     if rendered is None:
                         return r.text
@@ -428,6 +429,14 @@ class BuildPhase:
             return marker in load_template(name, self.ctx.workdir)
         except TemplateError:
             return False
+
+    def _spec_text(self) -> str:
+        """요구 근거 관문이 인용을 찾는 곳: 과제 + 설계 문서 (DESIGN.md 25.2)."""
+        try:
+            design = (self.ctx.workdir / self.ctx.design_doc).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            design = ""
+        return f"{self.ctx.task}\n\n{design}"
 
     def _changed_since_review(self, i: int) -> set[str] | None:
         """지난 리뷰 시점 이후 바뀐 파일 (범위 관문, DESIGN.md 22.2). 1라운드거나 기준을 모르면 None."""

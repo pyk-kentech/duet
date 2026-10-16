@@ -4,6 +4,8 @@ JSON 판정(review_json.py)의 지적을 duet 가 기계적으로 보정한다.
 - 원장: 리뷰어(역할)별 지적에 안정 ID(I1, I2, …)를 붙이고 라운드를 넘어 추적한다.
 - 근거 관문: P1·P2 인데 evidence 가 비면 P3.
 - 범위 관문(2라운드부터): 새 P2 지적의 file 이 지난 리뷰 이후 바뀐 파일이 아니면 P3. P1 은 그대로.
+- 요구 근거 관문(DESIGN.md 25.2): basis=preference 인 P1·P2 → P3, basis=requirement 인 P2 의 인용을 과제·설계에서
+  찾지 못하면 P3.
 """
 
 from __future__ import annotations
@@ -39,6 +41,24 @@ def next_number(state) -> int:
     return max(nums, default=0) + 1
 
 
+_QUOTE_NOISE = re.compile(r"[\s\"'`«»“”‘’.,:;!?()\[\]{}<>*_#|~\-–—/\\=+]+")
+_ELLIPSIS = re.compile(r"\.\.\.+|…")
+
+
+def _squash(text: str) -> str:
+    return _QUOTE_NOISE.sub("", text.lower())
+
+
+def quote_found(quote: str, spec_text: str) -> bool:
+    """인용이 과제·설계 문서에 있는가. 공백·구두점·대소문자 무시, '...' 로 나눈 조각마다(4글자 미만 조각은 무시)."""
+    parts = [_squash(p) for p in _ELLIPSIS.split(quote or "")]
+    parts = [p for p in parts if len(p) >= 4]
+    if not parts:
+        return False
+    hay = _squash(spec_text)
+    return all(p in hay for p in parts)
+
+
 def _norm(path: str) -> str:
     p = str(path or "").strip().strip("`").strip()
     p = re.sub(r":\d+(?::\d+)?(?:-\d+)?$", "", p)        # a.py:12, a.py:12:3, a.py:3-9
@@ -58,10 +78,11 @@ def touches(file: str, changed: set[str]) -> bool:
 
 
 def apply_gates(data: dict[str, Any], *, round_: int, open_ids: set[str], changed_files: set[str] | None,
-                first_number: int, only_ids: set[str] | None = None) -> GateResult:
+                first_number: int, only_ids: set[str] | None = None, spec_text: str | None = None) -> GateResult:
     """판정을 보정해 새 dict 로 돌려준다. 원장은 바꾸지 않는다(update_ledger 가 한다).
 
     only_ids: 중재 뒤 마지막 라운드. 이 ID 밖의 지적은 모두 P3 (DESIGN.md 23.4).
+    spec_text: 과제 + 설계 문서. 주면 요구 근거 관문을 켠다 (DESIGN.md 25.2).
     """
     out = dict(data)
     res = GateResult(out)
@@ -86,6 +107,13 @@ def apply_gates(data: dict[str, Any], *, round_: int, open_ids: set[str], change
               and not touches(str(f.get("file") or ""), changed_files)):
             sev, note = "P3", "이번 변경과 무관한 새 지적"
             res.downgraded["scope"] += 1
+        elif spec_text is not None and sev in BLOCKING and f.get("basis") == "preference":
+            sev, note = "P3", "취향"
+            res.downgraded["spec"] = res.downgraded.get("spec", 0) + 1
+        elif (spec_text is not None and sev == "P2" and f.get("basis") == "requirement"
+              and not quote_found(str(f.get("requirement") or ""), spec_text)):
+            sev, note = "P3", "인용한 요구를 과제·설계에서 찾지 못함"
+            res.downgraded["spec"] = res.downgraded.get("spec", 0) + 1
         g = {**f, "id": fid, "severity": sev, "new": not existing}
         if note:
             g["note"] = f"원래 {f['severity']}: {note}"
@@ -102,14 +130,15 @@ def update_ledger(state, role: str, round_: int, findings: list[dict]) -> None:
         fid = f["id"]
         seen.add(fid)
         item = by_id.get(fid)
+        basis = {k: str(f[k]) for k in ("basis", "requirement") if f.get(k)}   # 요구 근거 (DESIGN.md 25.2)
         if item is not None and item.get("role") == role:
             item.update(severity=f["severity"], title=str(f.get("title") or item["title"]),
                         file=str(f.get("file") or item.get("file") or ""), status="open",
-                        note=f.get("note") or "")
+                        note=f.get("note") or "", **basis)
         else:
             state.issues.append({"id": fid, "role": role, "round": round_, "severity": f["severity"],
                                  "title": str(f.get("title") or ""), "file": str(f.get("file") or ""),
-                                 "status": "open", "closed_round": None, "note": f.get("note") or ""})
+                                 "status": "open", "closed_round": None, "note": f.get("note") or "", **basis})
     for x in state.issues:
         if x.get("role") == role and x.get("status") == "open" and x["id"] not in seen:
             x["status"] = "resolved"

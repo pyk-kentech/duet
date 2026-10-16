@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 SEVERITIES = ("P1", "P2", "P3")
+BASES = ("requirement", "correctness", "security", "preference")   # 지적의 근거 종류 (DESIGN.md 25.2)
 MAX_FINDINGS = 12
 MAX_REPROS = 5
 
@@ -32,8 +33,10 @@ REVIEW_SCHEMA: dict[str, Any] = {
                     "file": {"type": "string"},
                     "detail": {"type": "string"},
                     "evidence": {"type": "string"},
+                    "basis": {"type": "string", "enum": list(BASES)},
+                    "requirement": {"type": "string"},
                 },
-                "required": ["id", "severity", "new", "title", "file", "detail", "evidence"],
+                "required": ["id", "severity", "new", "title", "file", "detail", "evidence", "basis", "requirement"],
                 "additionalProperties": False,
             },
         },
@@ -56,6 +59,9 @@ OUTPUT_INSTRUCTION_JSON = """응답은 지정된 JSON 형식으로만 한다.
   severity 는 위 기준의 P1/P2/P3, new 는 이번에 처음 찾은 지적이면 true, title 은 한 줄 요약,
   file 은 관련 파일 경로(없으면 빈 문자열), detail 은 무엇이 왜 문제이고 어떻게 고칠지, evidence 는 근거(실패하는 입력,
   코드 위치, 실행 결과 등. 없으면 빈 문자열). 최대 12개, 중요한 것부터.
+  basis 는 근거 종류: requirement(과제·설계 문서의 요구를 어김), correctness(요구와 무관하게 틀린 동작: 크래시·잘못된 결과·
+  데이터 손실), security(보안), preference(취향·스타일·과한 방어·적히지 않은 호환성). requirement 는 basis 가
+  requirement 일 때 과제나 설계 문서의 해당 문장을 고치지 말고 그대로 인용, 아니면 빈 문자열.
 - status: P1·P2 지적이 없으면 APPROVED, 있으면 CHANGES_REQUESTED.{gate_hint}
 - summary: 전체 평가 두세 문장.
 - repro: {repro_hint}"""
@@ -88,10 +94,15 @@ GATE_HINT = ("\n- duet 가 판정을 기계적으로 보정한다: P1·P2 인데
              "지난 리뷰 이후 바뀌지 않은 파일에 대한 새 P2 지적도 P3 로 낮춘다(P1 은 그대로). 막아야 할 지적이면 근거를 적어라.")
 
 
-def output_instruction(json_mode: bool, repro_tests: bool, repro_instruction: str, gates: bool = False) -> str:
+SPEC_HINT = ("\n- 또 basis 가 preference 인 P1·P2 는 P3 로, basis 가 requirement 인 P2 는 인용한 문장을 과제·설계 문서에서 "
+             "찾을 수 없으면 P3 로 낮춘다. 요구를 말로 풀어 쓰지 말고 원문을 인용해라.")
+
+
+def output_instruction(json_mode: bool, repro_tests: bool, repro_instruction: str, gates: bool = False,
+                       spec: bool = False) -> str:
     if json_mode:
         return (OUTPUT_INSTRUCTION_JSON.replace("{repro_hint}", REPRO_HINT_ON if repro_tests else REPRO_HINT_OFF)
-                .replace("{gate_hint}", GATE_HINT if gates else ""))
+                .replace("{gate_hint}", (GATE_HINT if gates else "") + (SPEC_HINT if gates and spec else "")))
     return OUTPUT_INSTRUCTION_TEXT.replace("{repro_instruction}", repro_instruction).strip()
 
 
@@ -110,6 +121,9 @@ def _finding(f: dict[str, Any]) -> str:
     evidence = str(f.get("evidence") or "").strip()
     if evidence:
         lines.append("  근거: " + " ".join(evidence.splitlines()))
+    req = str(f.get("requirement") or "").strip()
+    if f.get("basis") == "requirement" and req:
+        lines.append("  요구: «" + " ".join(req.splitlines()) + "»")
     return "\n".join(lines)
 
 

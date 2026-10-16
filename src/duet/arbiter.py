@@ -40,10 +40,24 @@ OUTPUT_INSTRUCTION = """응답은 지정된 JSON 형식으로만 한다.
 - summary: 전체 판단을 두세 문장으로. 구현자가 마지막으로 무엇을 고치면 되는지 분명히 적어라."""
 
 
+BASIS_KO = {"requirement": "요구 위반", "correctness": "정확성", "security": "보안", "preference": "취향"}
+
+
+def _basis(x: dict) -> str:
+    """요구 근거 (DESIGN.md 25.2). 기록이 없으면(예전 실행) 빈 문자열."""
+    b = x.get("basis")
+    if not b:
+        return ""
+    req = str(x.get("requirement") or "").strip()
+    if b == "requirement" and req:
+        return f" — 요구: «{req[:160]}»"
+    return f" — 근거 종류: {BASIS_KO.get(b, b)}"
+
+
 def format_issues(items: list[dict]) -> str:
     return "\n".join(
         f"- {x['id']} [{x['severity']}] {x['title']}" + (f" — `{x['file']}`" if x.get("file") else "")
-        + f" (리뷰어 {x['role']}, {x['round']}라운드부터 열림)" for x in items) or "(없음)"
+        + f" (리뷰어 {x['role']}, {x['round']}라운드부터 열림)" + _basis(x) for x in items) or "(없음)"
 
 
 def normalize(data: Any, items: list[dict]) -> dict[str, dict] | None:

@@ -158,6 +158,9 @@ class Config:
     arbiter: bool = True                # 수렴 실패·상한에서 한 번 부르는 분쟁 중재자 (DESIGN.md 23장)
     test_guard: bool = True             # 테스트 변조 감지 → 리뷰어·중재자에게 경고 (DESIGN.md 24.1)
     claude_sandbox: bool = False        # Claude 쓰기 모드에 OS 샌드박스 설정을 붙임 (DESIGN.md 24.3)
+    spec_gate: bool = True              # 지적의 근거 종류·요구 인용 관문 (DESIGN.md 25.2)
+    wait_on_limit: bool = False         # 한도에 걸리면 재개 시각까지 기다렸다가 같은 호출을 다시 (DESIGN.md 25.1)
+    limit_wait_max_min: int = 360       # 한 실행에서 한도 대기에 쓸 수 있는 최대 시간(분)
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
     env_strip: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_STRIP))
     env_keep: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_KEEP))
@@ -209,9 +212,13 @@ class Config:
             raise ConfigError(f"review_diff 는 incremental 또는 full 이어야 합니다: {self.review_diff!r}")
         if not isinstance(self.repro_tests, bool):
             raise ConfigError("repro_tests 는 true/false 여야 합니다")
-        for key in ("review_packet", "review_json", "review_gates", "arbiter", "test_guard", "claude_sandbox"):
+        for key in ("review_packet", "review_json", "review_gates", "arbiter", "test_guard", "claude_sandbox",
+                    "spec_gate", "wait_on_limit"):
             if not isinstance(getattr(self, key), bool):
                 raise ConfigError(f"{key} 는 true/false 여야 합니다")
+        if (not isinstance(self.limit_wait_max_min, int) or isinstance(self.limit_wait_max_min, bool)
+                or not 1 <= self.limit_wait_max_min <= 7 * 24 * 60):
+            raise ConfigError(f"limit_wait_max_min 은 1~10080(분) 사이여야 합니다: {self.limit_wait_max_min}")
         if self.review_session not in ("reuse", "fresh"):
             raise ConfigError(f"review_session 은 reuse 또는 fresh 여야 합니다: {self.review_session!r}")
         if (isinstance(self.review_session_rounds, bool) or not isinstance(self.review_session_rounds, int)

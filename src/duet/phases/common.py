@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,6 +17,7 @@ from duet.agents.base import AgentAdapter, AgentRequest, AgentResult, Mode
 from duet.config import Config
 from duet.prompts import render
 from duet.runner import RunnerError
+from duet import limits
 from duet.state import FAILED, STOPPED_RATE_LIMIT, RunState
 from duet.transcript import Transcript
 
@@ -176,6 +178,7 @@ class PhaseContext:
                            output_schema=output_schema, resume_session=resume_session,
                            fallback_prompt=fallback_prompt, effort=effort)
         attempt = 0
+        limit_hits = 0
         while True:
             attempt += 1
             started = time.monotonic()
@@ -220,6 +223,10 @@ class PhaseContext:
             reason = result.failure_reason()
             self.log(f"{agent_name} ← {step} 실패: {reason} → {path.name}")
             if result.rate_limited:
+                limit_hits += 1
+                if self._wait_for_limit(agent_name, step, result, limit_hits):
+                    attempt -= 1          # 한도 재시도는 일반 실패 재시도(retries)에 세지 않는다
+                    continue
                 self.state.status = STOPPED_RATE_LIMIT
                 self.state.error = f"{agent_name} 한도 도달 ({step})"
                 self.save()
@@ -229,6 +236,33 @@ class PhaseContext:
                 self.state.error = f"{agent_name} {step} 실패: {reason}"
                 self.save()
                 raise AgentFailed(agent_name, step, reason)
+
+
+    def _wait_for_limit(self, agent_name: str, step: str, result: AgentResult, hits: int) -> bool:
+        """한도에 걸렸을 때 재개 시각까지 기다린다 (DESIGN.md 25.1). 기다렸으면 True(같은 호출을 다시 보냄)."""
+        if not self.cfg.wait_on_limit:
+            return False
+        budget = self.cfg.limit_wait_max_min * 60 - self.state.limit_waited_sec
+        if budget <= 0:
+            self.log(f"한도 대기 예산({self.cfg.limit_wait_max_min}분)을 다 써서 멈춥니다.")
+            return False
+        now = limits.now()
+        wait, why = limits.plan_wait((result.text, result.raw_stderr, result.raw_stdout[-4000:]),
+                                     result.usage, hits, now)
+        wait = min(wait, budget)
+        until = dt.datetime.fromtimestamp(now + wait)
+        self.state.limit_wait = {"agent": self.cli_of(agent_name), "role": agent_name, "step": step,
+                                 "until": until.isoformat(timespec="seconds"), "reason": why}
+        self.save()
+        self.log(f"⏳ {agent_name} 한도 도달 ({step}). {until:%m-%d %H:%M} 까지 기다렸다가 다시 시도합니다 "
+                 f"({why}, 남은 대기 예산 {budget / 60:.0f}분)")
+        try:
+            limits.sleep(wait)
+        finally:
+            self.state.limit_wait = None
+            self.state.limit_waited_sec += wait
+        self.save()
+        return True
 
 
 def _failure_body(result: AgentResult) -> str:
