@@ -66,7 +66,7 @@ def test_call_sites(tmp_path: Path):
 # ====================================================================== 21.2 JSON 판정
 def test_render_review_roundtrip_to_verdict():
     data = {"status": "CHANGES_REQUESTED", "summary": "요약",
-            "findings": [{"severity": "P1", "new": True, "title": "빈 입력에서 죽음", "file": "a.py",
+            "findings": [{"severity": "P1", "new": True, "title": "[새] 빈 입력에서 죽음", "file": "a.py",
                           "detail": "IndexError", "evidence": "parse('')"},
                          {"severity": "P3", "new": False, "title": "이름", "file": "", "detail": "", "evidence": ""},
                          {"severity": "P2", "new": False, "title": "설계 위반", "file": "b.py", "detail": "x\ny", "evidence": ""}],

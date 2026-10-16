@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 SEVERITIES = ("P1", "P2", "P3")
@@ -89,7 +90,8 @@ def output_instruction(json_mode: bool, repro_tests: bool, repro_instruction: st
 
 def _finding(f: dict[str, Any]) -> str:
     tag = f"[{f.get('severity', 'P3')}]" + ("[새]" if f.get("new") else "")
-    head = f"- {tag} {str(f.get('title') or '').strip()}"
+    title = re.sub(r"^\s*(?:\[(?:새|new|NEW)\]\s*)+", "", str(f.get("title") or "")).strip()   # 모델이 제목에도 [새] 를 붙임
+    head = f"- {tag} {title}"
     if str(f.get("file") or "").strip():
         head += f" — `{str(f['file']).strip()}`"
     lines = [head]
