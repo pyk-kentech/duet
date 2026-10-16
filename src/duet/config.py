@@ -142,7 +142,9 @@ class Config:
     # 리뷰 비용 (DESIGN.md 21장)
     review_packet: bool = True          # 함수 단위 문맥 diff + 바뀐 함수의 호출부 + 재열람 자제 안내
     review_json: bool = True            # 출력 스키마로 판정을 JSON 으로 받기
-    review_session: str = "reuse"       # 2라운드부터 리뷰어 자기 세션 이어가기 (fresh: 매번 새 세션)
+    # 2라운드부터 리뷰어 자기 세션 이어가기(reuse). 실측에서 이어간 턴이 캐시를 못 써 한도 기준으로 더 비싸서
+    # 기본은 매번 새 세션(fresh) — DESIGN.md 21.3
+    review_session: str = "fresh"
     review_session_rounds: int = 3      # 한 세션을 쓰는 최대 라운드 수
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
     env_strip: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_STRIP))

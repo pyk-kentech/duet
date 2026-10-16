@@ -218,8 +218,11 @@ def test_codex_resumed_usage_delta(tmp_path: Path):
 
 
 # ====================================================================== 빌드 통합 (mock)
-def run_mock(tmp_path: Path, monkeypatch, *extra: str, approve: int = 3, reviewers=None):
+def run_mock(tmp_path: Path, monkeypatch, *extra: str, approve: int = 3, reuse: bool = False):
     seen: dict = {}
+    if reuse:
+        (tmp_path / "w").mkdir(exist_ok=True)
+        (tmp_path / "w" / "duet.toml").write_text('review_session = "reuse"\n', encoding="utf-8")
 
     def factory(cfg, *, mock):
         seen["claude"] = MockAdapter(label="claude")
@@ -238,7 +241,7 @@ def reviews(seen):
 
 
 def test_json_verdict_and_session_reuse(tmp_path: Path, monkeypatch):
-    rc, seen, st, rd = run_mock(tmp_path, monkeypatch, approve=3)
+    rc, seen, st, rd = run_mock(tmp_path, monkeypatch, approve=3, reuse=True)
     assert rc == 0
     rv = reviews(seen)
     assert [c.output_schema is REVIEW_SCHEMA or c.output_schema == REVIEW_SCHEMA for c in rv] == [True] * 3
@@ -261,7 +264,7 @@ def test_json_verdict_and_session_reuse(tmp_path: Path, monkeypatch):
 
 
 def test_session_rounds_cap(tmp_path: Path, monkeypatch):
-    _, seen, st, _ = run_mock(tmp_path, monkeypatch, "--stall-rounds", "0", approve=4)
+    _, seen, st, _ = run_mock(tmp_path, monkeypatch, "--stall-rounds", "0", approve=4, reuse=True)
     # 한 세션은 최대 3라운드 → 4라운드는 새 세션(s4)
     assert [c.resume_session for c in reviews(seen)] == [None, "mock-codex-s3", "mock-codex-s3", None]
     assert st.review_sessions["codex"] == {"id": "mock-codex-s4", "round": 4, "rounds": 1}
@@ -312,6 +315,8 @@ def test_multi_reviewers_each_resume_own_session(tmp_path: Path, monkeypatch):
         return agents
 
     monkeypatch.setattr(orch_mod, "make_role_agents", factory)
+    (tmp_path / "w").mkdir()
+    (tmp_path / "w" / "duet.toml").write_text('review_session = "reuse"\n', encoding="utf-8")
     assert main(["run", "t", "--workdir", str(tmp_path / "w"), "--mock", "--workflow", "secure",
                  "--debate-rounds", "0"]) == 0
     a = store["a"]
@@ -319,6 +324,13 @@ def test_multi_reviewers_each_resume_own_session(tmp_path: Path, monkeypatch):
     assert [c.resume_session for c in a["security"].calls if c.step == "review"] == [None, "mock-security-s1"]
     sec2 = [c for c in a["security"].calls if c.step == "review"][1]
     assert "이어서 해라" in sec2.prompt
+
+
+def test_default_is_fresh_sessions(tmp_path: Path, monkeypatch):
+    _, seen, st, _ = run_mock(tmp_path, monkeypatch, approve=3)
+    assert [c.resume_session for c in reviews(seen)] == [None, None, None]
+    assert all(c.output_schema is not None for c in reviews(seen))          # JSON 판정은 기본으로 켜짐
+    assert st.config["review_session"] == "fresh"
 
 
 def test_custom_review_template_without_output_instruction_uses_text(tmp_path: Path, monkeypatch):
@@ -341,7 +353,7 @@ def test_config_validation(over):
 
 def test_defaults():
     c = Config()
-    assert (c.review_packet, c.review_json, c.review_session, c.review_session_rounds) == (True, True, "reuse", 3)
+    assert (c.review_packet, c.review_json, c.review_session, c.review_session_rounds) == (True, True, "fresh", 3)
     assert c.codex.resume_args == ["exec", "resume", "--skip-git-repo-check"]
     assert c.codex.resume_read_args == ["-c", 'sandbox_mode="read-only"']
     assert c.claude.resume_args == [] and c.claude.resume_read_args == []
