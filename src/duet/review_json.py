@@ -2,7 +2,8 @@
 
 리뷰 호출에 출력 스키마를 붙이고, 받은 JSON 을 기존 마크다운 리뷰 형식으로 바꾼다.
 그래서 판정 파싱(verdict.py)·수정 프롬프트·재현 테스트·UI 는 그대로 쓴다.
-스키마는 엄격 모드(모든 필드 필수, 추가 필드 없음)와 호환되게 만든다.
+스키마는 엄격 모드(모든 필드 필수, 추가 필드 없음)와 호환되게 만든다. 엄격 모드가 받지 않을 수 있는 키워드
+(maxItems 등)는 쓰지 않고, 개수 제한은 안내 문구와 변환 때 자르기로 지킨다.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ REVIEW_SCHEMA: dict[str, Any] = {
         "summary": {"type": "string"},
         "findings": {
             "type": "array",
-            "maxItems": MAX_FINDINGS,
             "items": {
                 "type": "object",
                 "properties": {
@@ -37,7 +37,6 @@ REVIEW_SCHEMA: dict[str, Any] = {
         },
         "repro": {
             "type": "array",
-            "maxItems": MAX_REPROS,
             "items": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
@@ -110,7 +109,7 @@ def render_review(data: Any) -> str | None:
     findings = data.get("findings")
     if not isinstance(findings, list) or not all(isinstance(f, dict) for f in findings):
         return None
-    findings = [f for f in findings if f.get("severity") in SEVERITIES]
+    findings = [f for f in findings if f.get("severity") in SEVERITIES][:MAX_FINDINGS]
     counts = {s: sum(1 for f in findings if f["severity"] == s) for s in SEVERITIES}
     must = [f for f in findings if f["severity"] in ("P1", "P2")]
     nice = [f for f in findings if f["severity"] == "P3"]

@@ -722,7 +722,7 @@ duet bench run [--suite basic|경로] [--workflow W ...] [--task T ...] [--repea
 
 ### 21.2 JSON 판정 (`review_json = true`)
 - 리뷰 호출에 출력 스키마를 붙인다: Claude `--json-schema '<스키마>'`(결과 JSON 의 `structured_output`, 없으면 본문을 JSON 으로 읽음), Codex `--output-schema <파일>`(마지막 메시지를 JSON 으로 읽음).
-- 스키마(엄격 모드 호환: 모든 필드 필수, 추가 필드 없음): `status`(APPROVED|CHANGES_REQUESTED), `summary`, `findings[]`(최대 12개: `severity` P1|P2|P3, `new`, `title`, `file`, `detail`, `evidence`), `repro[]`(최대 5개: `path`, `content`).
+- 스키마(엄격 모드 호환: 모든 필드 필수, 추가 필드 없음): `status`(APPROVED|CHANGES_REQUESTED), `summary`, `findings[]`(`severity` P1|P2|P3, `new`, `title`, `file`, `detail`, `evidence`), `repro[]`(`path`, `content`). 엄격 모드가 받지 않을 수 있는 `maxItems` 같은 키워드는 쓰지 않고, 개수 제한(지적 12개, 재현 5개)은 안내 문구와 변환 때 자르기로 지킨다.
 - duet 는 JSON 을 **기존 마크다운 리뷰 형식으로 바꿔** 기록한다(`## 반드시 고칠 것`/`## 고치면 좋은 것`, `<repro>` 블록, `<verdict>` 블록에 심각도별 개수). 그래서 판정 파싱·수정 프롬프트·재현 테스트·UI 는 그대로다. JSON 을 못 읽으면 본문을 예전 방식으로 읽는다(`parse_failed` 규칙 그대로).
 - 템플릿의 출력 형식 안내는 `{output_instruction}` 으로 바뀐다(JSON 이면 스키마 안내, 아니면 예전 문구). 이 플레이스홀더가 없는 사용자 템플릿이면 그 호출은 JSON 을 쓰지 않는다.
 
