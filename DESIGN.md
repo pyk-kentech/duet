@@ -438,6 +438,10 @@ env_keep = ["CLAUDE_CODE_OAUTH_TOKEN"]
 - 리뷰가 수렴하지 않거나 상한에 닿으면 한 번 부르는 중재자(`arbitrate` 템플릿, JSON 결정), 지적별 유지·완화·기각, 중재 승인·마지막 라운드 (23장)
 - ✅ 발동 조건(수렴 실패·상한, 원장 필요, 실행당 1번), 결정 적용(원장·판정), 테스트 실패 시 승인 불가, 마지막 라운드의 범위 고정, 끄기, resume, 로그·UI·벤치마크 표시
 
+### M18. 안전장치 (2026-10-16 사용자 요청으로 추가)
+- `testguard.py`(테스트 변조 감지 → 리뷰어·중재자에게 경고), UI 의 Origin·Sec-Fetch-Site 검사, Claude 구현자 샌드박스(선택) (24장)
+- ✅ 감지 신호별 단위 테스트(삭제·테스트 수·assert 수·skip·설정·재현 테스트), build 통합(기록·로그·리뷰 프롬프트), 교차 출처 요청 거부, 샌드박스 플래그와 doctor 점검
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -814,3 +818,39 @@ duet bench run [--suite basic|경로] [--workflow W ...] [--task T ...] [--repea
 - 중재자가 쉽게 승인하면 결함이 통과한다. 벤치마크의 "승인했는데 숨은 테스트 실패"(20.4)와 "중재 승인" 수를 함께 본다. `arbiter = false`(또는 `duet run --no-arbiter`)로 끌 수 있다.
 - `arbiter_final` 로 일찍 멈춘 실행은 수렴 실패(`stalled`)처럼 `--max-review` 없이 이어갈 수 있다. 중재는 실행당 한 번이라 이어가도 다시 부르지 않는다.
 - mock 중재자는 기본으로 모두 유지(보수적)해, mock 실행의 미승인 흐름이 예전과 같다(멈춘 이유만 `arbiter_upheld`).
+
+---
+
+## 24. 안전장치
+
+### 24.1 테스트 변조 감지 (`test_guard = true`)
+구현자가 테스트를 지우거나 약하게 고쳐서 통과시키면 duet 테스트(16장)도, 리뷰어도 놓칠 수 있다. 리뷰어는 diff 를 보지만 테스트 파일의 변경은 코드 변경 속에 묻힌다.
+- 시점: 각 라운드의 구현 커밋 뒤, 리뷰 전. 비교 기준은 1라운드면 기준 커밋(`base_commit`), 2라운드부터 지난 리뷰 시점의 커밋.
+- 테스트 파일: `tests/`·`test/` 아래 파일, `test_*.py`, `*_test.py`, `*_test.go`, `*.test.*`·`*.spec.*`, `conftest.py`.
+- 신호(`testguard.scan`):
+  - 테스트 파일 삭제
+  - 파일별 테스트 수 감소(`def test_`, `func Test`, `it(`/`test(`)
+  - 파일별 단언 수 감소(`assert`, `self.assert*`, `expect(`, `t.Error`/`t.Fatal`)
+  - 건너뛰기 추가(`pytest.mark.skip`, `skipif`, `xfail`, `pytest.skip(`, `unittest.skip`, `.skip(`, `t.Skip`)
+  - 테스트 설정 변경: `pytest.ini`, `tox.ini`, `setup.cfg`, `pyproject.toml` 의 pytest 관련 줄(`addopts`, `testpaths`, `deselect`, `ignore`, `norecursedirs`, `collect_ignore`), `package.json` 의 test 스크립트, `duet.toml` 의 `test_command`
+  - 리뷰어 재현 테스트(17장)를 지우거나 고침
+- 결과는 막지 않고 **경고**만 한다. 재현 테스트가 틀렸으면 고치거나 지우라고 안내하고 있고(17장), 리팩터링으로 테스트 수가 줄 수도 있다. 대신:
+  - 리뷰·중재 프롬프트의 테스트 결과 아래에 "테스트 변경 경고"를 붙인다: 통과시키려고 테스트를 지우거나 약하게 만든 것이면 [P1], IMPLEMENTATION_NOTES.md 에 타당한 이유가 있으면 지적하지 않는다.
+  - 로그 "⚠️ 테스트 변경 감지 N건", `run.json` 의 `test_guard[i]`(신호 목록), 기록 `NN_testguard{i}.md`(agent: duet).
+- 끄기: `test_guard = false`.
+
+### 24.2 관리자 UI 의 교차 출처 차단
+13장의 토큰 헤더(`X-Duet-Token`)는 커스텀 헤더라 교차 출처 요청이 사전 요청(preflight)에서 이미 막힌다. 여기에 이중 장치를 더한다.
+- 요청에 `Origin` 헤더가 있으면 그 호스트가 허용 Host(루프백 바인딩이면 `127.0.0.1:포트` 등, 외부 바인딩이면 요청의 Host)와 같아야 한다. 다르면(`null` 포함) 403.
+- `/api/` 요청에 `Sec-Fetch-Site: cross-site` 또는 `same-site` 가 오면 403(`same-origin`, `none` 만 허용). 페이지 열기(`/`)는 터미널·다른 앱에서 링크로 여는 경우가 있어 검사하지 않는다(토큰으로 보호).
+
+### 24.3 Claude 구현자 샌드박스 (`claude_sandbox = false`, 선택)
+Codex 구현자는 `--sandbox workspace-write` 로 작업 폴더 밖에 쓰지 못하지만, Claude 구현자는 `Bash` 를 제한 없이 쓴다.
+- 켜면 Claude 의 **쓰기 모드** 호출에 `--settings '{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"allowUnsandboxedCommands":false}}'` 를 붙인다(Claude Code 의 OS 샌드박스: Linux 는 bubblewrap·socat, macOS 는 Seatbelt). 설정 JSON 은 `[claude] sandbox_settings` 로 바꿀 수 있다.
+- 읽기 모드(리뷰·중재)는 이미 `Read,Glob,Grep` 만 허용하므로 바꾸지 않는다.
+- `duet doctor` 는 켜져 있을 때 Linux 에서 `bwrap`·`socat` 이 있는지 본다. 없으면 경고(Claude Code 가 샌드박스를 못 켜면 명령이 막히거나 실패한다).
+- 기본이 꺼진 이유: 환경마다 동작이 다르고(WSL1 미지원, socat 필요), duet 가 실제 실행으로 검증하지 않았다. CLI `--claude-sandbox`.
+
+### 24.4 하지 않은 것
+- duet 가 직접 돌리는 테스트(16장)는 샌드박스 없이 에이전트가 쓴 코드를 실행한다. 24.3 은 에이전트가 직접 내리는 명령만 가둔다. 신뢰할 수 없는 과제는 컨테이너나 별도 계정에서 돌려라.
+- 테스트 변조를 자동으로 되돌리거나 승인을 막지는 않는다(정당한 변경과 구별할 수 없다).

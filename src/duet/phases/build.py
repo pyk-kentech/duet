@@ -15,6 +15,7 @@ resume 키:
   impl:i:called     구현/수정 호출 성공(유료) — 커밋 전에 죽어도 다시 부르지 않는다
   impl:i            커밋까지 완료
   test:i            duet 가 테스트 실행 (결과는 state.tests[i], 기록 NN_test{i}.md)
+  guard:i           테스트 변조 감지 (DESIGN.md 24.1, 결과는 state.test_guard[i])
   review:i          리뷰 + 판정 완료 (판정은 policy.decide: 심각도 기준·테스트 결과 반영)
   review:i:<역할>   리뷰어가 여럿일 때 그 리뷰어의 리뷰 완료 (판정은 state.round_reviews[i][역할])
 
@@ -33,6 +34,7 @@ from duet.phases.common import PhaseContext
 from duet.phases.debate import DESIGN_FILENAME
 from duet import arbiter as arb
 from duet import gates
+from duet import testguard
 from duet.packet import READ_INSTRUCTION_PACKET, READ_INSTRUCTION_PLAIN, call_sites, changed_symbols
 from duet.policy import Decision, decide, stalled
 from duet.prompts import TemplateError, load_template
@@ -158,6 +160,7 @@ class BuildPhase:
                 ctx.set_position(PHASE_BUILD, "review", i)
                 ctx.save()
                 self._preserve_pending_changes(i)
+                self._guard_tests(i, base)
                 diff_title, diff = self._review_diff(i, base)
                 decision, files = self._review_round(i, diff_title, diff)
                 test = st.tests.get(str(i))
@@ -260,7 +263,7 @@ class BuildPhase:
         repro = st.repros.get(str(i)) or {}
         prompt = ctx.prompt(role, "arbitrate", task=ctx.task, rounds=i,
                             reason="막는 지적 수가 줄지 않음" if reason == "stalled" else "리뷰 상한에 닿음",
-                            issues=arb.format_issues(items), tests=self._tests_text(i),
+                            issues=arb.format_issues(items), tests=self._tests_for_review(i),
                             repros=(f"{', '.join(repro.get('files') or [])}: {repro.get('status')}"
                                     if repro.get("files") else "(없음)"),
                             stat=self.ws.diff_stat(st.base_commit, "HEAD", exclude=(ctx.design_doc,)).strip() or "(없음)",
@@ -335,7 +338,7 @@ class BuildPhase:
             focus = self._focus_ids(i) if use_gates else None
             if sites_full is None:
                 sites_full = self._call_sites(diff)
-            common = dict(task=ctx.task, implementer_name=self.implementer, tests=self._tests_text(i),
+            common = dict(task=ctx.task, implementer_name=self.implementer, tests=self._tests_for_review(i),
                           test_instruction=self._test_instruction(i, role),
                           read_instruction=READ_INSTRUCTION_PACKET if self.cfg.review_packet else READ_INSTRUCTION_PLAIN,
                           repro_instruction=repro_text,
@@ -549,6 +552,41 @@ class BuildPhase:
             return self.ctx.transcript.read(t["file"]).strip()
         except (OSError, KeyError):
             return f"명령: {t.get('command')}\n결과: {STATUS_KO.get(t.get('status'), t.get('status'))}"
+
+    def _tests_for_review(self, i: int) -> str:
+        """리뷰·중재 프롬프트의 테스트 결과. 테스트 변경 경고가 있으면 아래에 붙인다 (DESIGN.md 24.1)."""
+        guard = self._guard_text(i)
+        return self._tests_text(i) + (f"\n\n{guard}" if guard else "")
+
+    # ---------------------------------------------------------------- test guard (DESIGN.md 24.1)
+    def _guard_tests(self, i: int, base: str) -> None:
+        ctx, st = self.ctx, self.state
+        key = f"guard:{i}"
+        if not self.cfg.test_guard or st.is_done(key):
+            return
+        prev = self._reviewed_commit(i - 1) if i > 1 else None
+        frm = prev or base
+        signals = [s.to_dict() for s in testguard.scan(self.ws, frm, "HEAD", testguard.repro_files(st.repros))]
+        if signals:
+            text = testguard.format_signals(signals, "지난 리뷰 이후" if prev else "기준 커밋 이후")
+            path = ctx.transcript.save(f"testguard{i}", text, {
+                "agent": "duet", "adapter": "duet", "step": "testguard", "mode": "run", "round": i,
+                "exit_code": 0, "ok": True, "guard_signals": len(signals),
+                "rate_limited": False, "timed_out": False})
+            st.test_guard[str(i)] = {"since": frm, "signals": signals, "file": path.name}
+            kinds = sorted({testguard.KIND_KO.get(s["kind"], s["kind"]) for s in signals})
+            ctx.log(f"[{i}/{self.max_review}] ⚠️ 테스트 변경 감지 {len(signals)}건 ({', '.join(kinds)}) → {path.name}")
+        st.mark_done(key)
+        ctx.save()
+
+    def _guard_text(self, i: int) -> str:
+        g = self.state.test_guard.get(str(i))
+        if not g or not g.get("signals"):
+            return ""
+        try:
+            return self.ctx.transcript.read(g["file"]).strip()
+        except (OSError, KeyError):
+            return testguard.format_signals(g["signals"], "이번 라운드에")
 
     def _test_instruction(self, i: int, role: str | None = None) -> str:
         ran = bool(self.state.tests.get(str(i)))

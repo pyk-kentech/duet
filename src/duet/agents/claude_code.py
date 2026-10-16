@@ -62,6 +62,8 @@ class ClaudeCodeAdapter:
         if req.resume_session and self.agent_cfg.resume_read_args and req.mode is Mode.READ:
             mode_args = self.agent_cfg.resume_read_args
         cmd = [self.agent_cfg.bin, *base, *self.model_args(effort), *mode_args]
+        if self.cfg.claude_sandbox and req.mode is Mode.WRITE and self.agent_cfg.sandbox_settings:
+            cmd += ["--settings", self.agent_cfg.sandbox_settings]   # OS 샌드박스 (DESIGN.md 24.3)
         if req.output_schema is not None:
             cmd += ["--json-schema", json.dumps(req.output_schema, ensure_ascii=False)]
         if req.resume_session:

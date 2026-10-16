@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 from dataclasses import dataclass, field, fields, replace
@@ -82,11 +83,17 @@ class AgentConfig:
     effort: str = ""    # 추론 강도. 비우면 CLI 기본값
     # 단계별 추론 강도 {단계: 강도}. 없는 단계는 effort (DESIGN.md 18.1)
     step_effort: dict[str, str] = field(default_factory=dict)
+    # claude_sandbox 를 켜면 쓰기 모드에 붙이는 설정 JSON (DESIGN.md 24.3, Claude 만)
+    sandbox_settings: str = ""
 
     def effort_for(self, step: str, round_: int = 0) -> str:
         """이 호출에 쓸 추론 강도. 리뷰는 2라운드부터 "rereview" 키를 본다."""
         key = "rereview" if step == "review" and round_ >= 2 else step
         return self.step_effort.get(key) or self.effort
+
+
+CLAUDE_SANDBOX_SETTINGS = json.dumps(
+    {"sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False}})
 
 
 def _default_claude() -> AgentConfig:
@@ -98,6 +105,7 @@ def _default_claude() -> AgentConfig:
             "--permission-mode", "acceptEdits",
             "--allowedTools", "Read,Edit,Write,Glob,Grep,Bash",
         ],
+        sandbox_settings=CLAUDE_SANDBOX_SETTINGS,
     )
 
 
@@ -148,6 +156,8 @@ class Config:
     review_session_rounds: int = 3      # 한 세션을 쓰는 최대 라운드 수
     review_gates: bool = True           # JSON 판정의 지적 원장·근거 관문·범위 관문 (DESIGN.md 22장)
     arbiter: bool = True                # 수렴 실패·상한에서 한 번 부르는 분쟁 중재자 (DESIGN.md 23장)
+    test_guard: bool = True             # 테스트 변조 감지 → 리뷰어·중재자에게 경고 (DESIGN.md 24.1)
+    claude_sandbox: bool = False        # Claude 쓰기 모드에 OS 샌드박스 설정을 붙임 (DESIGN.md 24.3)
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
     env_strip: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_STRIP))
     env_keep: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_KEEP))
@@ -199,7 +209,7 @@ class Config:
             raise ConfigError(f"review_diff 는 incremental 또는 full 이어야 합니다: {self.review_diff!r}")
         if not isinstance(self.repro_tests, bool):
             raise ConfigError("repro_tests 는 true/false 여야 합니다")
-        for key in ("review_packet", "review_json", "review_gates", "arbiter"):
+        for key in ("review_packet", "review_json", "review_gates", "arbiter", "test_guard", "claude_sandbox"):
             if not isinstance(getattr(self, key), bool):
                 raise ConfigError(f"{key} 는 true/false 여야 합니다")
         if self.review_session not in ("reuse", "fresh"):
@@ -225,6 +235,13 @@ class Config:
                 v = getattr(ac, key)
                 if not isinstance(v, str) or not _TOKEN_RE.match(v):
                     raise ConfigError(f"[{name}] {key} 값이 잘못되었습니다: {v!r} (영문·숫자·.-_:[]/ 만)")
+            if not isinstance(ac.sandbox_settings, str):
+                raise ConfigError(f"[{name}] sandbox_settings 는 JSON 문자열이어야 합니다")
+            if ac.sandbox_settings:
+                try:
+                    json.loads(ac.sandbox_settings)
+                except ValueError as e:
+                    raise ConfigError(f"[{name}] sandbox_settings 가 올바른 JSON 이 아닙니다: {e}") from e
             if not isinstance(ac.step_effort, dict):
                 raise ConfigError(f"[{name}] step_effort 는 {{단계 = 강도}} 테이블이어야 합니다")
             for step, v in ac.step_effort.items():

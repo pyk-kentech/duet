@@ -81,7 +81,10 @@ def test_repro_flow_end_to_end(tmp_path: Path):
     r = st.repros["1"]
     assert r["files"] == ["tests/test_repro_empty.sh"] and r["status"] == "failed" and r["commit"]
     assert file_names(ctx.run_dir) == ["01_impl1_claude.md", "02_test1.md", "03_review1_codex.md", "04_repro1.md",
-                                       "05_impl2_claude.md", "06_test2.md", "07_review2_codex.md"]
+                                       "05_impl2_claude.md", "06_test2.md", "07_testguard2.md", "08_review2_codex.md"]
+    # 구현자가 재현 테스트를 'exit 0' 으로 바꿨다 → 테스트 변경 경고 (DESIGN.md 24.1)
+    assert [s["kind"] for s in st.test_guard["2"]["signals"]] == ["repro_changed"]
+    assert "리뷰어 재현 테스트 변경: `tests/test_repro_empty.sh`" in prompts["review"][1]
     assert "재현됨" in (ctx.run_dir / "04_repro1.md").read_text(encoding="utf-8")
     # 리뷰 프롬프트: 재현 테스트 안내, 테스트 재실행 하지 말라는 안내
     assert "tests/test_repro_" in prompts["review"][0] and "다시 돌리지 마라" in prompts["review"][0]

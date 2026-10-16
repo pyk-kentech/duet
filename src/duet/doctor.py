@@ -132,6 +132,9 @@ def run_checks() -> list[dict[str, Any]]:
 
     checks.append(_claude_check())
     checks.append(_codex_check())
+    sandbox = _sandbox_check()
+    if sandbox is not None:
+        checks.append(sandbox)
     keys = _api_key_check()
     if keys is not None:
         checks.append(keys)
@@ -140,6 +143,26 @@ def run_checks() -> list[dict[str, Any]]:
 
 # 있으면 CLI 가 구독 대신 API 로 과금할 수 있는 변수 (DESIGN.md 18.2)
 API_KEY_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY")
+
+
+def _sandbox_check() -> Check | None:
+    """claude_sandbox 가 켜져 있으면 Linux 에서 bubblewrap·socat 이 있는지 본다 (DESIGN.md 24.3)."""
+    from duet.config import Config, ConfigError, load_config
+
+    try:
+        cfg = load_config(None)
+    except ConfigError:
+        cfg = Config()
+    if not cfg.claude_sandbox:
+        return None
+    if not sys.platform.startswith("linux"):
+        return Check("sandbox", "Claude 샌드박스", "ok", detail="켜짐 (macOS 는 Seatbelt 를 씁니다)")
+    missing = [b for b in ("bwrap", "socat") if not _which(b)]
+    if missing:
+        return Check("sandbox", "Claude 샌드박스", "warn",
+                     detail=f"켜져 있지만 {', '.join(missing)} 가 없습니다. 설치하지 않으면 Claude 구현자의 명령이 "
+                            "막히거나 실패합니다 (예: sudo apt install bubblewrap socat).", extra={"missing": missing})
+    return Check("sandbox", "Claude 샌드박스", "ok", detail="켜짐 (bubblewrap·socat 있음)")
 
 
 def _api_key_check() -> Check | None:

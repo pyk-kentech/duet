@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help='구현 후 duet 가 돌릴 테스트 명령 (기본: auto = duet.toml → 자동 감지, "none" 이면 끔)')
     p_run.add_argument("--block-severity", choices=["P1", "P2", "P3"],
                        help="이 심각도 이상의 지적이 남아 있으면 반려 (기본: P2 → P3 만 남으면 승인)")
+    p_run.add_argument("--claude-sandbox", action="store_true",
+                       help="Claude 구현자의 명령을 OS 샌드박스 안에서 실행 (Linux: bubblewrap·socat 필요)")
     p_run.add_argument("--no-arbiter", action="store_true",
                        help="수렴하지 않을 때 분쟁 중재자를 부르지 않고 바로 멈춤 (기본: 한 번 부름)")
     p_run.add_argument("--stall-rounds", type=int, metavar="N",
@@ -163,6 +165,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "test_command": args.test_command, "block_severity": args.block_severity,
             "stall_rounds": args.stall_rounds,
             "arbiter": False if args.no_arbiter else None,
+            "claude_sandbox": True if args.claude_sandbox else None,
         },
     )
     return Orchestrator().run(opts).exit_code

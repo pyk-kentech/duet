@@ -328,6 +328,21 @@ class Handler(BaseHTTPRequestHandler):
             return True  # 외부 바인딩은 토큰으로만 보호(경고는 시작할 때 출력)
         return self.headers.get("Host", "") in self.server.allowed_hosts()
 
+    def _origin_ok(self) -> bool:
+        """Origin 헤더가 있으면 허용 Host 와 같아야 한다 (DESIGN.md 24.2). 없으면(탐색·같은 출처 GET) 통과."""
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        u = urlsplit(origin)
+        if u.scheme not in ("http", "https") or not u.netloc:
+            return False                  # "null" (sandbox iframe, file://) 등
+        allowed = self.server.allowed_hosts() if self.server.loopback else {self.headers.get("Host", "")}
+        return u.netloc in allowed
+
+    def _fetch_site_ok(self) -> bool:
+        """API 는 같은 출처 요청만 (Sec-Fetch-Site 를 보내는 브라우저). 헤더가 없으면(curl 등) 토큰으로 판단."""
+        return self.headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")
+
     def _token_ok(self, given: str | None) -> bool:
         return bool(given) and hmac.compare_digest(given.encode(), self.server.token.encode())
 
@@ -345,6 +360,9 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             self._text(HTTPStatus.FORBIDDEN, "허용되지 않은 Host 입니다.")
             return
+        if not self._origin_ok():
+            self._text(HTTPStatus.FORBIDDEN, "다른 출처에서 온 요청은 받지 않습니다.")
+            return
         url = urlsplit(self.path)
         query = {k: v[-1] for k, v in parse_qs(url.query).items()}
         path = url.path
@@ -354,6 +372,8 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and path.startswith("/static/"):
                 return self._static(path[len("/static/"):])
             if path.startswith("/api/"):
+                if not self._fetch_site_ok():
+                    return self._json(HTTPStatus.FORBIDDEN, {"error": "다른 사이트에서 온 요청은 받지 않습니다."})
                 if not self._token_ok(self.headers.get("X-Duet-Token")):
                     return self._json(HTTPStatus.UNAUTHORIZED,
                                       {"error": "토큰이 맞지 않습니다. 터미널에 출력된 새 주소로 다시 접속하세요."})

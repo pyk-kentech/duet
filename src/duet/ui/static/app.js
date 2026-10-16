@@ -38,7 +38,7 @@ const STATUS = {
 };
 const STEP = {
   propose: '설계안', critique: '비판·개정', synthesize: '설계 종합', implement: '구현', fix: '리뷰 반영',
-  review: '리뷰', explore: '사전 조사', audit: '감사', arbitrate: '중재', test: '테스트', repro: '재현 테스트', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
+  review: '리뷰', explore: '사전 조사', audit: '감사', arbitrate: '중재', test: '테스트', repro: '재현 테스트', testguard: '테스트 변경 감지', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
 };
 const PHASE = { init: '준비', explore: '사전 조사', debate: '설계 토론', build: '구현·리뷰', audit: '감사', done: '끝' };
 const CHECK_STATUS = { ok: '정상', warn: '확인 필요', missing: '없음', error: '오류' };
@@ -217,6 +217,7 @@ const TIPS = {
   'step.implement': '설계대로 처음 코드를 작성한 AI 의 요약입니다.',
   'step.fix': '리뷰 지적을 반영해 고친 내용의 요약입니다.',
   'step.test': 'duet 가 직접 돌린 테스트 결과입니다. 실패하면 리뷰어가 승인해도 승인되지 않습니다.',
+  'step.testguard': '구현자가 테스트를 지우거나 약하게 바꾼 흔적입니다(테스트·단언 수 감소, skip 추가, 설정 변경). 막지는 않고 리뷰어에게 경고로 보여 줍니다.',
   'step.review': '상대 AI 의 코드 리뷰와 판정입니다.',
   'step.pending': '지금 이 AI 가 일하는 중입니다. 누르면 무슨 파일을 읽고 고치는지, 어떤 명령을 돌리는지 실시간으로 봅니다.',
   'step.repro': '리뷰어가 지적을 글 대신 "실패하는 테스트"로 낸 것입니다. duet 가 저장해서 정말 실패하는지 돌려 봅니다.',
@@ -895,6 +896,9 @@ class RunView {
       h('span', null, `리뷰가 수렴하지 않아 중재자가 열린 지적을 정리했고, 막는 지적이 남지 않아 승인했습니다 (완화 ${(arb.downgraded || []).join(', ') || '-'}, 기각 ${(arb.rejected || []).join(', ') || '-'}). 중재 결과(${arb.file || ''})를 확인하세요.`)));
     if ((st.stop_reason === 'arbiter_upheld' || st.stop_reason === 'arbiter_final') && !d.live) alerts.push(h('div', { class: 'alert alert-warn' }, h('b', null, '중재 뒤에도 미승인'),
       h('span', null, `중재자가 유지한 지적(${(arb.upheld || []).join(', ') || '테스트 실패'})이 해결되지 않았습니다. 중재 결과와 마지막 리뷰를 보고 직접 판단하세요.`)));
+    const guards = Object.entries(st.test_guard || {}).filter(([, g]) => (g.signals || []).length);
+    if (guards.length) alerts.push(h('div', { class: 'alert alert-warn' }, h('b', null, '테스트 변경 감지'),
+      h('span', null, `구현자가 테스트를 지우거나 약하게 바꾼 흔적이 있습니다 (${guards.map(([r, g]) => `${r}라운드 ${g.signals.length}건`).join(', ')}). 리뷰어에게 경고로 전달했습니다. 기록(${guards.map(([, g]) => g.file).join(', ')})을 확인하세요.`)));
     const limits = this.latestLimits();
     if (limits) alerts.push(limits);
 
