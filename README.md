@@ -210,6 +210,19 @@ duet run "..." --workdir ./x --test-command "uv run pytest -q" --block-severity 
 
 관리자 UI에서 실행 중인 항목을 열면 AI가 지금 어떤 파일을 읽고 고치는지, 어떤 명령을 돌리는지 실시간으로 보입니다.
 
+## 벤치마크
+
+같은 과제 묶음을 워크플로별로 돌리고, 에이전트가 보지 못한 **숨은 수용 테스트**로 결과물을 채점해 비교합니다.
+
+```bash
+duet bench list                                            # 과제 목록 (내장 basic: 5개)
+duet bench run --mock --workflow classic --workflow lean   # 흐름만 확인 (구독 안 씀)
+duet bench run --workflow classic --workflow lean --yes    # 실제 실행 (구독 사용량을 많이 씀)
+duet bench report ~/.duet/bench/<시각>                     # 요약 다시 보기
+```
+
+결과 폴더의 `summary.md` 에 워크플로별 승인률, 숨은 테스트 통과율, "승인했는데 숨은 테스트 실패"(리뷰가 놓친 결함) 수, 평균 라운드·시간·토큰이 나옵니다. 한도에 걸리면 그 자리에서 멈추고 그때까지의 결과를 남깁니다. 직접 만든 과제 묶음은 `--suite <폴더>` 로 줍니다(구조는 DESIGN.md 20장).
+
 ## 관리자 UI
 
 ```bash

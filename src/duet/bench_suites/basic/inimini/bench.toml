@@ -1,0 +1,3 @@
+name = "inimini"
+description = "INI 파서·직렬화 (주석, 따옴표, 오류 줄 번호, 왕복 보장)"
+kind = "new"

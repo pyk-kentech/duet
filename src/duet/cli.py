@@ -79,6 +79,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_wf.add_argument("--workdir", help="이 프로젝트의 .duet/workflows/ 도 함께 봄")
     p_wf.set_defaults(func=cmd_workflows)
 
+    p_bench = sub.add_parser("bench", help="벤치마크: 과제 묶음을 워크플로별로 돌려 숨은 테스트로 채점")
+    bsub = p_bench.add_subparsers(dest="bench_cmd", metavar="<명령>")
+    bsub.required = True
+    b_run = bsub.add_parser("run", help="벤치마크 실행 (실제 실행은 --yes 필요)")
+    b_run.add_argument("--suite", default="basic", help="과제 묶음: 내장 이름(basic) 또는 폴더 경로")
+    b_run.add_argument("--workflow", action="append", metavar="NAME",
+                       help="비교할 워크플로 (여러 번 지정 가능, 기본: classic)")
+    b_run.add_argument("--task", action="append", metavar="NAME", help="일부 과제만 (여러 번 지정 가능)")
+    b_run.add_argument("--repeat", type=int, default=1, help="같은 조합 반복 횟수 (기본 1)")
+    b_run.add_argument("--max-review", type=int, help="구현-리뷰 최대 반복 (기본: 과제·설정 값)")
+    b_run.add_argument("--out", help="결과 폴더 (기본: ~/.duet/bench)")
+    b_run.add_argument("--mock", action="store_true", help="실제 CLI 호출 없이 흐름만 확인")
+    b_run.add_argument("--yes", action="store_true", help="실제 구독을 쓰는 실행에 동의")
+    b_run.add_argument("--verbose", action="store_true", help="각 실행의 진행 로그도 출력")
+    b_run.set_defaults(func=cmd_bench_run)
+    b_rep = bsub.add_parser("report", help="결과 폴더의 요약 다시 보기")
+    b_rep.add_argument("dir", help="duet bench run 이 만든 결과 폴더")
+    b_rep.set_defaults(func=cmd_bench_report)
+    b_list = bsub.add_parser("list", help="과제 묶음과 과제 목록")
+    b_list.add_argument("--suite", default="basic", help="과제 묶음 (기본: basic)")
+    b_list.set_defaults(func=cmd_bench_list)
+
     p_ui = sub.add_parser("ui", help="관리자 UI(로컬 웹 대시보드) 실행")
     p_ui.add_argument("--host", default="127.0.0.1", help="바인딩 주소 (기본: 127.0.0.1)")
     p_ui.add_argument("--port", type=int, default=8787, help="포트 (기본: 8787, 사용 중이면 다음 번호)")
@@ -164,6 +186,57 @@ def cmd_ui(args: argparse.Namespace) -> int:
         serve(args.host, args.port, open_browser=not args.no_browser, extra_projects=args.workdir)
     except OSError as e:
         raise OrchestratorError(str(e)) from e
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------- bench
+def cmd_bench_run(args: argparse.Namespace) -> int:
+    from duet.bench import BenchError, load_suite, pick_tasks, run_bench
+    from duet.registry import duet_home
+
+    workflows = args.workflow or ["classic"]
+    if args.repeat < 1:
+        raise OrchestratorError("--repeat 는 1 이상이어야 합니다.")
+    try:
+        tasks = pick_tasks(load_suite(args.suite), args.task)
+    except BenchError as e:
+        raise OrchestratorError(str(e)) from e
+    runs = len(tasks) * len(workflows) * args.repeat
+    if not args.mock and not args.yes:
+        print(f"실제 Claude·Codex 로 {runs}번 실행합니다 (과제 {len(tasks)}개 × 워크플로 {len(workflows)}개 × "
+              f"{args.repeat}회). 실행마다 호출 3~15번, 수 분~20분이 걸리고 구독 사용량을 씁니다.")
+        print("계속하려면 --yes 를 붙이세요. 흐름만 보려면 --mock.")
+        return EXIT_USAGE
+    out = Path(args.out).expanduser() if args.out else duet_home() / "bench"
+    try:
+        run_bench(suite=args.suite, workflows=workflows, task_names=args.task, repeat=args.repeat,
+                  max_review=args.max_review, out_root=out, mock=args.mock, verbose=args.verbose)
+    except BenchError as e:
+        raise OrchestratorError(str(e)) from e
+    return EXIT_OK
+
+
+def cmd_bench_report(args: argparse.Namespace) -> int:
+    from duet.bench import BenchError, load_results, summarize
+
+    try:
+        print(summarize(load_results(Path(args.dir))), end="")
+    except BenchError as e:
+        raise OrchestratorError(str(e)) from e
+    return EXIT_OK
+
+
+def cmd_bench_list(args: argparse.Namespace) -> int:
+    from duet.bench import BenchError, builtin_suites, load_suite
+
+    print("내장 과제 묶음: " + ", ".join(builtin_suites()))
+    try:
+        tasks = load_suite(args.suite)
+    except BenchError as e:
+        raise OrchestratorError(str(e)) from e
+    print(f"\n{args.suite}:")
+    for t in tasks:
+        print(f"  {t.name:<20} [{'기존 프로젝트' if t.kind == 'existing' else '새 프로젝트'}] {t.description}")
     return EXIT_OK
 
 

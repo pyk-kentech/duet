@@ -422,6 +422,10 @@ env_keep = ["CLAUDE_CODE_OAUTH_TOKEN"]
 - `workflow.py`(역할·단계 정의, 로드·검증, classic), 내장 템플릿 `workflows/*.toml`, 단계 종류 explore/debate/build/audit, 리뷰어 여러 명, 역할별 지시·프롬프트, `--workflow`, `duet workflows`, UI 선택 (19장)
 - ✅ 템플릿 검증 오류, classic 이 예전과 같은 기록·커밋을 남김, 역할별 모델·강도 플래그, 리뷰어 2명 판정 합산·수정 프롬프트, explore/audit, resume 시 저장된 정의 사용, UI 목록·실행
 
+### M14. 벤치마크 (2026-10-16 사용자 요청으로 추가)
+- `bench.py`, 내장 과제 묶음 `bench_suites/basic/`(숨은 수용 테스트 포함), `duet bench run|report|list` (20장)
+- ✅ 숨은 테스트가 참조 구현에서 모두 통과(과제 묶음 자체의 검증), mock 으로 실행 → 숨은 테스트 채점 → results.json·요약표, 실제 실행은 `--yes` 없이는 거부
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -649,3 +653,38 @@ memo-cli 실측(Codex 세션 기록): 설계 단계 호출은 입력 약 2만 �
 
 ### 19.7 테스트 명령의 출처 표시
 작업 폴더 `duet.toml` 의 `test_command` 는 설정 층으로도 읽히므로 출처가 `설정` 으로 찍혔다. 설정값이 작업 폴더 `duet.toml` 의 값과 같으면 출처를 `duet.toml` 로 표시한다.
+
+---
+
+## 20. 벤치마크 (`duet bench`)
+
+"두 모델 교차 리뷰가 실제로 나은가", "이 개선이 비용을 줄였나"를 숫자로 답하기 위한 도구. 같은 과제 묶음을 워크플로별로 돌리고, **에이전트가 보지 못한 숨은 수용 테스트**로 결과물을 채점한다.
+
+### 20.1 과제 묶음
+```
+bench_suites/<묶음>/<과제>/
+├── bench.toml     # name, description, kind = "new" | "existing", max_review(선택), timeout_sec(선택)
+├── task.md        # 에이전트에게 주는 과제. 숨은 테스트가 부를 인터페이스(패키지 이름, 함수, CLI)를 명시
+├── setup/         # (existing) 시작 코드. 작업 폴더에 복사 후 커밋하고 시작
+└── hidden/        # 숨은 수용 테스트 (pytest). 실행이 끝난 뒤 채점용 복사본에만 넣는다
+```
+- 내장 묶음 `basic`(Python, 표준 라이브러리만): 새 프로젝트 4개(`roman` 로마 숫자, `intervals` 구간 병합, `inimini` INI 파서, `textstats` wc 비슷한 CLI) + 기존 프로젝트 1개(`textstats-maxline`: textstats 에 `-L` 추가). 패키지는 작업 폴더 최상위에 둔다(src 레이아웃 아님)고 과제에 적는다.
+- 숨은 테스트의 정확성은 duet 저장소의 테스트가 참조 구현(`tests/bench_refs/`)으로 검증한다. 과제 묶음의 버그가 점수를 왜곡하지 않게.
+- 사용자 묶음: `--suite <경로>` 로 같은 구조의 폴더를 줄 수 있다.
+
+### 20.2 실행 (`duet bench run`)
+```
+duet bench run [--suite basic|경로] [--workflow W ...] [--task T ...] [--repeat N] [--max-review N] [--out DIR] [--mock] [--yes]
+```
+- 과제 × 워크플로 × 반복마다 `<out>/<시각>/<과제>/<워크플로>-<n>/` 에 작업 폴더를 만들고(existing 이면 setup 복사 후 커밋), 같은 프로세스에서 Orchestrator 로 실행한다(순차). 기본 워크플로 `classic`, 기본 out `$DUET_HOME/bench`.
+- 실제 실행(`--mock` 아님)은 구독 사용량을 크게 쓰므로, 몇 번 돌지와 예상 호출 수를 보여 주고 `--yes` 가 없으면 시작하지 않는다.
+- 한도 도달로 멈춘 실행은 그 자리에서 결과를 `stopped` 로 남기고 다음으로 넘어가지 않고 **벤치마크 전체를 멈춘다**(남은 실행을 돌려 봐야 다 멈춘다). `results.json` 은 실행마다 갱신하므로 중간 결과가 남는다.
+
+### 20.3 채점
+- 실행이 끝나면 작업 폴더를 채점용 폴더로 복사(`.git`, `.duet` 제외)하고 `hidden/` 을 `duet_hidden_tests/` 로 넣어 pytest 를 돌린다(`PYTHONPATH=채점 폴더`, 비밀 변수 제거, 시간 제한). pytest 는 `uv` 가 있으면 `uvx pytest`, 없으면 `python3 -m pytest`.
+- 기록: 상태(approved/unapproved/stopped/failed), 리뷰 라운드, 숨은 테스트 통과/전체, 소요 시간, 호출 수, CLI 별 입력·캐시·출력 토큰, Claude 비용(USD, 참고), 에이전트 자체 테스트 결과(마지막 duet 테스트).
+- 승인 여부와 숨은 테스트 통과는 따로 본다: "승인했는데 숨은 테스트 실패" = 리뷰가 놓친 결함.
+
+### 20.4 결과
+- `<out>/<시각>/results.json`(실행별 행) + `summary.md`(워크플로별 집계: 실행 수, 승인률, 숨은 테스트 통과율 평균, 전부 통과한 비율, 승인했는데 실패한 수, 평균 라운드·시간·호출, 평균 토큰).
+- `duet bench report <폴더>` 로 요약을 다시 출력, `duet bench list` 로 묶음·과제 목록.

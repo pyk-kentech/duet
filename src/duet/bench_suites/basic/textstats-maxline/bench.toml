@@ -1,0 +1,3 @@
+name = "textstats-maxline"
+description = "기존 textstats 프로젝트에 -L(가장 긴 줄) 추가. 기존 동작 유지가 핵심"
+kind = "existing"

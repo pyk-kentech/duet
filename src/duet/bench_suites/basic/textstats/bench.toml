@@ -1,0 +1,3 @@
+name = "textstats"
+description = "wc 비슷한 CLI (바이트·UTF-8, 여러 파일, 합계, 오류 처리)"
+kind = "new"

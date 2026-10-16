@@ -1,0 +1,3 @@
+name = "intervals"
+description = "반열린 구간 병합·삽입·빼기 라이브러리 (경계 조건)"
+kind = "new"
