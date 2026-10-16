@@ -1,0 +1,3 @@
+name = "ratelimit"
+description = "스레드 안전한 토큰 버킷·슬라이딩 윈도·키별 리미터 (경쟁 조건, 창 경계, 거꾸로 가는 시계)"
+kind = "new"

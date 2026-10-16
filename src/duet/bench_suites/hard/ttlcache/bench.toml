@@ -1,0 +1,3 @@
+name = "ttlcache"
+description = "만료(TTL)+LRU 캐시와 memoize (상각 O(1) 성능, 만료 경계, 만료 항목 우선 제거, typed 키)"
+kind = "new"

@@ -1,0 +1,3 @@
+name = "stock-reservations"
+description = "기존 재고 관리 프로젝트(모듈 5개)에 예약 기능 추가: 출고가 예약 존중, 만료 경계, 저장 형식 v1→v2"
+kind = "existing"

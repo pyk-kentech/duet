@@ -52,6 +52,48 @@ def test_hidden_tests_pass_on_reference(name, tmp_path: Path):
     assert g["all_passed"]
 
 
+HARD = ["ledger", "csvq", "ratelimit", "ttlcache", "stock-reservations"]
+
+
+def test_hard_suite_shape():
+    tasks = {t.name: t for t in load_suite("hard")}
+    assert set(tasks) == set(HARD)
+    assert tasks["stock-reservations"].kind == "existing"
+    assert sum(1 for t in tasks.values() if t.kind == "new") == 4
+
+
+@pytest.mark.parametrize("name", HARD)
+def test_hard_hidden_tests_pass_on_reference(name, tmp_path: Path):
+    task = next(t for t in load_suite("hard") if t.name == name)
+    wd = tmp_path / "wd"
+    prepare_workdir(task, wd)
+    shutil.copytree(REFS / name, wd, dirs_exist_ok=True)
+    g = grade(task, wd, tmp_path / "eval", pytest_cmd=PYTEST)
+    assert g["total"] >= 15 and g["failed"] == 0 and g["errors"] == 0, g["output_tail"]
+    assert g["all_passed"]
+
+
+def test_hard_existing_setup_fails_only_new_tests(tmp_path: Path):
+    import subprocess
+
+    task = next(t for t in load_suite("hard") if t.name == "stock-reservations")
+    wd = tmp_path / "wd"
+    prepare_workdir(task, wd)
+    assert Workspace(wd).has_commits() and len(list((wd / "stock").glob("*.py"))) >= 6
+    g = grade(task, wd, tmp_path / "eval", pytest_cmd=PYTEST)
+    assert g["failed"] + g["errors"] >= 15 and not g["all_passed"]
+    # 기존 동작 테스트는 시작 코드에서 모두 통과
+    legacy_only = tmp_path / "legacy"
+    shutil.copytree(task.path, legacy_only / "task")
+    (legacy_only / "task" / "hidden" / "test_reservations.py").unlink()
+    from duet.bench import Task
+
+    g2 = grade(Task("legacy", "", "existing", legacy_only / "task"), wd, tmp_path / "eval2", pytest_cmd=PYTEST)
+    assert g2["all_passed"], g2["output_tail"]
+    r = subprocess.run([*PYTEST, "-q", "-p", "no:cacheprovider"], cwd=wd, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout
+
+
 def test_existing_setup_fails_only_new_tests(tmp_path: Path):
     task = next(t for t in load_suite("basic") if t.name == "textstats-maxline")
     wd = tmp_path / "wd"
