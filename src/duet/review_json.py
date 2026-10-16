@@ -25,6 +25,7 @@ REVIEW_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
+                    "id": {"type": "string"},
                     "severity": {"type": "string", "enum": list(SEVERITIES)},
                     "new": {"type": "boolean"},
                     "title": {"type": "string"},
@@ -32,7 +33,7 @@ REVIEW_SCHEMA: dict[str, Any] = {
                     "detail": {"type": "string"},
                     "evidence": {"type": "string"},
                 },
-                "required": ["severity", "new", "title", "file", "detail", "evidence"],
+                "required": ["id", "severity", "new", "title", "file", "detail", "evidence"],
                 "additionalProperties": False,
             },
         },
@@ -51,10 +52,11 @@ REVIEW_SCHEMA: dict[str, Any] = {
 }
 
 OUTPUT_INSTRUCTION_JSON = """응답은 지정된 JSON 형식으로만 한다.
-- findings: 지적마다 하나. severity 는 위 기준의 P1/P2/P3, new 는 이번에 처음 찾은 지적이면 true, title 은 한 줄 요약,
+- findings: 지적마다 하나. id 는 [열린 지적 목록]에 있는 지적이 아직 해결되지 않았으면 그 ID(예: I3), 새 지적이면 빈 문자열.
+  severity 는 위 기준의 P1/P2/P3, new 는 이번에 처음 찾은 지적이면 true, title 은 한 줄 요약,
   file 은 관련 파일 경로(없으면 빈 문자열), detail 은 무엇이 왜 문제이고 어떻게 고칠지, evidence 는 근거(실패하는 입력,
   코드 위치, 실행 결과 등. 없으면 빈 문자열). 최대 12개, 중요한 것부터.
-- status: P1·P2 지적이 없으면 APPROVED, 있으면 CHANGES_REQUESTED.
+- status: P1·P2 지적이 없으면 APPROVED, 있으면 CHANGES_REQUESTED.{gate_hint}
 - summary: 전체 평가 두세 문장.
 - repro: {repro_hint}"""
 
@@ -82,18 +84,25 @@ p3: 숫자
 </verdict>"""
 
 
-def output_instruction(json_mode: bool, repro_tests: bool, repro_instruction: str) -> str:
+GATE_HINT = ("\n- duet 가 판정을 기계적으로 보정한다: P1·P2 인데 evidence 가 비어 있으면 P3 로 낮추고, 2라운드부터는 "
+             "지난 리뷰 이후 바뀌지 않은 파일에 대한 새 P2 지적도 P3 로 낮춘다(P1 은 그대로). 막아야 할 지적이면 근거를 적어라.")
+
+
+def output_instruction(json_mode: bool, repro_tests: bool, repro_instruction: str, gates: bool = False) -> str:
     if json_mode:
-        return OUTPUT_INSTRUCTION_JSON.replace("{repro_hint}", REPRO_HINT_ON if repro_tests else REPRO_HINT_OFF)
+        return (OUTPUT_INSTRUCTION_JSON.replace("{repro_hint}", REPRO_HINT_ON if repro_tests else REPRO_HINT_OFF)
+                .replace("{gate_hint}", GATE_HINT if gates else ""))
     return OUTPUT_INSTRUCTION_TEXT.replace("{repro_instruction}", repro_instruction).strip()
 
 
 def _finding(f: dict[str, Any]) -> str:
-    tag = f"[{f.get('severity', 'P3')}]" + ("[새]" if f.get("new") else "")
+    tag = f"[{f.get('severity', 'P3')}]" + ("[새]" if f.get("new") else "") + (f"[{f['id']}]" if f.get("id") else "")
     title = re.sub(r"^\s*(?:\[(?:새|new|NEW)\]\s*)+", "", str(f.get("title") or "")).strip()   # 모델이 제목에도 [새] 를 붙임
     head = f"- {tag} {title}"
     if str(f.get("file") or "").strip():
         head += f" — `{str(f['file']).strip()}`"
+    if f.get("note"):
+        head += f" ({f['note']})"
     lines = [head]
     detail = str(f.get("detail") or "").strip()
     if detail:

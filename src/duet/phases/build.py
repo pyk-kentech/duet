@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 from duet.agents.base import Mode
 from duet.phases.common import PhaseContext
 from duet.phases.debate import DESIGN_FILENAME
+from duet import gates
 from duet.packet import READ_INSTRUCTION_PACKET, READ_INSTRUCTION_PLAIN, call_sites, changed_symbols
 from duet.policy import Decision, decide, stalled
 from duet.prompts import TemplateError, load_template
@@ -97,6 +98,7 @@ class BuildPhase:
         self.multi = len(self.reviewers) > 1
         self.max_review = ctx.cfg.max_review
         self._single: "Verdict | None" = None
+        self._downgraded: dict[str, dict] = {}     # 역할 → 이번 라운드 관문별 강등 수
 
     # ---------------------------------------------------------------- run
     def run(self) -> bool:
@@ -198,6 +200,7 @@ class BuildPhase:
         decisions: list[tuple[str, Decision]] = []
         files: list[str] = []
         sites_full: str | None = None
+        self._downgraded = {}
         for role in self.reviewers:
             sub_key = f"review:{i}:{role}"
             if self.multi and st.is_done(sub_key) and role in parts:
@@ -206,14 +209,17 @@ class BuildPhase:
                 files.append(p["file"])
                 continue
             json_mode = self.cfg.review_json and self._template_has(role, "review", "{output_instruction}")
+            use_gates = json_mode and self.cfg.review_gates
             repro_text = REPRO_INSTRUCTION if self.cfg.repro_tests else ""
+            open_now = gates.open_issues(st, role) if use_gates else []
             if sites_full is None:
                 sites_full = self._call_sites(diff)
             common = dict(task=ctx.task, implementer_name=self.implementer, tests=self._tests_text(i),
                           test_instruction=self._test_instruction(i, role),
                           read_instruction=READ_INSTRUCTION_PACKET if self.cfg.review_packet else READ_INSTRUCTION_PLAIN,
-                          repro_instruction=repro_text,
-                          output_instruction=output_instruction(json_mode, self.cfg.repro_tests, repro_text))
+                          repro_instruction=repro_text, open_issues=gates.format_open(open_now),
+                          output_instruction=output_instruction(json_mode, self.cfg.repro_tests, repro_text,
+                                                                gates=use_gates))
             full_prompt = ctx.prompt(role, "review", diff=diff, diff_title=diff_title, call_sites=sites_full,
                                      previous_review=self._previous_must_fix(role), **common)
             resume_id = self._resumable_session(role, i, json_mode)
@@ -226,12 +232,33 @@ class BuildPhase:
                 prompt = full_prompt
                 ctx.log(f"[{i}/{self.max_review}] 리뷰: {role} (diff {len(diff):,}자"
                         f"{', 지난 리뷰 이후만' if '이후' in diff_title else ''})")
+            gated: dict = {}
+            if use_gates:
+                changed = self._changed_since_review(i)
+                ids = {x["id"] for x in open_now}
+                first = gates.next_number(st)
+
+                def transform(r, changed=changed, ids=ids, first=first):
+                    if r.structured is None:
+                        return r.text
+                    res = gates.apply_gates(r.structured, round_=i, open_ids=ids, changed_files=changed,
+                                            first_number=first)
+                    rendered = render_review(res.data)
+                    if rendered is None:
+                        return r.text
+                    gated["res"] = res
+                    return rendered
+            else:
+                transform = _render_structured if json_mode else None
             st.reviewed_commits[str(i)] = self.ws.head()
             out = ctx.call(role, "review", prompt, Mode.READ, label=f"review{i}_{role}", round_=i,
                            output_schema=REVIEW_SCHEMA if json_mode else None,
                            resume_session=resume_id, fallback_prompt=full_prompt if resume_id else None,
-                           transform=_render_structured if json_mode else None)
+                           transform=transform)
             self._remember_session(role, i, out.result)
+            if "res" in gated:
+                gates.update_ledger(st, role, i, gated["res"].data["findings"])
+                self._downgraded[role] = gated["res"].downgraded
             self._undo_reviewer_changes()
             verdict = parse_verdict(out.text)
             decision = decide(verdict, block_severity=self.cfg.block_severity, tests_block=tests_block,
@@ -242,6 +269,7 @@ class BuildPhase:
             files.append(out.file)
             if self.multi:
                 parts[role] = {"file": out.file, "reviewer_status": verdict.status.value,
+                               "downgraded": self._downgraded.get(role),
                                "approved": decision.approved, "blocking": decision.blocking,
                                "must_fix": verdict.must_fix, "severity": verdict.severity,
                                "parse_failed": verdict.parse_failed, "reasons": decision.reasons}
@@ -269,6 +297,19 @@ class BuildPhase:
             return marker in load_template(name, self.ctx.workdir)
         except TemplateError:
             return False
+
+    def _changed_since_review(self, i: int) -> set[str] | None:
+        """지난 리뷰 시점 이후 바뀐 파일 (범위 관문, DESIGN.md 22.2). 1라운드거나 기준을 모르면 None."""
+        if i < 2:
+            return None
+        prev = self._reviewed_commit(i - 1)
+        if not prev:
+            return None
+        try:
+            out = self.ws.git("diff", "--name-only", prev, "HEAD")
+        except GitError:
+            return None
+        return {ln.strip() for ln in out.splitlines() if ln.strip()}
 
     def _call_sites(self, diff: str) -> str:
         if not self.cfg.review_packet:
@@ -300,11 +341,16 @@ class BuildPhase:
         if not self.multi:
             v = self._single
             assert v is not None
-            return {"round": i, "file": files[0], "reviewer_status": v.status.value,
-                    "approved": decision.approved, "blocking": decision.blocking,
-                    "must_fix": v.must_fix, "severity": v.severity,
-                    "parse_failed": v.parse_failed, "reasons": decision.reasons,
-                    "tests": test.get("status") if test else None}
+            entry = {"round": i, "file": files[0], "reviewer_status": v.status.value,
+                     "approved": decision.approved, "blocking": decision.blocking,
+                     "must_fix": v.must_fix, "severity": v.severity,
+                     "parse_failed": v.parse_failed, "reasons": decision.reasons,
+                     "tests": test.get("status") if test else None}
+            if self._downgraded.get(self.reviewer):
+                entry["downgraded"] = self._downgraded[self.reviewer]
+            if self.state.issues:
+                entry["open_issues"] = sum(1 for x in self.state.issues if x["status"] == "open")
+            return entry
         parts = self.state.round_reviews.get(str(i), {})
         rows = [{"role": r, **parts[r]} for r in self.reviewers if r in parts]
         severity: dict[str, int] | None = None

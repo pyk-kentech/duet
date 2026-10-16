@@ -20,7 +20,8 @@ def test_review_template_has_verdict_block():
 
     values = dict(task="t", diff="d", implementer_name="claude", tests="T", previous_review="P",
                   diff_title="구현 전체 diff", test_instruction="I", repro_instruction="REPRO-HERE",
-                  design_doc="DESIGN.md", design_note="", call_sites="(없음)", read_instruction="R")
+                  design_doc="DESIGN.md", design_note="", call_sites="(없음)", read_instruction="R",
+                  open_issues="(없음)")
     out = render("review", output_instruction=output_instruction(False, True, "REPRO-HERE"), **values)
     assert "<verdict>" in out and "must_fix" in out and "p3:" in out and "[P1]" in out and "REPRO-HERE" in out
     out = render("review", output_instruction=output_instruction(True, True, "REPRO-HERE"), **values)

@@ -12,6 +12,9 @@ IMPLEMENTATION_NOTES.md에 이전 지적에 대한 반론이 있으면 읽고 �
 [이전 리뷰에서 '반드시 고칠 것'으로 지적한 내용]
 {previous_review}
 
+[열린 지적 목록 (ID 가 붙은, 아직 해결되지 않은 지적)]
+{open_issues}
+
 [{diff_title}]
 {diff}
 

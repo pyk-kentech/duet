@@ -92,9 +92,10 @@ class MockAdapter:
             self.reviews += 1
             approve = bool(self.approve_on_review and self.reviews >= self.approve_on_review)
             if req.output_schema is not None:   # JSON 판정 (DESIGN.md 21.2)
-                findings = [] if approve else [{"severity": "P2", "new": self.reviews == 1, "title": "예외 처리 없음",
-                                                "file": self.write_file, "detail": "입력 오류를 처리하지 않는다",
-                                                "evidence": ""}]
+                findings = [] if approve else [{"id": "", "severity": "P2", "new": self.reviews == 1,
+                                                "title": "예외 처리 없음", "file": self.write_file,
+                                                "detail": "입력 오류를 처리하지 않는다",
+                                                "evidence": f"{self.write_file}:1 입력 검사 없음"}]
                 return json.dumps({"status": "APPROVED" if approve else "CHANGES_REQUESTED",
                                    "summary": f"{self.name} 리뷰", "findings": findings, "repro": []},
                                   ensure_ascii=False)

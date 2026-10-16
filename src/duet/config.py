@@ -146,6 +146,7 @@ class Config:
     # 기본은 매번 새 세션(fresh) — DESIGN.md 21.3
     review_session: str = "fresh"
     review_session_rounds: int = 3      # 한 세션을 쓰는 최대 라운드 수
+    review_gates: bool = True           # JSON 판정의 지적 원장·근거 관문·범위 관문 (DESIGN.md 22장)
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
     env_strip: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_STRIP))
     env_keep: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_KEEP))
@@ -197,7 +198,7 @@ class Config:
             raise ConfigError(f"review_diff 는 incremental 또는 full 이어야 합니다: {self.review_diff!r}")
         if not isinstance(self.repro_tests, bool):
             raise ConfigError("repro_tests 는 true/false 여야 합니다")
-        for key in ("review_packet", "review_json"):
+        for key in ("review_packet", "review_json", "review_gates"):
             if not isinstance(getattr(self, key), bool):
                 raise ConfigError(f"{key} 는 true/false 여야 합니다")
         if self.review_session not in ("reuse", "fresh"):
