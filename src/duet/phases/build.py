@@ -251,11 +251,14 @@ class BuildPhase:
             else:
                 transform = _render_structured if json_mode else None
             st.reviewed_commits[str(i)] = self.ws.head()
+            # 이어갈 때는 세션을 연 리뷰의 추론 강도를 그대로 쓴다. 강도가 바뀌면 Codex 대화 캐시가 깨진다(DESIGN.md 21.3)
+            session_effort = (st.review_sessions.get(role) or {}).get("effort") if resume_id else None
             out = ctx.call(role, "review", prompt, Mode.READ, label=f"review{i}_{role}", round_=i,
                            output_schema=REVIEW_SCHEMA if json_mode else None,
                            resume_session=resume_id, fallback_prompt=full_prompt if resume_id else None,
-                           transform=transform)
-            self._remember_session(role, i, out.result)
+                           transform=transform, effort=session_effort)
+            self._remember_session(role, i, out.result,
+                                   session_effort if out.result.resumed else ctx.agent_config(role).effort_for("review", i))
             if "res" in gated:
                 gates.update_ledger(st, role, i, gated["res"].data["findings"])
                 self._downgraded[role] = gated["res"].downgraded
@@ -329,13 +332,13 @@ class BuildPhase:
             return None
         return str(s["id"])
 
-    def _remember_session(self, role: str, i: int, result) -> None:
+    def _remember_session(self, role: str, i: int, result, effort: str | None = None) -> None:
         prev = self.state.review_sessions.get(role) or {}
         if not result.session_id:
             self.state.review_sessions.pop(role, None)
             return
         rounds = int(prev.get("rounds") or 0) + 1 if result.resumed and prev.get("id") == result.session_id else 1
-        self.state.review_sessions[role] = {"id": result.session_id, "round": i, "rounds": rounds}
+        self.state.review_sessions[role] = {"id": result.session_id, "round": i, "rounds": rounds, "effort": effort or ""}
 
     def _history_entry(self, i: int, decision: Decision, files: list[str], test: dict | None) -> dict:
         if not self.multi:

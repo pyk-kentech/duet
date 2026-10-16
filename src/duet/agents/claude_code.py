@@ -57,7 +57,7 @@ class ClaudeCodeAdapter:
     def build_command(self, req: AgentRequest) -> tuple[list[str], str | None]:
         """(명령어, stdin 텍스트)를 돌려준다. 프롬프트가 길면 stdin으로 넘긴다."""
         mode_args = self.agent_cfg.read_args if req.mode is Mode.READ else self.agent_cfg.write_args
-        effort = self.agent_cfg.effort_for(req.step, req.round)
+        effort = req.effort if req.effort is not None else self.agent_cfg.effort_for(req.step, req.round)
         base = (self.agent_cfg.resume_args or self.agent_cfg.base_args) if req.resume_session else self.agent_cfg.base_args
         if req.resume_session and self.agent_cfg.resume_read_args and req.mode is Mode.READ:
             mode_args = self.agent_cfg.resume_read_args
@@ -106,7 +106,7 @@ class ClaudeCodeAdapter:
         if req.output_schema is not None:
             so = data.get("structured_output") if isinstance(data, dict) else None
             structured = so if isinstance(so, dict) else parse_structured(text)
-        effort = self.agent_cfg.effort_for(req.step, req.round)
+        effort = req.effort if req.effort is not None else self.agent_cfg.effort_for(req.step, req.round)
         if usage is not None and effort:
             usage["effort"] = effort
         exit_code = r.exit_code

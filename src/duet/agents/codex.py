@@ -64,7 +64,7 @@ class CodexAdapter:
         if self._resumes(req):
             # codex exec resume [OPTIONS] [SESSION_ID] [PROMPT] — --sandbox·-C 가 없다 (DESIGN.md 21.3)
             cmd = [self.agent_cfg.bin, *self.agent_cfg.resume_args,
-                   *self.model_args(self.agent_cfg.effort_for(req.step, req.round)),
+                   *self.model_args(self._effort(req)),
                    *(self.agent_cfg.resume_read_args or self.agent_cfg.read_args)]
             if schema_path is not None:
                 cmd += ["--output-schema", str(schema_path)]
@@ -76,7 +76,7 @@ class CodexAdapter:
         cmd = [
             self.agent_cfg.bin,
             *self.agent_cfg.base_args,
-            *self.model_args(self.agent_cfg.effort_for(req.step, req.round)),
+            *self.model_args(self._effort(req)),
             "-C", str(req.cwd),
             *mode_args,
             *(["--output-schema", str(schema_path)] if schema_path is not None else []),
@@ -97,6 +97,9 @@ class CodexAdapter:
             # ~/.codex/config.toml 의 model_reasoning_effort 를 이 호출에서만 덮어쓴다
             args += ["-c", f'model_reasoning_effort="{effort}"']
         return args
+
+    def _effort(self, req: AgentRequest) -> str:
+        return req.effort if req.effort is not None else self.agent_cfg.effort_for(req.step, req.round)
 
     def _resumes(self, req: AgentRequest) -> bool:
         """읽기 모드에서만 이어간다 (resume 에 쓰기용 샌드박스 옵션을 따로 두지 않았다)."""

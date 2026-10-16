@@ -91,6 +91,12 @@ class PhaseContext:
                 "프로젝트 전체 설계(DESIGN.md, 있다면)와 기존 코드의 관례를 함께 따르고, "
                 "과제에 필요하지 않은 기존 동작은 바꾸지 마라.")
 
+    def agent_config(self, role: str):
+        """역할이 쓰는 CLI 설정(모델·강도 포함)."""
+        if self.workflow is not None and role in self.workflow.roles:
+            return self.workflow.roles[role].agent_config(self.cfg)
+        return self.cfg.agent(self.cli_of(role))
+
     def can_run_commands(self, role: str) -> bool:
         """읽기 모드에서 이 역할이 명령을 실행할 수 있는가 (DESIGN.md 19.6).
 
@@ -158,6 +164,7 @@ class PhaseContext:
         resume_session: str | None = None,
         fallback_prompt: str | None = None,
         transform: Callable[[AgentResult], str] | None = None,
+        effort: str | None = None,
     ) -> CallOutcome:
         """에이전트를 호출하고 기록·상태를 갱신한다. 실패 정책을 적용한다.
 
@@ -167,7 +174,7 @@ class PhaseContext:
         req = AgentRequest(prompt=prompt, cwd=self.workdir, mode=mode,
                            timeout_sec=self.cfg.timeout_sec, step=step, round=round_,
                            output_schema=output_schema, resume_session=resume_session,
-                           fallback_prompt=fallback_prompt)
+                           fallback_prompt=fallback_prompt, effort=effort)
         attempt = 0
         while True:
             attempt += 1

@@ -163,6 +163,16 @@ def test_codex_resume_command(fake_cfg: Config, tmp_path: Path):
     assert "resume" not in cmd and "--sandbox" in cmd
 
 
+def test_explicit_effort_overrides_step_effort(fake_cfg: Config, tmp_path: Path):
+    cmd, _ = CodexAdapter(fake_cfg).build_command(req(tmp_path, resume_session="sid", effort="high"), tmp_path / "l.md")
+    assert 'model_reasoning_effort="high"' in cmd                 # review 2라운드면 원래 rereview = medium
+    cmd, _ = CodexAdapter(fake_cfg).build_command(req(tmp_path), tmp_path / "l.md")
+    assert 'model_reasoning_effort="medium"' in cmd
+    cfg = load_config(None, {"claude": {"bin": fake_cfg.claude.bin, "effort": "low"}}, global_defaults={})
+    cmd, _ = ClaudeCodeAdapter(cfg).build_command(req(tmp_path, effort="max"))
+    assert cmd[cmd.index("--effort") + 1] == "max"
+
+
 def test_codex_resume_long_prompt_uses_stdin(tmp_path: Path, fake_bin: Path):
     cfg = load_config(None, {"codex": {"bin": str(fake_bin / "codex")}, "prompt_arg_max_bytes": 5}, global_defaults={})
     cmd, stdin = CodexAdapter(cfg).build_command(req(tmp_path, resume_session="sid"), tmp_path / "l.md")
@@ -251,7 +261,9 @@ def test_json_verdict_and_session_reuse(tmp_path: Path, monkeypatch):
     assert "예외 처리 없음" in rv[1].prompt                                     # 지난 지적 목록
     assert "너는 깐깐하지만" in rv[0].prompt and "JSON" in rv[0].prompt
     assert rv[1].fallback_prompt and "너는 깐깐하지만" in rv[1].fallback_prompt
-    assert st.review_sessions["codex"] == {"id": "mock-codex-s3", "round": 3, "rounds": 3}
+    assert st.review_sessions["codex"] == {"id": "mock-codex-s3", "round": 3, "rounds": 3, "effort": "high"}
+    # 이어간 리뷰는 세션을 연 첫 리뷰의 강도(high)를 그대로 — rereview 강도(medium)로 바꾸면 Codex 캐시가 깨진다
+    assert [c.effort for c in rv] == [None, "high", "high"]
     entries = {e.name: e for e in Transcript(rd).entries()}
     r1 = next(e for n, e in entries.items() if n.endswith("review1_codex.md"))
     r2 = next(e for n, e in entries.items() if n.endswith("review2_codex.md"))
@@ -267,7 +279,7 @@ def test_session_rounds_cap(tmp_path: Path, monkeypatch):
     _, seen, st, _ = run_mock(tmp_path, monkeypatch, "--stall-rounds", "0", approve=4, reuse=True)
     # 한 세션은 최대 3라운드 → 4라운드는 새 세션(s4)
     assert [c.resume_session for c in reviews(seen)] == [None, "mock-codex-s3", "mock-codex-s3", None]
-    assert st.review_sessions["codex"] == {"id": "mock-codex-s4", "round": 4, "rounds": 1}
+    assert st.review_sessions["codex"] == {"id": "mock-codex-s4", "round": 4, "rounds": 1, "effort": "medium"}
 
 
 def test_fresh_and_text_mode_via_toml(tmp_path: Path, monkeypatch):
@@ -280,7 +292,7 @@ def test_fresh_and_text_mode_via_toml(tmp_path: Path, monkeypatch):
     assert [c.resume_session for c in rv] == [None, None] and all(c.output_schema is None for c in rv)
     assert "파일을 직접 열어봐도 된다" in rv[0].prompt and "<verdict>" in rv[0].prompt
     assert st.config["review_session"] == "fresh" and st.config["review_json"] is False
-    assert st.review_sessions == {"codex": {"id": "mock-codex-s4", "round": 2, "rounds": 1}}
+    assert st.review_sessions == {"codex": {"id": "mock-codex-s4", "round": 2, "rounds": 1, "effort": "medium"}}
 
 
 def test_packet_call_sites_in_prompt(tmp_path: Path, monkeypatch):
