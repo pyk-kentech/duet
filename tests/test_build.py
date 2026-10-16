@@ -27,7 +27,7 @@ def test_approved_on_second_review(tmp_path: Path):
     ws = Workspace(tmp_path)
     assert ws.commit_count() == 3  # design + impl1 + impl2
     assert not ws.dirty()
-    assert (tmp_path / ".gitignore").read_text(encoding="utf-8").strip() == ".duet/"
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()[0] == ".duet/"
     assert (tmp_path / "main.py").read_text(encoding="utf-8") == "print('hi')\n# fix\n"
     assert [c.step for c in agents["claude"].calls] == ["implement", "fix"]
     assert [c.step for c in agents["codex"].calls] == ["review", "review"]

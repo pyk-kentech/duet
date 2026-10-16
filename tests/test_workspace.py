@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from duet.workspace import GitError, Workspace, WorkdirRefused, check_workdir
+from duet.workspace import GITIGNORE_ARTIFACTS, GitError, Workspace, WorkdirRefused, check_workdir
 
 
 def test_ensure_repo_and_gitignore(tmp_path: Path):
@@ -12,16 +12,52 @@ def test_ensure_repo_and_gitignore(tmp_path: Path):
     assert not ws.is_repo()
     ws.ensure_repo()
     assert ws.is_repo() and not ws.has_commits()
-    assert (wd / ".gitignore").read_text(encoding="utf-8") == ".duet/\n"
+    text = (wd / ".gitignore").read_text(encoding="utf-8")
+    lines = text.splitlines()
+    assert lines[0] == ".duet/"
+    for pat in ("__pycache__/", "*.py[cod]", ".pytest_cache/", "node_modules/"):
+        assert pat in lines
     # 두 번 불러도 중복 추가 없음
     ws.ensure_repo()
-    assert (wd / ".gitignore").read_text(encoding="utf-8") == ".duet/\n"
+    assert (wd / ".gitignore").read_text(encoding="utf-8") == text
 
 
 def test_gitignore_appended_to_existing(tmp_path: Path):
     (tmp_path / ".gitignore").write_text("*.pyc", encoding="utf-8")
     Workspace(tmp_path).ensure_repo()
+    # 이미 있는 파일에는 .duet/ 만 덧붙이고 부산물 규칙은 넣지 않는다
     assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == "*.pyc\n.duet/\n"
+
+
+def test_existing_empty_gitignore_left_alone(tmp_path: Path):
+    (tmp_path / ".gitignore").write_text("", encoding="utf-8")
+    Workspace(tmp_path).ensure_repo()
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == ".duet/\n"
+
+
+def test_existing_gitignore_with_duet_untouched(tmp_path: Path):
+    (tmp_path / ".gitignore").write_text("dist/\n.duet/\n", encoding="utf-8")
+    Workspace(tmp_path).ensure_repo()
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == "dist/\n.duet/\n"
+
+
+def test_new_gitignore_keeps_artifacts_out_of_commits(tmp_path: Path):
+    ws = Workspace(tmp_path)
+    ws.ensure_repo()
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "main.py").write_text("print(1)\n", encoding="utf-8")
+    # 에이전트가 직접 돌린 pytest 가 남기는 것들
+    for rel in ("app/__pycache__/main.cpython-312.pyc", "app/__pycache__/main.cpython-310.pyc",
+                ".pytest_cache/v/cache/nodeids", "pkg.egg-info/PKG-INFO", "node_modules/x/index.js",
+                "stray.pyc"):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x", encoding="utf-8")
+    ws.commit_all("duet: impl round 1")
+    tracked = ws.git("ls-files").split()
+    assert sorted(tracked) == [".gitignore", "app/main.py"]
+    assert not ws.dirty()
+    assert len(GITIGNORE_ARTIFACTS) == len(set(GITIGNORE_ARTIFACTS))
 
 
 def test_commit_diff_dirty_restore(tmp_path: Path):

@@ -260,7 +260,7 @@ BuildPhase
         └── 09_review2_codex.md
 ```
 
-- `.duet/`는 자동으로 `.gitignore`에 추가.
+- `.duet/`는 자동으로 `.gitignore`에 추가. `.gitignore` 가 없어서 duet 가 새로 만들 때는 빌드·테스트 부산물(`__pycache__/`, `*.py[cod]`, `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `.coverage`, `htmlcov/`, `*.egg-info/`, `.venv/`, `node_modules/`, `.DS_Store`)도 넣는다. 에이전트가 직접 돌린 테스트의 캐시가 구현 커밋에 섞이는 것을 막는다(실제 실행에서 발견). 이미 있는 `.gitignore` 에는 `.duet/` 만 덧붙이고 다른 규칙은 건드리지 않는다.
 - 각 기록 파일 상단에 메타데이터 주석(에이전트, 모드, 소요 시간, exit code)을 넣는다.
 - 실패한 호출도 `NN_label_failed.md` 로 남긴다(stderr 포함).
 - `done` 은 완료한 스텝 키 목록. resume 은 이 목록에 없는 스텝부터 실행하며, 필요한 텍스트는 기록 파일에서 다시 읽는다.

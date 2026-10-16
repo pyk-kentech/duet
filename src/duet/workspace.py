@@ -14,6 +14,13 @@ GIT_IDENTITY = ["-c", "user.name=duet", "-c", "user.email=duet@local",
                 # 사용자 전역 설정의 commit.gpgsign=true 때문에 duet 커밋이 실패하지 않게
                 "-c", "commit.gpgsign=false"]
 GITIGNORE_LINE = f"{DUET_DIR}/"
+# duet 가 .gitignore 를 새로 만들 때만 넣는 빌드·테스트 부산물 (DESIGN.md 6장).
+# 에이전트가 직접 돌린 테스트가 만든 캐시가 'duet: impl round i' 커밋에 섞이지 않게 한다.
+# build/, dist/, target/ 처럼 소스 폴더 이름과 겹칠 수 있는 것은 넣지 않는다.
+GITIGNORE_ARTIFACTS = (
+    "__pycache__/", "*.py[cod]", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/",
+    ".coverage", "htmlcov/", "*.egg-info/", ".venv/", "node_modules/", ".DS_Store",
+)
 
 
 class GitError(Exception):
@@ -55,8 +62,13 @@ class Workspace:
         self.ensure_gitignore()
 
     def ensure_gitignore(self) -> None:
+        """.duet/ 를 무시하게 한다. 파일이 없으면 부산물 규칙과 함께 새로 만들고, 있으면 .duet/ 만 덧붙인다."""
         path = self.workdir / ".gitignore"
-        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        if not path.exists():
+            path.write_text("\n".join([GITIGNORE_LINE, "", "# 빌드·테스트 부산물 (duet 가 만듦)",
+                                        *GITIGNORE_ARTIFACTS]) + "\n", encoding="utf-8")
+            return
+        existing = path.read_text(encoding="utf-8")
         lines = {ln.strip() for ln in existing.splitlines()}
         if GITIGNORE_LINE in lines or DUET_DIR in lines:
             return
