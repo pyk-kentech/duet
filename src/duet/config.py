@@ -75,6 +75,9 @@ class AgentConfig:
     base_args: list[str] = field(default_factory=list)
     read_args: list[str] = field(default_factory=list)
     write_args: list[str] = field(default_factory=list)
+    # 리뷰어 세션 이어가기 (DESIGN.md 21.3). 비우면 base_args / read_args 를 그대로 쓴다
+    resume_args: list[str] = field(default_factory=list)
+    resume_read_args: list[str] = field(default_factory=list)
     model: str = ""     # 비우면 CLI 기본 모델
     effort: str = ""    # 추론 강도. 비우면 CLI 기본값
     # 단계별 추론 강도 {단계: 강도}. 없는 단계는 effort (DESIGN.md 18.1)
@@ -104,6 +107,9 @@ def _default_codex() -> AgentConfig:
         base_args=["exec", "--skip-git-repo-check"],
         read_args=["--sandbox", "read-only"],
         write_args=["--sandbox", "workspace-write"],
+        # codex exec resume 에는 --sandbox·-C 가 없다 → 설정 덮어쓰기로 읽기 전용 유지
+        resume_args=["exec", "resume", "--skip-git-repo-check"],
+        resume_read_args=["-c", 'sandbox_mode="read-only"'],
         # 추론 출력은 입력보다 요율이 훨씬 높다. 설계 종합과 첫 리뷰만 high (DESIGN.md 18.1)
         effort="medium",
         step_effort={"synthesize": "high", "review": "high"},
@@ -133,6 +139,11 @@ class Config:
     stall_rounds: int = 2               # 막는 지적 수가 N 라운드 연속 최저치를 못 갱신하면 멈춤 (0=끔)
     review_diff: str = "incremental"    # 2라운드부터 지난 리뷰 이후 바뀐 부분만 diff 로 (full: 매번 전체)
     repro_tests: bool = True            # 리뷰어의 <repro> 재현 테스트를 저장·실행
+    # 리뷰 비용 (DESIGN.md 21장)
+    review_packet: bool = True          # 함수 단위 문맥 diff + 바뀐 함수의 호출부 + 재열람 자제 안내
+    review_json: bool = True            # 출력 스키마로 판정을 JSON 으로 받기
+    review_session: str = "reuse"       # 2라운드부터 리뷰어 자기 세션 이어가기 (fresh: 매번 새 세션)
+    review_session_rounds: int = 3      # 한 세션을 쓰는 최대 라운드 수
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
     env_strip: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_STRIP))
     env_keep: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_KEEP))
@@ -184,6 +195,14 @@ class Config:
             raise ConfigError(f"review_diff 는 incremental 또는 full 이어야 합니다: {self.review_diff!r}")
         if not isinstance(self.repro_tests, bool):
             raise ConfigError("repro_tests 는 true/false 여야 합니다")
+        for key in ("review_packet", "review_json"):
+            if not isinstance(getattr(self, key), bool):
+                raise ConfigError(f"{key} 는 true/false 여야 합니다")
+        if self.review_session not in ("reuse", "fresh"):
+            raise ConfigError(f"review_session 은 reuse 또는 fresh 여야 합니다: {self.review_session!r}")
+        if (isinstance(self.review_session_rounds, bool) or not isinstance(self.review_session_rounds, int)
+                or not 1 <= self.review_session_rounds <= MAX_REVIEW_ROUNDS):
+            raise ConfigError(f"review_session_rounds 는 1~{MAX_REVIEW_ROUNDS} 사이여야 합니다: {self.review_session_rounds}")
         if not isinstance(self.stall_rounds, int) or not 0 <= self.stall_rounds <= MAX_REVIEW_ROUNDS:
             raise ConfigError(f"stall_rounds 는 0~{MAX_REVIEW_ROUNDS} 사이여야 합니다: {self.stall_rounds}")
         for key in ("env_strip", "env_keep"):
@@ -194,7 +213,7 @@ class Config:
             ac = self.agent(name)
             if not ac.bin:
                 raise ConfigError(f"[{name}] bin 이 비어 있습니다")
-            for key in ("base_args", "read_args", "write_args"):
+            for key in ("base_args", "read_args", "write_args", "resume_args", "resume_read_args"):
                 v = getattr(ac, key)
                 if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
                     raise ConfigError(f"[{name}] {key}는 문자열 리스트여야 합니다")

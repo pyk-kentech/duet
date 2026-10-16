@@ -116,17 +116,71 @@ def _session_files(since: float, home: Path | None = None, days: int = 2) -> lis
     return out
 
 
-def codex_call_usage(cwd: Path, since: float, home: Path | None = None) -> dict[str, Any] | None:
-    """since(epoch) 이후 cwd 에서 돈 codex exec 세션의 사용량. 못 찾으면 None."""
+def _codex_totals(total: dict) -> dict[str, int]:
+    return {
+        "input_tokens": int(total.get("input_tokens") or 0),
+        "cached_input_tokens": int(total.get("cached_input_tokens") or 0),
+        "output_tokens": int(total.get("output_tokens") or 0),
+        "reasoning_tokens": int(total.get("reasoning_output_tokens") or 0),
+    }
+
+
+def codex_resumed_usage(session_id: str, since: float, home: Path | None = None) -> dict[str, Any] | None:
+    """이어간 세션의 이번 호출 사용량. 세션 기록의 토큰 수는 누적값이라 호출 전 마지막 값과의 차이 (DESIGN.md 21.3)."""
+    for path in _session_files(since - 2, home, days=8):
+        if not path.name.endswith(f"{session_id}.jsonl"):
+            meta_id = next((o.get("payload", {}).get("id") for o in _jsonl(path) if o.get("type") == "session_meta"), None)
+            if meta_id != session_id:
+                continue
+        before: dict[str, int] | None = None
+        last = None
+        model = effort = None
+        for o in _jsonl(path):
+            t, p = o.get("type"), o.get("payload") or {}
+            ts = _parse_ts(o.get("timestamp"))
+            if t == "turn_context":
+                model, effort = p.get("model") or model, p.get("effort") or p.get("reasoning_effort") or effort
+            elif p.get("type") == "token_count" and p.get("info"):
+                totals = _codex_totals((p.get("info") or {}).get("total_token_usage") or {})
+                if ts is not None and ts.timestamp() < since:
+                    before = totals
+                else:
+                    last = p
+        if last is None:
+            return None
+        after = _codex_totals((last.get("info") or {}).get("total_token_usage") or {})
+        out: dict[str, Any] = {k: after[k] - (before or {}).get(k, 0) for k in after}
+        out["session_id"] = session_id
+        if model:
+            out["model"] = model
+        if effort:
+            out["effort"] = effort
+        rl = summarize_rate_limits(last.get("rate_limits"))
+        if rl:
+            out["rate_limits"] = rl
+        return out
+    return None
+
+
+def codex_call_usage(cwd: Path, since: float, home: Path | None = None,
+                     session_id: str | None = None) -> dict[str, Any] | None:
+    """since(epoch) 이후 cwd 에서 돈 codex exec 세션의 사용량. 못 찾으면 None.
+
+    session_id 를 주면 그 세션을 이어간 호출로 보고 차이를 계산한다. 결과에 세션 id(session_id)를 넣는다.
+    """
+    if session_id:
+        return codex_resumed_usage(session_id, since, home)
     want = str(Path(cwd).resolve())
     for path in _session_files(since - 2, home):
         meta_cwd = None
+        meta_id = None
         model = effort = None
         last = None
         for o in _jsonl(path):
             t, p = o.get("type"), o.get("payload") or {}
             if t == "session_meta":
                 meta_cwd = p.get("cwd")
+                meta_id = p.get("id") or p.get("session_id")
                 started = _parse_ts(p.get("timestamp") or o.get("timestamp"))
                 if meta_cwd != want or (started and started.timestamp() < since - 5):
                     break
@@ -147,6 +201,8 @@ def codex_call_usage(cwd: Path, since: float, home: Path | None = None) -> dict[
             out["model"] = model
         if effort:
             out["effort"] = effort
+        if meta_id:
+            out["session_id"] = meta_id
         rl = summarize_rate_limits(last.get("rate_limits"))
         if rl:
             out["rate_limits"] = rl

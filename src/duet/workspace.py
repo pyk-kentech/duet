@@ -115,8 +115,10 @@ class Workspace:
         return spec
 
     def diff(self, base: str, head: str = "HEAD", exclude: Iterable[str] = (),
-             exclude_globs: Iterable[str] = ()) -> str:
-        return self.git("diff", "--no-color", base, head, "--", *self._pathspec(exclude, exclude_globs))
+             exclude_globs: Iterable[str] = (), context: bool = False) -> str:
+        """context=True 면 바뀐 함수 전체를 보여 준다(--function-context, 리뷰 패킷용)."""
+        extra = ["--function-context"] if context else []
+        return self.git("diff", "--no-color", *extra, base, head, "--", *self._pathspec(exclude, exclude_globs))
 
     def diff_stat(self, base: str, head: str = "HEAD", exclude: Iterable[str] = ()) -> str:
         return self.git("diff", "--no-color", "--stat=200,150", base, head, "--", *self._pathspec(exclude, ()))

@@ -14,7 +14,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 
-from duet.agents.base import AgentRequest, AgentResult, Mode
+import json
+
+from duet.agents.base import AgentRequest, AgentResult, Mode, parse_structured
 
 Responder = Callable[[AgentRequest, int], str]
 
@@ -31,6 +33,7 @@ class MockAdapter:
     delay_sec: float = 0.0
     calls: list[AgentRequest] = field(default_factory=list)
     reviews: int = 0
+    sessions: int = 0                          # 새로 만든 세션 수 (이어가면 늘지 않음)
 
     def __post_init__(self) -> None:
         self.name = f"mock-{self.label}"
@@ -55,9 +58,14 @@ class MockAdapter:
         if n in self.fail_on_calls:
             return self._result("", exit_code=1, stderr="mock failure")
 
-        if self.responder is not None:
-            return self._result(self.responder(req, n))
-        return self._result(self._default_response(req))
+        if req.resume_session:
+            session_id = req.resume_session
+        else:
+            self.sessions += 1
+            session_id = f"mock-{self.label}-s{self.sessions}"
+        text = self.responder(req, n) if self.responder is not None else self._default_response(req)
+        structured = parse_structured(text) if req.output_schema is not None else None
+        return self._result(text, structured=structured, session_id=session_id, resumed=bool(req.resume_session))
 
     # ---------------------------------------------------------------- defaults
     def _default_response(self, req: AgentRequest) -> str:
@@ -82,7 +90,15 @@ class MockAdapter:
             return f"{self.name}: {step} 완료\n"
         if step == "review":
             self.reviews += 1
-            if self.approve_on_review and self.reviews >= self.approve_on_review:
+            approve = bool(self.approve_on_review and self.reviews >= self.approve_on_review)
+            if req.output_schema is not None:   # JSON 판정 (DESIGN.md 21.2)
+                findings = [] if approve else [{"severity": "P2", "new": self.reviews == 1, "title": "예외 처리 없음",
+                                                "file": self.write_file, "detail": "입력 오류를 처리하지 않는다",
+                                                "evidence": ""}]
+                return json.dumps({"status": "APPROVED" if approve else "CHANGES_REQUESTED",
+                                   "summary": f"{self.name} 리뷰", "findings": findings, "repro": []},
+                                  ensure_ascii=False)
+            if approve:
                 return "## 반드시 고칠 것\n(없음)\n\n<verdict>\nstatus: APPROVED\nmust_fix: 0\n</verdict>\n"
             return (
                 "## 반드시 고칠 것\n- 예외 처리 없음\n\n"
@@ -107,6 +123,9 @@ class MockAdapter:
         stderr: str = "",
         rate_limited: bool = False,
         timed_out: bool = False,
+        structured: dict | None = None,
+        session_id: str | None = None,
+        resumed: bool = False,
     ) -> AgentResult:
         return AgentResult(
             text=text,
@@ -117,6 +136,9 @@ class MockAdapter:
             rate_limited=rate_limited,
             timed_out=timed_out,
             command=[self.name],
+            structured=structured,
+            session_id=session_id,
+            resumed=resumed,
         )
 
 

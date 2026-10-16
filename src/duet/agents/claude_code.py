@@ -20,6 +20,9 @@ from duet.agents.base import (
     Mode,
     classify_rate_limit,
     compile_rate_limit_patterns,
+    fresh_request,
+    parse_structured,
+    should_fall_back,
 )
 from duet.config import AgentConfig, Config
 from duet.runner import ExecutableNotFound, env_drops, run_process
@@ -55,7 +58,14 @@ class ClaudeCodeAdapter:
         """(명령어, stdin 텍스트)를 돌려준다. 프롬프트가 길면 stdin으로 넘긴다."""
         mode_args = self.agent_cfg.read_args if req.mode is Mode.READ else self.agent_cfg.write_args
         effort = self.agent_cfg.effort_for(req.step, req.round)
-        cmd = [self.agent_cfg.bin, *self.agent_cfg.base_args, *self.model_args(effort), *mode_args]
+        base = (self.agent_cfg.resume_args or self.agent_cfg.base_args) if req.resume_session else self.agent_cfg.base_args
+        if req.resume_session and self.agent_cfg.resume_read_args and req.mode is Mode.READ:
+            mode_args = self.agent_cfg.resume_read_args
+        cmd = [self.agent_cfg.bin, *base, *self.model_args(effort), *mode_args]
+        if req.output_schema is not None:
+            cmd += ["--json-schema", json.dumps(req.output_schema, ensure_ascii=False)]
+        if req.resume_session:
+            cmd += ["--resume", req.resume_session]
         if len(req.prompt.encode("utf-8")) > self.cfg.prompt_arg_max_bytes:
             return cmd, req.prompt
         # `--allowedTools <tools...>` 같은 가변 인자 옵션이 프롬프트를 삼키지 않도록 옵션 종료자를 넣는다
@@ -73,17 +83,29 @@ class ClaudeCodeAdapter:
 
     # ---------------------------------------------------------------- ask
     def ask(self, req: AgentRequest) -> AgentResult:
+        result = self._ask_once(req)
+        if should_fall_back(req, result):
+            result = self._ask_once(fresh_request(req))
+        return result
+
+    def _ask_once(self, req: AgentRequest) -> AgentResult:
         cmd, stdin_text = self.build_command(req)
         r = run_process(cmd, cwd=req.cwd, timeout_sec=req.timeout_sec, stdin_text=stdin_text,
                         drop_env=env_drops(self.cfg.env_strip, self.cfg.env_keep))
         text, is_error = self.parse_output_full(r.stdout)
         usage = None
+        data = None
         try:
             data = json.loads(r.stdout.strip() or "null")
             if isinstance(data, dict):
                 usage = claude_call_usage(data)
         except ValueError:
-            pass
+            data = None
+        session_id = data.get("session_id") if isinstance(data, dict) and isinstance(data.get("session_id"), str) else None
+        structured = None
+        if req.output_schema is not None:
+            so = data.get("structured_output") if isinstance(data, dict) else None
+            structured = so if isinstance(so, dict) else parse_structured(text)
         effort = self.agent_cfg.effort_for(req.step, req.round)
         if usage is not None and effort:
             usage["effort"] = effort
@@ -103,6 +125,9 @@ class ClaudeCodeAdapter:
             timed_out=r.timed_out,
             command=cmd,
             usage=usage,
+            structured=structured,
+            session_id=session_id or req.resume_session,
+            resumed=bool(req.resume_session),
         )
 
     @staticmethod

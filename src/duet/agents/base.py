@@ -28,6 +28,9 @@ class AgentRequest:
     # 로그/기록용이며 MockAdapter가 응답을 고를 때도 쓴다.
     step: str = ""
     round: int = 0   # 구현·리뷰 라운드(1부터, 토론은 비판 라운드). 단계별 추론 강도에 쓴다
+    output_schema: dict | None = None    # 구조화 출력 스키마 (DESIGN.md 21.2)
+    resume_session: str | None = None    # 이 세션을 이어서 부른다 (DESIGN.md 21.3)
+    fallback_prompt: str | None = None   # 이어가기가 실패하면 새 세션으로 보낼 전체 프롬프트
 
 
 @dataclass
@@ -41,6 +44,9 @@ class AgentResult:
     timed_out: bool = False
     command: list[str] = field(default_factory=list, repr=False)
     usage: dict | None = None   # input_tokens, output_tokens, cached_input_tokens, cost_usd, model, rate_limits ...
+    structured: dict | None = None   # 출력 스키마를 줬을 때 읽은 JSON
+    session_id: str | None = None    # CLI 세션 id (이어가기용)
+    resumed: bool = False            # 실제로 세션을 이어서 불렀는가 (폴백했으면 False)
 
     @property
     def ok(self) -> bool:
@@ -74,6 +80,33 @@ class AgentAdapter(Protocol):
         ...
 
     def ask(self, req: AgentRequest) -> AgentResult: ...
+
+
+def should_fall_back(req: "AgentRequest", result: "AgentResult") -> bool:
+    """세션 이어가기가 한도·시간 초과가 아닌 이유로 실패했으면 새 세션으로 한 번 더 (DESIGN.md 21.3)."""
+    return (bool(req.resume_session) and req.fallback_prompt is not None and not result.ok
+            and not result.rate_limited and not result.timed_out)
+
+
+def fresh_request(req: "AgentRequest") -> "AgentRequest":
+    from dataclasses import replace
+
+    return replace(req, prompt=req.fallback_prompt or req.prompt, resume_session=None, fallback_prompt=None)
+
+
+def parse_structured(text: str) -> dict | None:
+    """본문이 JSON 객체면 dict (앞뒤 ``` 울타리는 벗긴다)."""
+    import json
+
+    s = text.strip()
+    if s.startswith("```"):
+        s = s.strip("`")
+        s = s[s.find("{"):] if "{" in s else s
+    try:
+        data = json.loads(s)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def compile_rate_limit_patterns(patterns: Iterable[str]) -> list[re.Pattern[str]]:

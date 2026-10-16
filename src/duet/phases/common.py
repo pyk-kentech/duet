@@ -154,11 +154,20 @@ class PhaseContext:
         label: str,
         round_: int = 0,
         extra_meta: Mapping[str, object] | None = None,
+        output_schema: dict | None = None,
+        resume_session: str | None = None,
+        fallback_prompt: str | None = None,
+        transform: Callable[[AgentResult], str] | None = None,
     ) -> CallOutcome:
-        """에이전트를 호출하고 기록·상태를 갱신한다. 실패 정책을 적용한다."""
+        """에이전트를 호출하고 기록·상태를 갱신한다. 실패 정책을 적용한다.
+
+        transform: 성공한 결과를 기록·반환할 본문으로 바꾼다(예: JSON 판정 → 마크다운 리뷰, DESIGN.md 21.2).
+        """
         agent = self.agents[agent_name]
         req = AgentRequest(prompt=prompt, cwd=self.workdir, mode=mode,
-                           timeout_sec=self.cfg.timeout_sec, step=step, round=round_)
+                           timeout_sec=self.cfg.timeout_sec, step=step, round=round_,
+                           output_schema=output_schema, resume_session=resume_session,
+                           fallback_prompt=fallback_prompt)
         attempt = 0
         while True:
             attempt += 1
@@ -183,9 +192,13 @@ class PhaseContext:
                 "rate_limited": result.rate_limited, "timed_out": result.timed_out,
                 "ok": result.ok,
                 **_usage_meta(result.usage),
+                **({"resumed": True} if result.resumed else {}),
+                **({"session_id": result.session_id} if result.session_id else {}),
+                **({"structured": True} if result.structured is not None else {}),
                 **(extra_meta or {}),
             }
-            body = result.text if result.ok else _failure_body(result)
+            text = (transform(result) if transform is not None else result.text) if result.ok else result.text
+            body = text if result.ok else _failure_body(result)
             path = self.transcript.save(label if result.ok else f"{label}_failed", body, meta)
             self.state.record_call(cli, step, elapsed, result.exit_code,
                                    rate_limited=result.rate_limited, timed_out=result.timed_out,
@@ -193,8 +206,9 @@ class PhaseContext:
                                    role=agent_name if cli != agent_name else None)
 
             if result.ok:
-                self.log(f"{agent_name} ← {step} 완료 ({elapsed:.0f}초) → {path.name}")
-                return CallOutcome(text=result.text, file=path.name, result=result)
+                self.log(f"{agent_name} ← {step} 완료 ({elapsed:.0f}초)"
+                         + (" [세션 이어감]" if result.resumed else "") + f" → {path.name}")
+                return CallOutcome(text=text, file=path.name, result=result)
 
             reason = result.failure_reason()
             self.log(f"{agent_name} ← {step} 실패: {reason} → {path.name}")

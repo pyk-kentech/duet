@@ -31,7 +31,7 @@ from duet.config import (
 ROLE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
 STEP_KINDS = ("explore", "debate", "build", "audit")
 # 역할이 프롬프트 템플릿을 바꿀 수 있는 단계
-PROMPT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "explore", "audit")
+PROMPT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "rereview", "explore", "audit")
 MAX_INSTRUCTIONS = 4000
 MAX_REVIEWERS = 3
 MAX_AUDITORS = 3

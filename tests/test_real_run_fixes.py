@@ -108,7 +108,7 @@ class TestChangeDesign:
         monkeypatch.setattr(orch_mod, "make_role_agents", factory)
         assert main(["run", "t", "--workdir", str(wd), "--mock", "--workflow", "existing", "--debate-rounds", "0"]) == 0
         review = next(c for c in store["agents"]["codex"].calls if c.step == "review").prompt
-        diff = review.split("[구현 전체 diff]")[1].split("파일을 직접 열어봐도")[0]
+        diff = review.split("[구현 전체 diff]")[1].split("[바뀐 함수가 쓰이는 곳]")[0]
         assert "DESIGN.md" in diff and "main.py" in diff     # 프로젝트 문서 갱신은 리뷰 대상
         assert "docs/changes/" not in diff
 

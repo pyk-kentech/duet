@@ -20,6 +20,9 @@ if argv[:2] == ["login", "status"]:
 stdin_text = fc.read_stdin_if_piped()
 fc.dump(argv, stdin_text)
 fc.handle_common_failures()
+if fc.scenario() == "fail_resume" and argv[:2] == ["exec", "resume"]:
+    sys.stderr.write("fake: session not found\n")
+    sys.exit(1)
 
 out_path = None
 for flag in ("-o", "--output-last-message"):

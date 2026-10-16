@@ -50,7 +50,8 @@ CONFIG_KEYS = ("workflow", "implementer", "reviewer", "synth", "debate_rounds", 
                "claude.model", "claude.effort", "codex.model", "codex.effort",
                "claude.step_effort", "codex.step_effort",
                "test_command", "block_severity", "stall_rounds", "require_tests_pass",
-               "review_diff", "repro_tests")
+               "review_diff", "repro_tests", "review_packet", "review_json", "review_session",
+               "review_session_rounds")
 CONSOLE_LOG = "console.log"
 CHANGES_DIR = "docs/changes"   # 기존 프로젝트의 변경 설계를 두는 곳 (DESIGN.md 19.5)
 
@@ -412,6 +413,8 @@ class Orchestrator:
             "test_command": cfg.test_command, "block_severity": cfg.block_severity,
             "stall_rounds": cfg.stall_rounds, "require_tests_pass": cfg.require_tests_pass,
             "review_diff": cfg.review_diff, "repro_tests": cfg.repro_tests,
+            "review_packet": cfg.review_packet, "review_json": cfg.review_json,
+            "review_session": cfg.review_session, "review_session_rounds": cfg.review_session_rounds,
             "design_only": opts.design_only, "skip_design": opts.skip_design, "mock": opts.mock,
         }
 

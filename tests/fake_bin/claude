@@ -28,6 +28,9 @@ if argv[:2] == ["auth", "status"]:
 stdin_text = fc.read_stdin_if_piped()
 fc.dump(argv, stdin_text)
 fc.handle_common_failures()
+if fc.scenario() == "fail_resume" and "--resume" in argv:
+    sys.stderr.write("fake: No conversation found with session ID\n")
+    sys.exit(1)
 
 s = fc.scenario()
 if s == "garbage":
@@ -42,7 +45,8 @@ if s == "json_error":
 
 # 실제 claude(commander)처럼 파싱: 값 하나짜리 옵션, 가변 인자 옵션(<tools...>: 다음 옵션이나 `--` 전까지 삼킴),
 # `--` 뒤는 전부 위치 인자. 위치 인자가 없고 stdin 도 없으면 실제와 같은 에러.
-VALUE_FLAGS = {"--output-format", "--permission-mode", "--model", "--effort"}
+VALUE_FLAGS = {"--output-format", "--permission-mode", "--model", "--effort", "--json-schema", "--resume",
+               "--session-id"}
 VARIADIC_FLAGS = {"--allowedTools", "--allowed-tools", "--disallowedTools", "--disallowed-tools", "--tools"}
 positional = []
 i = 0
@@ -82,5 +86,8 @@ out = {
               "output_tokens": 50, "output_tokens_details": {"thinking_tokens": 7}},
     "total_cost_usd": 0.0123,
     "modelUsage": {"claude-opus-5-5": {}},
+    "session_id": argv[argv.index("--resume") + 1] if "--resume" in argv else os.environ.get("DUET_FAKE_SESSION", "fake-session-new"),
 }
+if "--json-schema" in argv and os.environ.get("DUET_FAKE_STRUCTURED"):
+    out["structured_output"] = json.loads(os.environ["DUET_FAKE_STRUCTURED"])
 print(json.dumps(out, ensure_ascii=False))

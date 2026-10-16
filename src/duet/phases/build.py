@@ -31,7 +31,10 @@ from typing import TYPE_CHECKING
 from duet.agents.base import Mode
 from duet.phases.common import PhaseContext
 from duet.phases.debate import DESIGN_FILENAME
+from duet.packet import READ_INSTRUCTION_PACKET, READ_INSTRUCTION_PLAIN, call_sites, changed_symbols
 from duet.policy import Decision, decide, stalled
+from duet.prompts import TemplateError, load_template
+from duet.review_json import REVIEW_SCHEMA, output_instruction, render_review
 from duet.repro import parse_repros, write_repros
 from duet.runner import env_drops
 from duet.testing import STATUS_KO, describe_for_prompt, resolve_command, run_tests
@@ -55,14 +58,24 @@ def truncate_diff(diff: str, max_chars: int) -> str:
     return diff[:max_chars] + TRUNCATED_NOTE
 
 
+def diff_body(ws: Workspace, frm: str, exclude, excludes_glob, budget: int, context: bool) -> str:
+    """본문 diff. context 면 함수 단위 문맥(리뷰 패킷, DESIGN.md 21.1)을 쓰되 budget 을 넘으면 예전 diff."""
+    if context:
+        body = ws.diff(frm, "HEAD", exclude=exclude, exclude_globs=excludes_glob, context=True)
+        if body.strip() and len(body) <= budget:
+            return body
+    return ws.diff(frm, "HEAD", exclude=exclude, exclude_globs=excludes_glob)
+
+
 def build_review_diff(ws: Workspace, base: str, excludes_glob: list[str], max_chars: int,
-                      exclude: tuple[str, ...] = DIFF_EXCLUDES) -> str:
+                      exclude: tuple[str, ...] = DIFF_EXCLUDES, context: bool = False) -> str:
     """리뷰어에게 줄 diff. 맨 앞의 파일 요약(stat)은 잘리지 않게 두고, 본문 diff 만 자른다.
 
     exclude: 빼는 파일(설계 문서). 변경 설계면 DESIGN.md 대신 docs/changes/<run>.md (DESIGN.md 19.5).
     """
     stat = ws.diff_stat(base, "HEAD", exclude=exclude)
-    body = ws.diff(base, "HEAD", exclude=exclude, exclude_globs=excludes_glob)
+    budget0 = max(1000, max_chars - len(stat) - 200)
+    body = diff_body(ws, base, exclude, excludes_glob, budget0, context)
     if not stat.strip() and not body.strip():
         return "(변경 없음)"
     header = "[변경 파일 요약]\n" + stat.rstrip() + "\n"
@@ -184,6 +197,7 @@ class BuildPhase:
         parts = st.round_reviews.setdefault(str(i), {}) if self.multi else {}
         decisions: list[tuple[str, Decision]] = []
         files: list[str] = []
+        sites_full: str | None = None
         for role in self.reviewers:
             sub_key = f"review:{i}:{role}"
             if self.multi and st.is_done(sub_key) and role in parts:
@@ -191,15 +205,33 @@ class BuildPhase:
                 decisions.append((role, Decision(p["approved"], p["blocking"], list(p["reasons"]))))
                 files.append(p["file"])
                 continue
-            ctx.log(f"[{i}/{self.max_review}] 리뷰: {role} (diff {len(diff):,}자"
-                    f"{', 지난 리뷰 이후만' if '이후' in diff_title else ''})")
-            prompt = ctx.prompt(role, "review", task=ctx.task, diff=diff, diff_title=diff_title,
-                                implementer_name=self.implementer,
-                                tests=self._tests_text(i), test_instruction=self._test_instruction(i, role),
-                                previous_review=self._previous_must_fix(role),
-                                repro_instruction=REPRO_INSTRUCTION if self.cfg.repro_tests else "")
+            json_mode = self.cfg.review_json and self._template_has(role, "review", "{output_instruction}")
+            repro_text = REPRO_INSTRUCTION if self.cfg.repro_tests else ""
+            if sites_full is None:
+                sites_full = self._call_sites(diff)
+            common = dict(task=ctx.task, implementer_name=self.implementer, tests=self._tests_text(i),
+                          test_instruction=self._test_instruction(i, role),
+                          read_instruction=READ_INSTRUCTION_PACKET if self.cfg.review_packet else READ_INSTRUCTION_PLAIN,
+                          repro_instruction=repro_text,
+                          output_instruction=output_instruction(json_mode, self.cfg.repro_tests, repro_text))
+            full_prompt = ctx.prompt(role, "review", diff=diff, diff_title=diff_title, call_sites=sites_full,
+                                     previous_review=self._previous_must_fix(role), **common)
+            resume_id = self._resumable_session(role, i, json_mode)
+            if resume_id:
+                # 이어간 리뷰도 diff 는 review_diff 설정을 따른다 (기본 incremental: 지난 리뷰 이후만)
+                prompt = ctx.prompt(role, "rereview", diff=diff, diff_title=diff_title, call_sites=sites_full,
+                                    previous_review=self._previous_must_fix(role), **common)
+                ctx.log(f"[{i}/{self.max_review}] 리뷰: {role} (지난 세션 이어서, diff {len(diff):,}자)")
+            else:
+                prompt = full_prompt
+                ctx.log(f"[{i}/{self.max_review}] 리뷰: {role} (diff {len(diff):,}자"
+                        f"{', 지난 리뷰 이후만' if '이후' in diff_title else ''})")
             st.reviewed_commits[str(i)] = self.ws.head()
-            out = ctx.call(role, "review", prompt, Mode.READ, label=f"review{i}_{role}", round_=i)
+            out = ctx.call(role, "review", prompt, Mode.READ, label=f"review{i}_{role}", round_=i,
+                           output_schema=REVIEW_SCHEMA if json_mode else None,
+                           resume_session=resume_id, fallback_prompt=full_prompt if resume_id else None,
+                           transform=_render_structured if json_mode else None)
+            self._remember_session(role, i, out.result)
             self._undo_reviewer_changes()
             verdict = parse_verdict(out.text)
             decision = decide(verdict, block_severity=self.cfg.block_severity, tests_block=tests_block,
@@ -227,6 +259,42 @@ class BuildPhase:
                            + (f" (막는 지적 {d.blocking})" if d.blocking else ""))
         merged = Decision(all(d.approved for _, d in decisions), sum(counts) if counts else None, reasons)
         return merged, files
+
+    # ---------------------------------------------------------------- review cost (DESIGN.md 21장)
+    def _template_has(self, role: str, step: str, marker: str) -> bool:
+        wf = self.ctx.workflow
+        r = wf.roles.get(role) if wf is not None else None
+        name = r.templates.get(step, step) if r is not None else step
+        try:
+            return marker in load_template(name, self.ctx.workdir)
+        except TemplateError:
+            return False
+
+    def _call_sites(self, diff: str) -> str:
+        if not self.cfg.review_packet:
+            return "(리뷰 패킷을 끈 실행)"
+        sites = call_sites(self.ws, changed_symbols(diff), exclude=(self.ctx.design_doc,),
+                           exclude_globs=self.cfg.diff_excludes)
+        return sites or "(찾지 못함)"
+
+    def _resumable_session(self, role: str, i: int, json_mode: bool) -> str | None:
+        """2라운드부터, 직전 라운드에 쓴 자기 세션이 있고 상한 전이면 그 세션 id."""
+        if self.cfg.review_session != "reuse" or i < 2:
+            return None
+        if not self._template_has(role, "rereview", "{diff}"):
+            return None
+        s = self.state.review_sessions.get(role) or {}
+        if not s.get("id") or s.get("round") != i - 1 or int(s.get("rounds") or 0) >= self.cfg.review_session_rounds:
+            return None
+        return str(s["id"])
+
+    def _remember_session(self, role: str, i: int, result) -> None:
+        prev = self.state.review_sessions.get(role) or {}
+        if not result.session_id:
+            self.state.review_sessions.pop(role, None)
+            return
+        rounds = int(prev.get("rounds") or 0) + 1 if result.resumed and prev.get("id") == result.session_id else 1
+        self.state.review_sessions[role] = {"id": result.session_id, "round": i, "rounds": rounds}
 
     def _history_entry(self, i: int, decision: Decision, files: list[str], test: dict | None) -> dict:
         if not self.multi:
@@ -331,13 +399,19 @@ class BuildPhase:
         exclude = (self.ctx.design_doc,)
         if self.cfg.review_diff != "incremental" or i <= 1:
             return full_title, build_review_diff(self.ws, base, self.cfg.diff_excludes, self.cfg.max_diff_chars,
-                                                 exclude)
-        prev = self._reviewed_commit(i - 1)
+                                                 exclude, context=self.cfg.review_packet)
+        return self._incremental_diff(i, base)
+
+    def _incremental_diff(self, i: int, base: str) -> tuple[str, str]:
+        """지난 리뷰 이후 바뀐 부분. 기준을 못 찾으면 전체 diff."""
+        exclude = (self.ctx.design_doc,)
+        prev = self._reviewed_commit(i - 1) if i > 1 else None
         if not prev:
-            return full_title, build_review_diff(self.ws, base, self.cfg.diff_excludes, self.cfg.max_diff_chars,
-                                                 exclude)
+            return "구현 전체 diff", build_review_diff(self.ws, base, self.cfg.diff_excludes, self.cfg.max_diff_chars,
+                                                     exclude, context=self.cfg.review_packet)
         stat = self.ws.diff_stat(base, "HEAD", exclude=exclude)
-        body = self.ws.diff(prev, "HEAD", exclude=exclude, exclude_globs=self.cfg.diff_excludes)
+        body = diff_body(self.ws, prev, exclude, self.cfg.diff_excludes, self.cfg.max_diff_chars,
+                         self.cfg.review_packet)
         note = (f"아래 diff 는 지난 리뷰(커밋 {prev}) 이후 바뀐 부분만이다. 처음부터의 전체 변경은 "
                 f"`git diff {base} HEAD` 로 볼 수 있다. 바뀐 부분과 그 영향을 받는 코드 위주로 리뷰해라.\n\n"
                 f"[처음부터의 변경 파일 요약]\n{stat.rstrip() or '(없음)'}\n")
@@ -441,6 +515,12 @@ class BuildPhase:
         files = self.ws.dirty_files()
         self.ctx.log(f"경고: 리뷰어가 파일을 변경함 → 되돌림 ({', '.join(files[:5])}{' ...' if len(files) > 5 else ''})")
         self.ws.restore_clean()
+
+
+def _render_structured(result) -> str:
+    """JSON 판정을 기존 마크다운 리뷰로. 못 읽으면 본문 그대로 (DESIGN.md 21.2)."""
+    rendered = render_review(result.structured) if result.structured is not None else None
+    return rendered or result.text
 
 
 def extract_section(text: str, title: str) -> str:

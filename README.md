@@ -203,6 +203,7 @@ max_review = 4
 
 - **재현 테스트**: 리뷰어가 지적을 실패하는 테스트로 내면 duet가 저장해 정말 실패하는지 돌려 보고, 구현자는 그 테스트를 통과시켜야 합니다.
 - **리뷰 토큰 절약**: 2번째 리뷰부터는 지난 리뷰 이후 바뀐 부분만 보여주고, duet가 이미 돌린 테스트는 다시 돌리지 않게 합니다.
+- **리뷰 비용 줄이기**: 리뷰어에게 바뀐 함수 전체와 그 함수가 쓰이는 곳을 미리 보여 주고(`review_packet`), 판정을 JSON 으로 받으며(`review_json`), 2라운드부터는 리뷰어가 자기 세션을 이어서 리뷰합니다(`review_session = "reuse"`, 한 세션 최대 `review_session_rounds` 라운드). 모두 `duet.toml` 에서 끌 수 있습니다.
 
 ```bash
 duet run "..." --workdir ./x --test-command "uv run pytest -q" --block-severity P2 --stall-rounds 2

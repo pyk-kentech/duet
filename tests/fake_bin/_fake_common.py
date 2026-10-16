@@ -58,15 +58,27 @@ def write_rollout(argv):
     home = os.environ.get("CODEX_HOME")
     if not home:
         return
+    import glob
     cwd = argv[argv.index("-C") + 1] if "-C" in argv else os.getcwd()
     model = argv[argv.index("-m") + 1] if "-m" in argv else "gpt-fake"
     now = dt.datetime.now()
     folder = os.path.join(home, "sessions", f"{now:%Y}", f"{now:%m}", f"{now:%d}")
     os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, f"rollout-{now:%Y-%m-%dT%H-%M-%S}-{os.getpid()}.jsonl")
     ts = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    if argv[:2] == ["exec", "resume"]:
+        # 진짜 codex 처럼 같은 세션 파일에 누적 토큰을 이어 쓴다
+        sid = argv[argv.index("--") + 1]
+        found = glob.glob(os.path.join(home, "sessions", "*", "*", "*", f"*{sid}.jsonl"))
+        if found:
+            with open(found[0], "a", encoding="utf-8") as f:
+                f.write(json.dumps({"timestamp": ts, "type": "event_msg", "payload": {"type": "token_count", "info": {
+                    "total_token_usage": {"input_tokens": 2600, "cached_input_tokens": 1900, "output_tokens": 350,
+                                          "reasoning_output_tokens": 130}}}}) + "\n")
+        return
+    sid = os.environ.get("DUET_FAKE_CODEX_SESSION", f"fake-codex-{os.getpid()}")
+    path = os.path.join(folder, f"rollout-{now:%Y-%m-%dT%H-%M-%S}-{sid}.jsonl")
     events = [
-        {"timestamp": ts, "type": "session_meta", "payload": {"cwd": os.path.realpath(cwd), "originator": "codex_exec", "timestamp": ts}},
+        {"timestamp": ts, "type": "session_meta", "payload": {"id": sid, "cwd": os.path.realpath(cwd), "originator": "codex_exec", "timestamp": ts}},
         {"timestamp": ts, "type": "turn_context", "payload": {"cwd": cwd, "model": model, "effort": "high"}},
         {"timestamp": ts, "type": "event_msg", "payload": {"type": "token_count", "info": {
             "total_token_usage": {"input_tokens": 2000, "cached_input_tokens": 1500, "output_tokens": 300, "reasoning_output_tokens": 120}},

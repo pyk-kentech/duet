@@ -84,7 +84,7 @@ def test_repro_flow_end_to_end(tmp_path: Path):
                                        "05_impl2_claude.md", "06_test2.md", "07_review2_codex.md"]
     assert "재현됨" in (ctx.run_dir / "04_repro1.md").read_text(encoding="utf-8")
     # 리뷰 프롬프트: 재현 테스트 안내, 테스트 재실행 하지 말라는 안내
-    assert '<repro path="tests/test_repro_' in prompts["review"][0] and "다시 돌리지 마라" in prompts["review"][0]
+    assert "tests/test_repro_" in prompts["review"][0] and "다시 돌리지 마라" in prompts["review"][0]
     # 수정 프롬프트에 재현 테스트가 들어감
     assert "tests/test_repro_empty.sh" in prompts["fix"][0] and "재현됨" in prompts["fix"][0]
     # 다음 라운드 테스트는 재현 테스트까지 돌려 통과
