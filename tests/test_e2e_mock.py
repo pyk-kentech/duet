@@ -66,7 +66,8 @@ def test_skip_design(tmp_path: Path):
     # DESIGN.md 없으면 거부
     assert run_cli("run", "t", "--workdir", str(wd), "--mock", "--skip-design") == 2
     (wd / "DESIGN.md").write_text("# 내 설계\n", encoding="utf-8")
-    assert run_cli("run", "t", "--workdir", str(wd), "--mock", "--skip-design", "--max-review", "1") == 1
+    assert run_cli("run", "t", "--workdir", str(wd), "--mock", "--skip-design", "--max-review", "1",
+                   "--no-arbiter") == 1
     run_dir = only_run(wd)
     st = RunState.load(run_dir)
     assert st.status == DONE_UNAPPROVED
@@ -199,7 +200,8 @@ def test_resume_unapproved_with_higher_max_review(tmp_path: Path, monkeypatch, c
     second = {"claude": MockAdapter(label="claude"), "codex": MockAdapter(label="codex", approve_on_review=1)}
     it = iter([first, second])
     monkeypatch.setattr(orch_mod, "make_agents", lambda cfg, *, mock: next(it))
-    assert run_cli("run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", "--max-review", "1") == 1
+    assert run_cli("run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", "--max-review", "1",
+                   "--no-arbiter") == 1
     run_dir = only_run(wd)
     assert RunState.load(run_dir).status == DONE_UNAPPROVED
     capsys.readouterr()

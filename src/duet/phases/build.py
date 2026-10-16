@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING
 from duet.agents.base import Mode
 from duet.phases.common import PhaseContext
 from duet.phases.debate import DESIGN_FILENAME
+from duet import arbiter as arb
 from duet import gates
 from duet.packet import READ_INSTRUCTION_PACKET, READ_INSTRUCTION_PLAIN, call_sites, changed_symbols
 from duet.policy import Decision, decide, stalled
@@ -94,6 +95,7 @@ class BuildPhase:
         self.ws = workspace or Workspace(ctx.workdir)
         self.implementer = step.implementer if step is not None and step.implementer else ctx.cfg.implementer
         self.reviewers: list[str] = list(step.reviewers) if step is not None else [ctx.cfg.reviewer]
+        self.arbiter_role = self._pick_arbiter(step)
         self.reviewer = self.reviewers[0]
         self.multi = len(self.reviewers) > 1
         self.max_review = ctx.cfg.max_review
@@ -129,7 +131,7 @@ class BuildPhase:
                     else:
                         step = "fix"
                         ctx.log(f"[{i}/{self.max_review}] 리뷰 반영: {self.implementer}")
-                        prompt = ctx.prompt(self.implementer, "fix", task=ctx.task, review=self._review_texts(),
+                        prompt = ctx.prompt(self.implementer, "fix", task=ctx.task, review=self._review_texts(i),
                                             reviewer_name=", ".join(self.reviewers),
                                             tests=self._tests_text(i - 1), repro=self._repro_text(i - 1))
                     out = ctx.call(self.implementer, step, prompt, Mode.WRITE,
@@ -174,7 +176,27 @@ class BuildPhase:
                     self._handle_repros(i, "\n\n".join(ctx.transcript.read(f) for f in files))
                     st.mark_done(f"repro:{i}")
                     ctx.save()
+                if self._focus_round(i):
+                    # 중재 뒤 마지막 라운드도 승인되지 않음 (DESIGN.md 23.4)
+                    st.status = DONE_UNAPPROVED
+                    st.stop_reason = "arbiter_final"
+                    st.arbiter["upheld"] = arb.blocking_ids(st, self.cfg.block_severity)
+                    ctx.set_position(PHASE_DONE, "unapproved", i)
+                    ctx.save()
+                    return False
                 if self._is_stalled():
+                    outcome = self._maybe_arbitrate(i, "stalled")
+                    if outcome == "approved":
+                        return True
+                    if outcome == "continue":
+                        ctx.save()
+                        continue
+                    if outcome == "stop":
+                        st.status = DONE_UNAPPROVED
+                        st.stop_reason = "arbiter_upheld"
+                        ctx.set_position(PHASE_DONE, "unapproved", i)
+                        ctx.save()
+                        return False
                     st.status = DONE_UNAPPROVED
                     st.stop_reason = "stalled"
                     ctx.set_position(PHASE_DONE, "stalled", i)
@@ -184,11 +206,109 @@ class BuildPhase:
                     return False
                 ctx.save()
 
+        if st.review_history and not st.review_history[-1].get("approved"):
+            outcome = self._maybe_arbitrate(self.max_review, "max_review")
+            if outcome == "approved":
+                return True
+            if outcome in ("stop", "continue"):     # 상한이라 추가 라운드 없음
+                st.status = DONE_UNAPPROVED
+                st.stop_reason = "arbiter_upheld"
+                ctx.set_position(PHASE_DONE, "unapproved", self.max_review)
+                ctx.save()
+                return False
         st.status = DONE_UNAPPROVED
         st.stop_reason = "max_review"
         ctx.set_position(PHASE_DONE, "unapproved", self.max_review)
         ctx.save()
         return False
+
+    # ---------------------------------------------------------------- arbiter (DESIGN.md 23장)
+    def _pick_arbiter(self, step) -> str | None:
+        if step is not None and step.arbiter:
+            return step.arbiter
+        wf = self.ctx.workflow
+        if wf is not None:
+            debate = wf.first("debate")
+            if debate is not None and debate.synth and debate.synth != self.implementer:
+                return debate.synth
+            return self.reviewers[0]
+        return self.cfg.synth_name
+
+    def _focus_round(self, i: int) -> bool:
+        """이 라운드가 중재 뒤 마지막 라운드인가."""
+        a = self.state.arbiter
+        return bool(a and a.get("result") == "continue" and a.get("round") == i - 1)
+
+    def _focus_ids(self, i: int) -> set[str] | None:
+        return set(self.state.arbiter.get("upheld") or []) if self._focus_round(i) else None
+
+    def _maybe_arbitrate(self, i: int, reason: str) -> str | None:
+        """None: 중재 안 함(예전처럼 멈춤). approved / continue / stop."""
+        ctx, st = self.ctx, self.state
+        if not self.cfg.arbiter or st.arbiter is not None or self.arbiter_role is None:
+            return None
+        if self.arbiter_role not in ctx.agents:
+            return None
+        items = [x for x in st.issues if x.get("status") == "open"]
+        if not items:
+            return None
+        ctx.set_position(PHASE_BUILD, "arbitrate", i)
+        ctx.save()
+        ctx.log(f"[{i}/{self.max_review}] 중재: {self.arbiter_role} (열린 지적 {len(items)}개, "
+                f"{'수렴 실패' if reason == 'stalled' else '리뷰 상한'})")
+        role = self.arbiter_role
+        repro = st.repros.get(str(i)) or {}
+        prompt = ctx.prompt(role, "arbitrate", task=ctx.task, rounds=i,
+                            reason="막는 지적 수가 줄지 않음" if reason == "stalled" else "리뷰 상한에 닿음",
+                            issues=arb.format_issues(items), tests=self._tests_text(i),
+                            repros=(f"{', '.join(repro.get('files') or [])}: {repro.get('status')}"
+                                    if repro.get("files") else "(없음)"),
+                            stat=self.ws.diff_stat(st.base_commit, "HEAD", exclude=(ctx.design_doc,)).strip() or "(없음)",
+                            run_instruction=("전체 테스트를 다시 돌리지는 마라." if ctx.can_run_commands(role)
+                                             else "너는 명령을 실행할 수 없다(읽기 전용)."),
+                            output_instruction=arb.OUTPUT_INSTRUCTION)
+        holder: dict = {}
+
+        def transform(r):
+            decisions = arb.normalize(r.structured, items) if r.structured is not None else None
+            if decisions is None:
+                return r.text
+            holder["d"] = decisions
+            return arb.render(decisions, items, str((r.structured or {}).get("summary") or ""))
+
+        out = ctx.call(role, "arbitrate", prompt, Mode.READ, label=f"arbiter{i}_{role}", round_=i,
+                       output_schema=arb.ARBITER_SCHEMA, transform=transform)
+        self._undo_reviewer_changes()
+        if "d" not in holder:
+            ctx.log(f"[{i}/{self.max_review}] 중재 결과를 읽지 못해 예전처럼 멈춥니다 → {out.file}")
+            st.arbiter = {"round": i, "file": out.file, "result": "unreadable", "reason": reason}
+            ctx.save()
+            return None
+        applied = arb.apply(st, holder["d"], i)
+        blocking = arb.blocking_ids(st, self.cfg.block_severity)
+        test = st.tests.get(str(i))
+        tests_fail = bool(test and test.get("status") in ("failed", "timeout")) and self.cfg.require_tests_pass
+        st.arbiter = {"round": i, "file": out.file, "reason": reason, "upheld": blocking,
+                      "downgraded": applied["downgrade"], "rejected": applied["reject"]}
+        ctx.log(f"[{i}/{self.max_review}] 중재 결과: 유지 {len(applied['uphold'])}, 완화 {len(applied['downgrade'])}, "
+                f"기각 {len(applied['reject'])}" + (" (테스트 실패)" if tests_fail else "") + f" → {out.file}")
+        if not blocking and not tests_fail:
+            st.arbiter["result"] = "approved"
+            st.status = DONE_APPROVED
+            st.stop_reason = "arbiter"
+            st.last_verdict = "APPROVED"
+            ctx.set_position(PHASE_DONE, "approved", i)
+            ctx.save()
+            return "approved"
+        if reason == "stalled" and i < self.max_review:
+            st.arbiter["result"] = "continue"
+            st.stall_baseline_round = i
+            ctx.log(f"[{i}/{self.max_review}] 중재 뒤 마지막 라운드: 막는 기준은 {', '.join(blocking) or '테스트 실패'} 뿐")
+            ctx.save()
+            return "continue"
+        st.arbiter["result"] = "stop"
+        ctx.save()
+        return "stop"
 
     # ---------------------------------------------------------------- review
     def _review_round(self, i: int, diff_title: str, diff: str) -> tuple[Decision, list[str]]:
@@ -212,12 +332,17 @@ class BuildPhase:
             use_gates = json_mode and self.cfg.review_gates
             repro_text = REPRO_INSTRUCTION if self.cfg.repro_tests else ""
             open_now = gates.open_issues(st, role) if use_gates else []
+            focus = self._focus_ids(i) if use_gates else None
             if sites_full is None:
                 sites_full = self._call_sites(diff)
             common = dict(task=ctx.task, implementer_name=self.implementer, tests=self._tests_text(i),
                           test_instruction=self._test_instruction(i, role),
                           read_instruction=READ_INSTRUCTION_PACKET if self.cfg.review_packet else READ_INSTRUCTION_PLAIN,
-                          repro_instruction=repro_text, open_issues=gates.format_open(open_now),
+                          repro_instruction=repro_text,
+                          open_issues=(gates.format_open(open_now) if focus is None else
+                                       "(중재 결과: 아래 중 " + (", ".join(sorted(focus)) or "없음")
+                                       + " 만 막는 기준이다. 그 밖의 지적은 P3 로 처리된다)\n"
+                                       + gates.format_open(open_now)),
                           output_instruction=output_instruction(json_mode, self.cfg.repro_tests, repro_text,
                                                                 gates=use_gates))
             full_prompt = ctx.prompt(role, "review", diff=diff, diff_title=diff_title, call_sites=sites_full,
@@ -238,11 +363,11 @@ class BuildPhase:
                 ids = {x["id"] for x in open_now}
                 first = gates.next_number(st)
 
-                def transform(r, changed=changed, ids=ids, first=first):
+                def transform(r, changed=changed, ids=ids, first=first, focus=focus):
                     if r.structured is None:
                         return r.text
                     res = gates.apply_gates(r.structured, round_=i, open_ids=ids, changed_files=changed,
-                                            first_number=first)
+                                            first_number=first, only_ids=focus)
                     rendered = render_review(res.data)
                     if rendered is None:
                         return r.text
@@ -371,17 +496,24 @@ class BuildPhase:
                 "parse_failed": any(row.get("parse_failed") for row in rows), "reasons": decision.reasons,
                 "tests": test.get("status") if test else None, "reviewers": rows}
 
-    def _review_texts(self) -> str:
-        """수정 프롬프트에 넣을 지난 리뷰. 리뷰어가 여럿이면 역할별로 이어 붙인다."""
+    def _review_texts(self, i: int = 0) -> str:
+        """수정 프롬프트에 넣을 지난 리뷰. 리뷰어가 여럿이면 역할별로 이어 붙인다. 중재 뒤 마지막 라운드면 중재 결과를 앞에."""
         st = self.state
+        head = ""
+        if i and self._focus_round(i):
+            head = ("### 중재 결과 (이번이 마지막 라운드)\n\n"
+                    + self.ctx.transcript.read(st.arbiter["file"]).strip()
+                    + "\n\n**이번 라운드는 유지된 지적("
+                    + (", ".join(st.arbiter.get("upheld") or []) or "없음")
+                    + ")만 고쳐라. 완화·기각된 지적은 고치지 않아도 된다.**\n\n")
         if not self.multi or not st.last_reviews:
-            return self.ctx.transcript.read(st.last_review)  # type: ignore[arg-type]
+            return head + self.ctx.transcript.read(st.last_review)  # type: ignore[arg-type]
         chunks = []
         for role in self.reviewers:
             f = st.last_reviews.get(role)
             if f:
                 chunks.append(f"### {role} 의 리뷰\n\n{self.ctx.transcript.read(f).strip()}")
-        return "\n\n".join(chunks)
+        return head + "\n\n".join(chunks)
 
     # ---------------------------------------------------------------- tests
     def _env_drops(self) -> list[str]:

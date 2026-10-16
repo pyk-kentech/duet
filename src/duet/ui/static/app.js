@@ -38,7 +38,7 @@ const STATUS = {
 };
 const STEP = {
   propose: '설계안', critique: '비판·개정', synthesize: '설계 종합', implement: '구현', fix: '리뷰 반영',
-  review: '리뷰', explore: '사전 조사', audit: '감사', test: '테스트', repro: '재현 테스트', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
+  review: '리뷰', explore: '사전 조사', audit: '감사', arbitrate: '중재', test: '테스트', repro: '재현 테스트', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
 };
 const PHASE = { init: '준비', explore: '사전 조사', debate: '설계 토론', build: '구현·리뷰', audit: '감사', done: '끝' };
 const CHECK_STATUS = { ok: '정상', warn: '확인 필요', missing: '없음', error: '오류' };
@@ -890,6 +890,11 @@ class RunView {
       h('b', null, STATUS[st.status] || st.status), h('span', null, st.error)));
     if (st.stop_reason === 'stalled' && !d.live) alerts.push(h('div', { class: 'alert alert-warn' }, h('b', null, '수렴 안 됨'),
       h('span', null, `막는 지적 수가 ${c.stall_rounds || 2}라운드 연속 줄지 않아 멈췄습니다 (${(st.review_history || []).map(x => x.blocking ?? '?').join(' → ')}). 마지막 리뷰를 읽고 직접 판단하거나, 이어하기로 계속할 수 있습니다.`)));
+    const arb = st.arbiter || {};
+    if (st.stop_reason === 'arbiter') alerts.push(h('div', { class: 'alert alert-warn' }, h('b', null, '중재로 승인'),
+      h('span', null, `리뷰가 수렴하지 않아 중재자가 열린 지적을 정리했고, 막는 지적이 남지 않아 승인했습니다 (완화 ${(arb.downgraded || []).join(', ') || '-'}, 기각 ${(arb.rejected || []).join(', ') || '-'}). 중재 결과(${arb.file || ''})를 확인하세요.`)));
+    if ((st.stop_reason === 'arbiter_upheld' || st.stop_reason === 'arbiter_final') && !d.live) alerts.push(h('div', { class: 'alert alert-warn' }, h('b', null, '중재 뒤에도 미승인'),
+      h('span', null, `중재자가 유지한 지적(${(arb.upheld || []).join(', ') || '테스트 실패'})이 해결되지 않았습니다. 중재 결과와 마지막 리뷰를 보고 직접 판단하세요.`)));
     const limits = this.latestLimits();
     if (limits) alerts.push(limits);
 

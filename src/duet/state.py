@@ -77,6 +77,7 @@ class RunState:
     explores: dict[str, str] = field(default_factory=dict)            # explore 단계 id → 결과 파일
     audits: dict[str, list] = field(default_factory=dict)             # audit 단계 id → 감사자별 결과
     issues: list[dict] = field(default_factory=list)                  # 지적 원장 (DESIGN.md 22.1)
+    arbiter: dict | None = None                                       # 중재 결과 (DESIGN.md 23장)
     review_sessions: dict[str, dict] = field(default_factory=dict)    # 역할 → {id, round, rounds} (DESIGN.md 21.3)
     design_doc: str | None = None    # 설계 문서(작업 폴더 기준). None 이면 DESIGN.md, 변경 설계면 docs/changes/<run>.md
     error: str | None = None

@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help='구현 후 duet 가 돌릴 테스트 명령 (기본: auto = duet.toml → 자동 감지, "none" 이면 끔)')
     p_run.add_argument("--block-severity", choices=["P1", "P2", "P3"],
                        help="이 심각도 이상의 지적이 남아 있으면 반려 (기본: P2 → P3 만 남으면 승인)")
+    p_run.add_argument("--no-arbiter", action="store_true",
+                       help="수렴하지 않을 때 분쟁 중재자를 부르지 않고 바로 멈춤 (기본: 한 번 부름)")
     p_run.add_argument("--stall-rounds", type=int, metavar="N",
                        help="막는 지적 수가 N 라운드 연속 줄지 않으면 멈춤 (기본: 2, 0=끔)")
     for agent, example in (("claude", "opus, sonnet, claude-opus-5-5"), ("codex", "gpt-6.1-sol")):
@@ -160,6 +162,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "codex.step_effort": _step_effort(args.codex_step_effort),
             "test_command": args.test_command, "block_severity": args.block_severity,
             "stall_rounds": args.stall_rounds,
+            "arbiter": False if args.no_arbiter else None,
         },
     )
     return Orchestrator().run(opts).exit_code

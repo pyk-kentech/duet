@@ -47,7 +47,7 @@ class TestStepEffortConfig:
     def test_defaults(self):
         cfg = Config()
         assert cfg.codex.effort == "medium"
-        assert cfg.codex.step_effort == {"synthesize": "high", "review": "high"}
+        assert cfg.codex.step_effort == {"synthesize": "high", "review": "high", "arbitrate": "high"}
         assert cfg.claude.effort == "" and cfg.claude.step_effort == {}
 
     @pytest.mark.parametrize("step,round_,want", [
@@ -105,7 +105,7 @@ class TestStepEffortConfig:
                 parse_step_effort(bad)
 
     def test_describe_effort(self):
-        assert describe_effort(Config().codex) == "medium; synthesize·review=high"
+        assert describe_effort(Config().codex) == "medium; synthesize·review·arbitrate=high"
         assert describe_effort(AgentConfig(bin="x", effort="xhigh")) == "xhigh"
         assert describe_effort(AgentConfig(bin="x")) == ""
         assert describe_effort(AgentConfig(bin="x", step_effort={"fix": "low"})) == "기본; fix=low"
@@ -169,7 +169,7 @@ def test_cli_bad_step_effort(tmp_path: Path, capsys):
 
 def test_ui_defaults_hide_effort_when_step_routed(server):  # noqa: F811
     d = server.dashboard._defaults(None)
-    assert d["codex"]["effort"] == "" and d["codex"]["effort_label"] == "medium; synthesize·review=high"
+    assert d["codex"]["effort"] == "" and d["codex"]["effort_label"] == "medium; synthesize·review·arbitrate=high"
     assert d["claude"]["effort"] == ""
 
 

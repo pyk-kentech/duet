@@ -487,7 +487,7 @@ class Dashboard:
 
     def _resume_hint(self, st: RunState, wd: Path) -> dict[str, Any]:
         cur = int(st.config.get("max_review") or 0)
-        if st.status == DONE_UNAPPROVED and st.stop_reason == "stalled" and st.round < cur:
+        if st.status == DONE_UNAPPROVED and st.stop_reason in ("stalled", "arbiter_final") and st.round < cur:
             live = self._live(wd)
             if live and live.get("run_id") == st.run_id:
                 return {"possible": False, "needs_max_review": False, "current_max_review": cur, "reason": "지금 실행 중입니다."}

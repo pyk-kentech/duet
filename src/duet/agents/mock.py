@@ -79,6 +79,12 @@ class MockAdapter:
             )
         if step == "synthesize":
             return f"## 결정 사항\n- ({self.name}) 단순한 쪽 채택\n\n# 최종 설계\n- {self.write_file} 하나\n"
+        if step == "arbitrate":   # 기본: 열린 지적을 모두 유지(보수적, DESIGN.md 23장)
+            import re
+
+            ids = re.findall(r"^- (I\d+) ", req.prompt, re.MULTILINE)
+            return json.dumps({"decisions": [{"id": i, "decision": "uphold", "reason": "요구사항에 해당"} for i in ids],
+                               "summary": "지적이 타당하다"}, ensure_ascii=False)
         if step == "explore":
             return f"# {self.name} 사전 조사\n- 기존 코드 없음\n"
         if step == "audit":

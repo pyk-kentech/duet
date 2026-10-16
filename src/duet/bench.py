@@ -201,6 +201,7 @@ def _row(task: Task, workflow: str, rep: int, wd: Path, seconds: float, outcome:
     last_test = st.tests[max(st.tests, key=int)] if st.tests else None
     cost = sum(float((c.usage or {}).get("cost_usd") or 0) for c in st.calls)
     row.update(status=STATUS.get(st.status, st.status), approved=st.status == DONE_APPROVED,
+               arbiter=st.stop_reason if (st.stop_reason or "").startswith("arbiter") else None,
                stop_reason=st.stop_reason, rounds=len(st.review_history), calls=len(st.calls),
                usage=_usage(st), cost_usd=round(cost, 4), run_dir=str(outcome.run_dir),
                own_tests=last_test.get("status") if last_test else None, hidden=hidden, error=st.error)
@@ -257,7 +258,7 @@ def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC
 
 
 def describe_row(row: dict[str, Any]) -> str:
-    parts = [STATUS_KO.get(row["status"], row["status"])]
+    parts = [STATUS_KO.get(row["status"], row["status"]) + (" (중재)" if row.get("arbiter") == "arbiter" else "")]
     if row.get("rounds"):
         parts.append(f"{row['rounds']}라운드")
     h = row.get("hidden")
@@ -297,8 +298,8 @@ def summarize(data: dict[str, Any]) -> str:
              f"반복 {meta.get('repeat')}회" + (", mock" if meta.get("mock") else "") + f", 실행 {len(rows)}번", ""]
     workflows = list(dict.fromkeys(r["workflow"] for r in rows))
     lines += ["## 워크플로별", "",
-              "| 워크플로 | 실행 | 승인 | 숨은 테스트 통과율 | 전부 통과 | 승인했는데 실패 | 평균 라운드 | 평균 시간 | 평균 호출 | 평균 입력 토큰 (Claude / Codex) | 평균 출력 토큰 |",
-              "|---|---|---|---|---|---|---|---|---|---|---|"]
+              "| 워크플로 | 실행 | 승인 | 중재 승인 | 숨은 테스트 통과율 | 전부 통과 | 승인했는데 실패 | 평균 라운드 | 평균 시간 | 평균 호출 | 평균 입력 토큰 (Claude / Codex) | 평균 출력 토큰 |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for w in workflows:
         rs = [r for r in rows if r["workflow"] == w]
         graded = [r for r in rs if r.get("hidden") and r["hidden"].get("total")]
@@ -309,6 +310,7 @@ def summarize(data: dict[str, Any]) -> str:
         out_tok = _mean([sum(u.get("output", 0) for u in (r.get("usage") or {}).values()) for r in rs])
         lines.append(
             f"| {w} | {len(rs)} | {sum(r['approved'] for r in rs)}/{len(rs)} | "
+            f"{sum(1 for r in rs if r.get('arbiter') == 'arbiter')} | "
             f"{rate:.0f}% ({len(graded)}개 채점) | {all_pass}/{len(graded)} | {missed} | "
             f"{_mean([r.get('rounds') or 0 for r in rs]):.1f} | {_fmt_sec(_mean([r.get('seconds') or 0 for r in rs]))} | "
             f"{_mean([r.get('calls') or 0 for r in rs]):.1f} | {tok['claude']:,.0f} / {tok['codex']:,.0f} | {out_tok:,.0f} |")

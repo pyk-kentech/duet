@@ -13,7 +13,7 @@ from importlib import resources
 from pathlib import Path
 
 TEMPLATE_NAMES = ("propose", "critique", "synthesize", "implement", "fix", "review",
-                  "explore", "audit", "review_security", "rereview")
+                  "explore", "audit", "review_security", "rereview", "arbitrate")
 USER_TEMPLATE_DIR = Path(".duet") / "templates"
 TEMPLATE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 

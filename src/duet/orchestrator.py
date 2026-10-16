@@ -51,7 +51,7 @@ CONFIG_KEYS = ("workflow", "implementer", "reviewer", "synth", "debate_rounds", 
                "claude.step_effort", "codex.step_effort",
                "test_command", "block_severity", "stall_rounds", "require_tests_pass",
                "review_diff", "repro_tests", "review_packet", "review_json", "review_session",
-               "review_session_rounds", "review_gates")
+               "review_session_rounds", "review_gates", "arbiter")
 CONSOLE_LOG = "console.log"
 CHANGES_DIR = "docs/changes"   # 기존 프로젝트의 변경 설계를 두는 곳 (DESIGN.md 19.5)
 
@@ -183,7 +183,7 @@ class Orchestrator:
         state = RunState.load(run_dir)
         prev_max = int(state.config.get("max_review") or 0)
 
-        stalled_early = (state.status == DONE_UNAPPROVED and state.stop_reason == "stalled"
+        stalled_early = (state.status == DONE_UNAPPROVED and state.stop_reason in ("stalled", "arbiter_final")
                          and state.round < prev_max)
         if state.status == DONE_UNAPPROVED and not stalled_early:
             # 리뷰 상한을 다 쓴 실행: 상한을 늘려 주면 마지막 리뷰를 반영하는 라운드부터 이어간다
@@ -217,7 +217,7 @@ class Orchestrator:
             state.config["max_review"] = cfg.max_review
             if state.status == DONE_UNAPPROVED and "build" in state.done:
                 state.done.remove("build")   # 리뷰 루프를 이어간다
-            if state.stop_reason == "stalled":
+            if state.stop_reason in ("stalled", "arbiter_final"):
                 # 사람이 계속하라고 했으니 수렴 판단은 지금부터 다시 센다
                 state.stall_baseline_round = state.round
                 state.stop_reason = None
@@ -304,8 +304,13 @@ class Orchestrator:
             self.log(f"중단: 내부 오류 — {type(e).__name__}: {e}")
             raise
 
-        if approved:
+        if approved and state.stop_reason == "arbiter":
+            self.log("✅ 중재로 승인 (중재 결과: " + run_dir.joinpath((state.arbiter or {}).get("file") or "").name + ")")
+        elif approved:
             self.log("✅ 리뷰 승인으로 종료")
+        elif state.stop_reason in ("arbiter_upheld", "arbiter_final"):
+            self.log("⚠️ 중재 뒤에도 막는 지적이 남아 멈춥니다: " + ", ".join((state.arbiter or {}).get("upheld") or [])
+                     + f". 중재 결과와 마지막 리뷰를 보고 직접 판단하세요: {run_dir}")
         elif state.stop_reason == "stalled":
             self.log(f"계속하려면: duet resume --workdir {workdir}"
                      + (f" --max-review {min(cfg.max_review + 1, 10)}" if state.round >= cfg.max_review else ""))
@@ -415,7 +420,7 @@ class Orchestrator:
             "review_diff": cfg.review_diff, "repro_tests": cfg.repro_tests,
             "review_packet": cfg.review_packet, "review_json": cfg.review_json,
             "review_session": cfg.review_session, "review_session_rounds": cfg.review_session_rounds,
-            "review_gates": cfg.review_gates,
+            "review_gates": cfg.review_gates, "arbiter": cfg.arbiter,
             "design_only": opts.design_only, "skip_design": opts.skip_design, "mock": opts.mock,
         }
 

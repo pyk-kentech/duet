@@ -31,7 +31,8 @@ from duet.config import (
 ROLE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
 STEP_KINDS = ("explore", "debate", "build", "audit")
 # 역할이 프롬프트 템플릿을 바꿀 수 있는 단계
-PROMPT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "rereview", "explore", "audit")
+PROMPT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "rereview", "explore", "audit",
+                "arbitrate")
 MAX_INSTRUCTIONS = 4000
 MAX_REVIEWERS = 3
 MAX_AUDITORS = 3
@@ -43,7 +44,7 @@ _ROLE_KEYS = {"agent", "model", "effort", "step_effort", "instructions", "templa
 _STEP_KEYS = {
     "explore": {"kind", "id", "role"},
     "debate": {"kind", "id", "proposers", "rounds", "synth", "output"},
-    "build": {"kind", "id", "implementer", "reviewers", "max_review"},
+    "build": {"kind", "id", "implementer", "reviewers", "max_review", "arbiter"},
     "audit": {"kind", "id", "roles"},
 }
 _TOP_KEYS = {"name", "description", "roles", "steps"}
@@ -100,11 +101,13 @@ class Step:
     implementer: str | None = None                           # build
     reviewers: list[str] = field(default_factory=list)
     max_review: int | None = None
+    arbiter: str | None = None                               # 분쟁 중재자 역할 (DESIGN.md 23.2)
     roles: list[str] = field(default_factory=list)           # audit
 
     def role_names(self) -> list[str]:
         names = [*([self.role] if self.role else []), *self.proposers, *([self.synth] if self.synth else []),
-                 *([self.implementer] if self.implementer else []), *self.reviewers, *self.roles]
+                 *([self.implementer] if self.implementer else []), *self.reviewers,
+                 *([self.arbiter] if self.arbiter else []), *self.roles]
         return list(dict.fromkeys(names))
 
     def to_dict(self) -> dict[str, Any]:
@@ -129,6 +132,8 @@ class Step:
             return f"debate({parts})"
         if self.kind == "build":
             extra = f", 최대 {self.max_review}회" if self.max_review is not None else ""
+            if self.arbiter:
+                extra += f", 중재 {self.arbiter}"
             return f"build({self.implementer}; 리뷰 {', '.join(self.reviewers)}{extra})"
         return f"audit({', '.join(self.roles)})"
 
@@ -321,6 +326,10 @@ def _parse_step(i: int, sdata: Any, roles: Mapping[str, Role], err) -> Step:
         if step.implementer in step.reviewers:
             raise err(f"{label}: 구현자({step.implementer})는 리뷰어가 될 수 없습니다")
         step.max_review = _int_in(sdata, "max_review", label, 1, MAX_REVIEW_ROUNDS, err)
+        if sdata.get("arbiter") is not None:
+            step.arbiter = _need_role(sdata.get("arbiter"), label, roles, err)
+            if step.arbiter == step.implementer:
+                raise err(f"{label}: 구현자({step.implementer})는 중재자가 될 수 없습니다")
     else:
         step.roles = _role_list(sdata, "roles", label, roles, err, lo=1, hi=MAX_AUDITORS)
     return step

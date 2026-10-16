@@ -49,7 +49,7 @@ EFFORT_SUGGESTIONS = {
     "codex": ["minimal", "low", "medium", "high", "xhigh", "max"],
 }
 # step_effort 의 키. "rereview" 는 2라운드부터의 리뷰 (DESIGN.md 18.1)
-EFFORT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "rereview")
+EFFORT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "rereview", "arbitrate")
 
 # 에이전트·테스트 자식 프로세스에서 뺄 환경 변수 이름(glob, 대소문자 무시) (DESIGN.md 18.2)
 DEFAULT_ENV_STRIP = [
@@ -112,7 +112,7 @@ def _default_codex() -> AgentConfig:
         resume_read_args=["-c", 'sandbox_mode="read-only"'],
         # 추론 출력은 입력보다 요율이 훨씬 높다. 설계 종합과 첫 리뷰만 high (DESIGN.md 18.1)
         effort="medium",
-        step_effort={"synthesize": "high", "review": "high"},
+        step_effort={"synthesize": "high", "review": "high", "arbitrate": "high"},
     )
 
 
@@ -147,6 +147,7 @@ class Config:
     review_session: str = "fresh"
     review_session_rounds: int = 3      # 한 세션을 쓰는 최대 라운드 수
     review_gates: bool = True           # JSON 판정의 지적 원장·근거 관문·범위 관문 (DESIGN.md 22장)
+    arbiter: bool = True                # 수렴 실패·상한에서 한 번 부르는 분쟁 중재자 (DESIGN.md 23장)
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
     env_strip: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_STRIP))
     env_keep: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_KEEP))
@@ -198,7 +199,7 @@ class Config:
             raise ConfigError(f"review_diff 는 incremental 또는 full 이어야 합니다: {self.review_diff!r}")
         if not isinstance(self.repro_tests, bool):
             raise ConfigError("repro_tests 는 true/false 여야 합니다")
-        for key in ("review_packet", "review_json", "review_gates"):
+        for key in ("review_packet", "review_json", "review_gates", "arbiter"):
             if not isinstance(getattr(self, key), bool):
                 raise ConfigError(f"{key} 는 true/false 여야 합니다")
         if self.review_session not in ("reuse", "fresh"):

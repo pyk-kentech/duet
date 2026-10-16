@@ -58,8 +58,11 @@ def touches(file: str, changed: set[str]) -> bool:
 
 
 def apply_gates(data: dict[str, Any], *, round_: int, open_ids: set[str], changed_files: set[str] | None,
-                first_number: int) -> GateResult:
-    """판정을 보정해 새 dict 로 돌려준다. 원장은 바꾸지 않는다(update_ledger 가 한다)."""
+                first_number: int, only_ids: set[str] | None = None) -> GateResult:
+    """판정을 보정해 새 dict 로 돌려준다. 원장은 바꾸지 않는다(update_ledger 가 한다).
+
+    only_ids: 중재 뒤 마지막 라운드. 이 ID 밖의 지적은 모두 P3 (DESIGN.md 23.4).
+    """
     out = dict(data)
     res = GateResult(out)
     n = first_number
@@ -73,7 +76,10 @@ def apply_gates(data: dict[str, Any], *, round_: int, open_ids: set[str], change
             fid = f"I{n}"
             n += 1
         sev, note = f["severity"], None
-        if sev in BLOCKING and not str(f.get("evidence") or "").strip():
+        if only_ids is not None and fid not in only_ids and sev in BLOCKING:
+            sev, note = "P3", "중재 후 막는 기준 밖"
+            res.downgraded["arbiter"] = res.downgraded.get("arbiter", 0) + 1
+        elif sev in BLOCKING and not str(f.get("evidence") or "").strip():
             sev, note = "P3", "근거 없음"
             res.downgraded["evidence"] += 1
         elif (sev == "P2" and not existing and round_ >= 2 and changed_files is not None
