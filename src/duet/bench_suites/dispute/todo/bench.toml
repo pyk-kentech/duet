@@ -1,0 +1,4 @@
+name = "todo"
+description = "JSON 파일에 저장하는 할 일 도구 (원자적 쓰기·잠금·id 재사용처럼 요구에 없는 것을 두고 다투기 쉬움)"
+kind = "new"
+max_review = 4

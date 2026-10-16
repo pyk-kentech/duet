@@ -73,6 +73,25 @@ def test_hard_hidden_tests_pass_on_reference(name, tmp_path: Path):
     assert g["all_passed"]
 
 
+DISPUTE = ["todo", "deepmerge", "duration"]
+
+
+def test_dispute_suite_shape():
+    tasks = {t.name: t for t in load_suite("dispute")}
+    assert set(tasks) == set(DISPUTE) and all(t.kind == "new" and t.max_review == 4 for t in tasks.values())
+
+
+@pytest.mark.parametrize("name", DISPUTE)
+def test_dispute_hidden_tests_pass_on_reference(name, tmp_path: Path):
+    task = next(t for t in load_suite("dispute") if t.name == name)
+    wd = tmp_path / "wd"
+    prepare_workdir(task, wd)
+    shutil.copytree(REFS / name, wd, dirs_exist_ok=True)
+    g = grade(task, wd, tmp_path / "eval", pytest_cmd=PYTEST)
+    assert g["total"] >= 12 and g["failed"] == 0 and g["errors"] == 0, g["output_tail"]
+    assert g["all_passed"]
+
+
 def test_hard_existing_setup_fails_only_new_tests(tmp_path: Path):
     import subprocess
 

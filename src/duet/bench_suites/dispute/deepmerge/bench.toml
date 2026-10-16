@@ -1,0 +1,4 @@
+name = "deepmerge"
+description = "설정 dict 깊은 병합·삭제 표시·점 경로 덮어쓰기 (순환 참조·키 이스케이프처럼 요구에 없는 것을 두고 다투기 쉬움)"
+kind = "new"
+max_review = 4

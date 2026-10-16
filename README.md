@@ -220,13 +220,13 @@ duet run "..." --workdir ./x --test-command "uv run pytest -q" --block-severity 
 같은 과제 묶음을 워크플로별로 돌리고, 에이전트가 보지 못한 **숨은 수용 테스트**로 결과물을 채점해 비교합니다.
 
 ```bash
-duet bench list [--suite hard]                             # 과제 목록 (내장 basic 5개, hard 5개)
+duet bench list [--suite hard]                             # 과제 목록 (내장 basic 5개, hard 5개, dispute 3개)
 duet bench run --mock --workflow classic --workflow lean   # 흐름만 확인 (구독 안 씀)
 duet bench run --workflow classic --workflow lean --yes    # 실제 실행 (구독 사용량을 많이 씀)
 duet bench report ~/.duet/bench/<시각>                     # 요약 다시 보기
 ```
 
-결과 폴더의 `summary.md` 에 워크플로별 승인률, 숨은 테스트 통과율, "승인했는데 숨은 테스트 실패"(리뷰가 놓친 결함) 수, 평균 라운드·시간·토큰이 나옵니다. 한도에 걸리면 그 자리에서 멈추고 그때까지의 결과를 남깁니다. `basic` 은 쉬운 과제라 워크플로 차이가 잘 안 납니다(실측: classic·lean 모두 100%). `--suite hard` 는 모호한 요구, 여러 모듈, 성능·동시성 제약, 더 큰 기존 프로젝트, 함정이 있는 명세로 이루어져 있습니다. 직접 만든 과제 묶음은 `--suite <폴더>` 로 줍니다(구조는 DESIGN.md 20장).
+결과 폴더의 `summary.md` 에 워크플로별 승인률, 숨은 테스트 통과율, "승인했는데 숨은 테스트 실패"(리뷰가 놓친 결함) 수, 평균 라운드·시간·토큰이 나옵니다. 한도에 걸리면 그 자리에서 멈추고 그때까지의 결과를 남깁니다. `basic` 은 쉬운 과제라 워크플로 차이가 잘 안 납니다(실측: classic·lean 모두 100%). `--suite hard` 는 모호한 요구, 여러 모듈, 성능·동시성 제약, 더 큰 기존 프로젝트, 함정이 있는 명세로 이루어져 있습니다. `--suite dispute` 는 리뷰가 요구 밖 지적으로 핑퐁하기 쉬운 과제로, 중재자와 요구 근거 관문의 효과를 봅니다. 직접 만든 과제 묶음은 `--suite <폴더>` 로 줍니다(구조는 DESIGN.md 20장).
 
 ## 관리자 UI
 

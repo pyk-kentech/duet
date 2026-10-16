@@ -1,0 +1,4 @@
+name = "duration"
+description = "엄격한 기간 문자열 파서·포매터 (대문자·공백·소수 같은 '관대한 입력' 요구가 명세와 충돌하는 함정)"
+kind = "new"
+max_review = 4
