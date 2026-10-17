@@ -54,7 +54,8 @@ CONFIG_KEYS = ("workflow", "implementer", "reviewer", "synth", "debate_rounds", 
                "test_command", "block_severity", "stall_rounds", "require_tests_pass",
                "review_diff", "repro_tests", "review_packet", "review_json", "review_session",
                "review_session_rounds", "review_gates", "arbiter", "test_guard", "claude_sandbox", "spec_gate",
-               "wait_on_limit", "limit_wait_max_min", "dedup", "dedup_agent", "dedup_model", "dedup_effort")
+               "wait_on_limit", "limit_wait_max_min", "dedup", "dedup_agent", "dedup_model", "dedup_effort",
+               "timeout_sec", "test_timeout_sec", "max_diff_chars")
 CONSOLE_LOG = "console.log"
 CHANGES_DIR = "docs/changes"   # 기존 프로젝트의 변경 설계를 두는 곳 (DESIGN.md 19.5)
 
@@ -77,6 +78,7 @@ class RunOptions:
     mock: bool = False
     force: bool = False
     overrides: dict[str, Any] = field(default_factory=dict)   # CONFIG_KEYS 중 CLI 로 지정된 것
+    register: bool = True     # UI 프로젝트 목록에 등록 (벤치마크 실행은 안 함, DESIGN.md 28.2)
 
 
 @dataclass
@@ -145,7 +147,8 @@ class Orchestrator:
         agents = self._make_agents(cfg, opts.mock, wf)
 
         with self._locked(workdir, "run") as lock:
-            register_quietly(workdir)
+            if opts.register:
+                register_quietly(workdir)
             run_dir = create_run_dir(workdir)
             lock.set_run(run_dir.name)
             state = RunState(run_id=run_dir.name, task=opts.task, config=self._snapshot(cfg, opts),
@@ -446,6 +449,8 @@ class Orchestrator:
             "wait_on_limit": cfg.wait_on_limit, "limit_wait_max_min": cfg.limit_wait_max_min,
             "dedup": cfg.dedup, "dedup_agent": cfg.dedup_agent, "dedup_model": cfg.dedup_model,
             "dedup_effort": cfg.dedup_effort,
+            "timeout_sec": cfg.timeout_sec, "test_timeout_sec": cfg.test_timeout_sec,
+            "max_diff_chars": cfg.max_diff_chars,
             "design_only": opts.design_only, "skip_design": opts.skip_design, "mock": opts.mock,
         }
 

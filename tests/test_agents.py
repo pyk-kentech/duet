@@ -30,7 +30,7 @@ class TestClaude:
         cmd, stdin = a.build_command(req(tmp_path, mode=Mode.READ))
         assert stdin is None
         assert Path(cmd[0]).name == "claude"
-        assert cmd[1:] == ["-p", "--output-format", "json", "--allowedTools", "Read,Glob,Grep", "--", "안녕"]
+        assert cmd[1:] == ["-p", "--output-format", "stream-json", "--verbose", "--allowedTools", "Read,Glob,Grep", "--", "안녕"]
 
     def test_write_command(self, fake_cfg: Config, tmp_path: Path):
         a = ClaudeCodeAdapter(fake_cfg)

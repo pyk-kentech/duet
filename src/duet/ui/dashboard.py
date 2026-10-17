@@ -30,6 +30,7 @@ from duet.phases.debate import BACKUP_FILENAME, DESIGN_FILENAME
 from duet.doctor import ready, run_checks
 from duet.registry import Registry, duet_home, normalize
 from duet.runner import ExecutableNotFound, pid_alive, spawn_detached
+from duet.agents.claude_code import load_claude_limits
 from duet.usage import claude_local_usage, codex_rate_limits
 from duet.state import DONE_UNAPPROVED, DUET_DIR, RUNNING, RunState, list_run_dirs
 from duet.transcript import Transcript, split_header
@@ -101,7 +102,10 @@ class Dashboard:
             raise ApiError(400, "project 가 필요합니다.")
         p = normalize(path)
         if p not in self.registry.list():
-            raise ApiError(404, f"등록되지 않은 프로젝트입니다: {p}")
+            # 등록하지 않는 벤치마크 실행도 알려진 결과 폴더 안이면 열 수 있다 (DESIGN.md 28.3)
+            root = bench_root_of(Path(p))
+            if root is None or root not in self.bench_dirs():
+                raise ApiError(404, f"등록되지 않은 프로젝트입니다: {p}")
         return Path(p)
 
     def run_dir(self, project: Path, run_id: str | None) -> Path:
@@ -120,9 +124,57 @@ class Dashboard:
             path = Path(p)
             runs = list_run_dirs(path) if path.is_dir() else []
             latest = self._run_summary(path, runs[-1]) if runs else None
+            bench = bench_root_of(path)
             out.append({"path": p, "name": path.name or p, "exists": path.is_dir(),
+                        "bench": bench is not None, "bench_root": str(bench) if bench else None,
                         "run_count": len(runs), "latest": latest, "live": self._live(path)})
+        _display_names(out)
         return out
+
+    def prune_projects(self) -> dict[str, Any]:
+        """폴더가 없는 프로젝트를 목록에서만 지운다 (DESIGN.md 28.2). 파일은 건드리지 않는다."""
+        removed = [p for p in self.registry.list() if not Path(p).is_dir()]
+        for p in removed:
+            self.registry.remove(p)
+        return {"removed": removed}
+
+    # ================================================================ bench (DESIGN.md 28.3)
+    def bench_dirs(self) -> list[Path]:
+        from duet.bench import known_result_dirs
+
+        roots: set[Path] = set(known_result_dirs())
+        for p in self.registry.list():
+            b = bench_root_of(Path(p))
+            if b is not None:
+                roots.add(b)
+        return sorted(roots, key=lambda p: p.name, reverse=True)
+
+    def bench_list(self) -> dict[str, Any]:
+        out = []
+        for d in self.bench_dirs():
+            try:
+                data = json.loads((d / "results.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            meta, rows = data.get("meta") or {}, data.get("rows") or []
+            out.append({"dir": str(d), "name": d.name, "suite": meta.get("suite"), "workflows": meta.get("workflows"),
+                        "tasks": meta.get("tasks"), "repeat": meta.get("repeat"), "mock": meta.get("mock"),
+                        "started": meta.get("started"), "runs": len(rows),
+                        "approved": sum(1 for r in rows if r.get("approved")),
+                        "all_passed": sum(1 for r in rows if (r.get("hidden") or {}).get("all_passed"))})
+        return {"results": out}
+
+    def bench_result(self, path: str | None) -> dict[str, Any]:
+        allowed = {str(d): d for d in self.bench_dirs()}
+        d = allowed.get(str(path or ""))
+        if d is None:
+            raise ApiError(404, "벤치마크 결과 폴더를 찾을 수 없습니다.")
+        from duet.bench import workflow_stats
+        data = json.loads((d / "results.json").read_text(encoding="utf-8"))
+        rows = data.get("rows") or []
+        for r in rows:
+            r["has_runs"] = bool(r.get("workdir")) and Path(r["workdir"], DUET_DIR, "runs").is_dir()
+        return {"dir": str(d), "meta": data.get("meta") or {}, "rows": rows, "stats": workflow_stats(rows)}
 
     def add_project(self, path: str | None) -> dict[str, Any]:
         if not path or not str(path).strip():
@@ -345,6 +397,14 @@ class Dashboard:
                 overrides["stall_rounds"] = int(payload["stall_rounds"])
             except (TypeError, ValueError):
                 raise ApiError(400, "stall_rounds 는 숫자여야 합니다.") from None
+        from duet.options import OptionError, clean as clean_options, to_cli
+
+        try:
+            advanced = clean_options(payload.get("options") or {})   # 고급 설정 (DESIGN.md 28.4)
+        except OptionError as e:
+            raise ApiError(400, str(e)) from e
+        advanced = {k: v for k, v in advanced.items() if k not in overrides}
+        overrides.update(advanced)
         try:
             cfg = load_config(wd if wd.is_dir() else None, overrides)
         except ConfigError as e:
@@ -374,6 +434,8 @@ class Dashboard:
                           ("stall_rounds", "--stall-rounds")):
             if key in overrides:
                 argv += [flag, str(overrides[key])]
+        for key, value in advanced.items():
+            argv += ["--set", f"{key}={to_cli(value)}"]
         for on, flag in ((design_only, "--design-only"), (skip_design, "--skip-design"),
                          (mock, "--mock"), (force, "--force")):
             if on:
@@ -548,6 +610,7 @@ class Dashboard:
                 projects.append({"path": p, "name": wd.name, "by_agent": proj_total})
         return {
             "codex_limits": codex_rate_limits(),
+            "claude_limits": load_claude_limits(),     # duet 가 Claude 를 부를 때 갱신 (DESIGN.md 28.6)
             "claude_local": claude_local_usage(),
             "duet": {"by_agent": by_agent, "by_day": dict(sorted(by_day.items(), reverse=True)[:14]),
                      "projects": projects},
@@ -568,6 +631,22 @@ class Dashboard:
 
 def _looks_like_duet(pid: int) -> bool:
     return procs.looks_like_duet(pid)
+
+
+def bench_root_of(path: Path) -> Path | None:
+    """벤치마크 실행의 작업 폴더(<결과>/<과제>/<워크플로-반복>)면 결과 폴더 (DESIGN.md 28.2)."""
+    root = path.parent.parent
+    return root if (root / "results.json").is_file() else None
+
+
+def _display_names(items: list[dict[str, Any]]) -> None:
+    """이름이 같으면 부모 폴더 이름을 붙여 구별한다(ledger / lean-1). Windows 경로도 Path 로 다룬다."""
+    counts: dict[str, int] = {}
+    for it in items:
+        counts[it["name"]] = counts.get(it["name"], 0) + 1
+    for it in items:
+        parent = Path(it["path"]).parent.name
+        it["display"] = f"{parent} / {it['name']}" if counts[it["name"]] > 1 and parent else it["name"]
 
 
 _CALL_START_RE = re.compile(r"^\[(\d{2}):(\d{2}):(\d{2})\] (\w+) ← (\w+)(?: \(재시도 (\d+)\))? 실행 중")
@@ -609,6 +688,9 @@ API_METHODS: dict[str, Any] = {
     "projects": lambda d, a: {"projects": d.projects(), "jobs": d.jobs_list()},
     "add_project": lambda d, a: d.add_project(a.get("path")),
     "remove_project": lambda d, a: d.remove_project(a.get("project")),
+    "prune_projects": lambda d, a: d.prune_projects(),
+    "bench_list": lambda d, a: d.bench_list(),
+    "bench_result": lambda d, a: d.bench_result(a.get("dir")),
     "runs": lambda d, a: d.runs(a.get("project")),
     "run": lambda d, a: d.run(a.get("project"), a.get("run")),
     "entry": lambda d, a: d.entry(a.get("project"), a.get("run"), a.get("file")),

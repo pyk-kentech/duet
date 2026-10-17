@@ -106,9 +106,17 @@ def output_instruction(json_mode: bool, repro_tests: bool, repro_instruction: st
     return OUTPUT_INSTRUCTION_TEXT.replace("{repro_instruction}", repro_instruction).strip()
 
 
+NEW_TAG_RE = re.compile(r"^\s*(?:\[(?:새|new|NEW)\]\s*)+")
+
+
+def clean_title(title: Any) -> str:
+    """모델이 제목에도 붙이는 [새] 를 뗀다 (렌더·지적 원장 공용)."""
+    return NEW_TAG_RE.sub("", str(title or "")).strip()
+
+
 def _finding(f: dict[str, Any]) -> str:
     tag = f"[{f.get('severity', 'P3')}]" + ("[새]" if f.get("new") else "") + (f"[{f['id']}]" if f.get("id") else "")
-    title = re.sub(r"^\s*(?:\[(?:새|new|NEW)\]\s*)+", "", str(f.get("title") or "")).strip()   # 모델이 제목에도 [새] 를 붙임
+    title = clean_title(f.get("title"))   # 모델이 제목에도 [새] 를 붙임
     head = f"- {tag} {title}"
     if str(f.get("file") or "").strip():
         head += f" — `{str(f['file']).strip()}`"

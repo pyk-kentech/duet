@@ -96,8 +96,14 @@ def reset_from_usage(usage: dict[str, Any] | None, now: float) -> float | None:
     if not isinstance(rl, dict):
         return None
     times = []
-    for key in ("primary", "secondary"):
-        w = rl.get(key)
+    if rl.get("status") == "rejected" and rl.get("resets_at"):     # Claude rate_limit_event (DESIGN.md 28.6)
+        try:
+            t = float(rl["resets_at"])
+            if now < t <= now + MAX_PARSED_SEC:
+                times.append(t)
+        except (TypeError, ValueError):
+            pass
+    for w in rl.values():                      # Codex primary/secondary, Claude five_hour/seven_day
         if isinstance(w, dict) and float(w.get("used_percent") or 0) >= 100 and w.get("resets_at"):
             try:
                 t = float(w["resets_at"])

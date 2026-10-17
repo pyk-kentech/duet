@@ -479,3 +479,32 @@ button[data-tip], a[data-tip], .btn[data-tip] { cursor: pointer; }
 .act-text.mono { font-size: 12.5px; }
 .act-detail { color: var(--muted); font-family: var(--sans); }
 .timeline .pending button { cursor: pointer; }
+
+/* ---------------- 벤치마크 (DESIGN.md 28.3) */
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.table-wrap table.plain th { white-space: nowrap; }
+td.bad { color: #b42318; font-weight: 700; }
+
+/* ---------------- 지적 탭 (DESIGN.md 28.5) */
+.issues-panel { display: grid; gap: 14px; }
+table.issues td { vertical-align: top; }
+table.issues tr.closed td { opacity: .62; }
+table.issues .quote { color: var(--muted, #6b7280); font-style: italic; margin-top: 2px; }
+.sev { font-weight: 700; font-size: 12px; padding: 1px 6px; border-radius: 6px; background: #eef2f7; }
+.sev-P1 { background: #fde2e2; color: #b42318; }
+.sev-P2 { background: #fff1d6; color: #9a5b00; }
+.sev-P3 { background: #e8f1ff; color: #1d4ed8; }
+.round-findings { padding: 8px 0; border-top: 1px solid var(--line, #e5e7eb); display: grid; gap: 6px; }
+.round-findings:first-of-type { border-top: 0; }
+.round-findings h4 { margin: 0; font-size: 13px; }
+.chip.warn { background: #fff1d6; }
+
+/* ---------------- 목록 도구줄·고급 설정 (DESIGN.md 28.2·28.4) */
+.list-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 14px; }
+.list-tools input[type=search] { flex: 1 1 220px; min-width: 0; }
+.list-tools .toggle { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; color: var(--muted, #6b7280); }
+details.advanced { margin: 10px 0; }
+details.advanced summary { cursor: pointer; font-weight: 600; }
+details.advanced summary small { font-weight: 400; color: var(--muted, #6b7280); margin-left: 6px; }
+.opt-group h3 { margin: 14px 0 6px; font-size: 14px; }
+

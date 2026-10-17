@@ -25,6 +25,7 @@
       <nav class="side-links" aria-label="메뉴">
         <a href="#/" data-nav="home">프로젝트</a>
         <a href="#/setup" data-nav="setup">환경·로그인</a>
+        <a href="#/bench" data-nav="bench">벤치마크</a>
         <a href="#/usage" data-nav="usage">사용량</a>
         <a href="#/settings" data-nav="settings">설정</a>
       </nav>
@@ -131,6 +132,10 @@
           <span class="field-label" data-help="test_command">테스트 명령 <em>비우면 설정값(기본: 자동 감지) · none 이면 끔</em></span>
           <input name="test_command" type="text" placeholder="자동 감지 (예: python3 -m pytest -q)" autocomplete="off" spellcheck="false">
         </label>
+        <details class="advanced" id="run-advanced">
+          <summary>고급 설정 <small>비워 두면 설정값을 따릅니다</small></summary>
+          <div id="run-advanced-body"></div>
+        </details>
         <fieldset class="checks">
           <label data-help="design_only"><input type="checkbox" name="design_only"> 설계만 <small>토론 후 DESIGN.md만 만들고 끝냄</small></label>
           <label data-help="skip_design"><input type="checkbox" name="skip_design"> 설계 생략 <small>기존 DESIGN.md로 바로 구현</small></label>

@@ -2,6 +2,8 @@
 'use strict';
 
 const TOKEN = document.querySelector('meta[name="duet-token"]').content;
+// 토큰은 쿠키로 기억하므로 주소창에서는 지운다 (화면 공유·복사 때 새지 않게, DESIGN.md 28.1)
+if (/[?&]t=/.test(location.search)) history.replaceState(null, '', location.pathname + location.hash);
 const $ = (sel, root = document) => root.querySelector(sel);
 const LOCAL = 'local';
 const LIVE = '__live__';   // 타임라인의 '진행 중' 항목
@@ -218,6 +220,10 @@ const TIPS = {
   'step.fix': '리뷰 지적을 반영해 고친 내용의 요약입니다.',
   'step.test': 'duet 가 직접 돌린 테스트 결과입니다. 실패하면 리뷰어가 승인해도 승인되지 않습니다.',
   'step.dedup': '작은 모델이 새 지적이 이미 해결·기각된 지적의 반복인지 확인한 결과입니다. 기각된 지적의 재제기는 P3 로 낮추고, 해결된 지적의 재발은 표시만 합니다.',
+  'nav.bench': '벤치마크 결과(워크플로별 승인률·숨은 테스트 통과율·비용)를 봅니다.',
+  prune: '목록(~/.duet/projects.json)에서만 지웁니다. 폴더와 파일은 건드리지 않습니다.',
+  'tab.issues': '지적 원장(리뷰어별 지적의 흐름), 중재 결정, 관문 강등, 중복 확인, 테스트 변경·되돌림 경고를 한곳에서 봅니다.',
+  arbiter: '리뷰가 수렴하지 않거나 상한에 닿았을 때 한 번 열린 지적을 유지·완화·기각으로 정리한 결과입니다.',
   'step.testguard': '구현자가 테스트를 지우거나 약하게 바꾼 흔적입니다(테스트·단언 수 감소, skip 추가, 설정 변경). 막지는 않고 리뷰어에게 경고로 보여 줍니다.',
   'step.review': '상대 AI 의 코드 리뷰와 판정입니다.',
   'step.pending': '지금 이 AI 가 일하는 중입니다. 누르면 무슨 파일을 읽고 고치는지, 어떤 명령을 돌리는지 실시간으로 봅니다.',
@@ -552,6 +558,7 @@ function parseHash() {
     if (parts[0] === 'setup') return { name: 'setup', machine: q.get('m') || LOCAL };
     if (parts[0] === 'usage') return { name: 'usage', machine: q.get('m') || LOCAL };
     if (parts[0] === 'settings') return { name: 'settings' };
+    if (parts[0] === 'bench') return { name: 'bench', machine: q.get('m') || LOCAL, dir: q.get('dir') || '' };
     let machine = LOCAL;
     if (parts[0] === 'm' && parts[1]) { machine = decodeURIComponent(parts[1]); parts = parts.slice(2); }
     if (parts[0] === 'p' && parts[1]) {
@@ -586,7 +593,7 @@ async function route() {
     return;
   }
   main.replaceChildren(h('div', { class: 'loading' }, '불러오는 중…'));
-  const V = { run: RunView, project: ProjectView, setup: SetupView, usage: UsageView, settings: SettingsView }[r.name] || HomeView;
+  const V = { run: RunView, project: ProjectView, setup: SetupView, usage: UsageView, settings: SettingsView, bench: BenchView }[r.name] || HomeView;
   currentView = new V(main, r);
   document.querySelectorAll('[data-nav]').forEach(a => {
     const nav = a.getAttribute('data-nav');
@@ -620,6 +627,22 @@ function setConnected(ok, msg) {
   foot.classList.toggle('bad', !ok);
 }
 
+// =================================================================== 목록 필터 (DESIGN.md 28.2)
+const listFilter = (() => {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('duet.listFilter') || '{}'); } catch { saved = {}; }
+  return { query: '', bench: !!saved.bench, missing: !!saved.missing };
+})();
+function saveListFilter() {
+  try { localStorage.setItem('duet.listFilter', JSON.stringify({ bench: listFilter.bench, missing: listFilter.missing })); } catch { /* 사생활 보호 모드 등 */ }
+}
+function projectVisible(p) {
+  if (!listFilter.missing && !p.exists) return false;
+  if (!listFilter.bench && p.bench) return false;
+  const q = listFilter.query.trim().toLowerCase();
+  return !q || `${p.display || p.name} ${p.path}`.toLowerCase().includes(q);
+}
+
 async function loadGroups() {
   const d = await api('/api/projects');
   app.groups = d.machines || [{ id: LOCAL, name: '이 머신', local: true, projects: d.projects, jobs: d.jobs }];
@@ -632,12 +655,12 @@ async function refreshSidebar() {
   const groups = app.groups.filter(g => g.local || g.projects.length || g.error);
   box.replaceChildren(...groups.map(g => h('div', { class: 'side-group' },
     h('div', { class: 'side-title' }, g.local ? '이 머신' : g.name, g.error ? h('span', { class: 'warn-dot', 'data-tip': g.error }) : null),
-    h('ul', null, g.projects.length ? g.projects.map(p => {
+    h('ul', null, g.projects.filter(projectVisible).length ? g.projects.filter(projectVisible).map(p => {
       const st = p.latest ? statusKey(p.latest) : '';
       return h('li', null, h('a', {
         href: hrefProject(g.id, p.path), 'data-tip': p.path,
         class: (r.project === p.path && (r.machine || LOCAL) === g.id ? 'active' : null),
-      }, h('span', { class: `dot s-${p.live ? 'running live' : st}` }), h('span', { class: 'name' }, p.name)));
+      }, h('span', { class: `dot s-${p.live ? 'running live' : st}` }), h('span', { class: 'name' }, p.display || p.name)));
     }) : h('li', { class: 'empty' }, g.error ? h('a', { href: `#/setup?m=${enc(g.id)}`, 'data-tip': g.error }, '확인 필요 → 환경·로그인') : '없음')))));
 }
 async function loadSettings(force) {
@@ -656,11 +679,28 @@ class HomeView {
     this.render();
   }
   render() {
+    const allProjects = app.groups.flatMap(g => g.projects);
+    const nBench = allProjects.filter(p => p.bench).length;
+    const nMissing = allProjects.filter(p => !p.exists).length;
+    const search = h('input', { type: 'search', placeholder: '이름·경로로 찾기', value: listFilter.query, spellcheck: 'false',
+      oninput: ev => {
+        listFilter.query = ev.target.value;
+        const pos = ev.target.selectionStart;
+        this.render(); refreshSidebar();
+        const el = this.main.querySelector('.list-tools input[type=search]');
+        if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+      } });
+    const toggle = (key, label, n) => n ? h('label', { class: 'toggle' }, h('input', { type: 'checkbox', checked: listFilter[key] ? true : null,
+      onchange: ev => { listFilter[key] = ev.target.checked; saveListFilter(); this.render(); refreshSidebar(); } }), `${label} ${n}개 보기`) : null;
+    const tools = h('div', { class: 'list-tools' }, search,
+      toggle('bench', '벤치마크 실행', nBench), toggle('missing', '폴더 없는 프로젝트', nMissing),
+      nBench ? h('a', { class: 'btn btn-sm', href: '#/bench' }, '벤치마크 결과') : null);
     const sections = app.groups.map(g => {
-      const cards = g.projects.map(p => {
+      const hiddenMissing = g.projects.filter(p => !p.exists).length;
+      const cards = g.projects.filter(projectVisible).map(p => {
         const l = p.latest;
         return h('a', { class: 'card project-card', href: hrefProject(g.id, p.path) },
-          h('div', { class: 'row' }, h('h3', null, p.name), h('span', { class: 'spacer' }),
+          h('div', { class: 'row' }, h('h3', null, p.display || p.name), h('span', { class: 'spacer' }),
             p.live ? statusBadge({ status: 'running' }, true) : l ? statusBadge(l) : h('span', { class: 'badge plain' }, '기록 없음')),
           h('div', { class: 'path' }, p.path),
           l ? h('div', { class: 'task' }, oneLine(l.task, 160)) : null,
@@ -669,6 +709,7 @@ class HomeView {
             l ? h('span', null, `${PHASE[l.phase] || l.phase} · ${STEP[l.step] || l.step || '-'}`) : null,
             l && l.last_verdict ? verdictTag({ status: l.last_verdict }) : null,
             l ? h('span', null, fmtWhen(l.updated_at)) : null,
+            p.bench ? h('span', { class: 'badge plain' }, '벤치마크') : null,
             p.exists ? null : h('span', { class: 'badge s-failed' }, '폴더 없음')));
       });
       const jobs = (g.jobs || []).filter(j => j.running || j.returncode !== 0).slice(0, 4);
@@ -678,15 +719,18 @@ class HomeView {
           g.local ? null : h('span', { class: 'mono' }, g.ssh),
           g.error ? h('span', { class: 'badge s-failed' }, '연결 안 됨') : null,
           h('span', { class: 'spacer' }),
+          hiddenMissing ? withTip(h('button', { class: 'btn btn-sm', type: 'button', onclick: () => this.prune(g) },
+            `없는 폴더 ${hiddenMissing}개 목록에서 지우기`), 'prune') : null,
           h('a', { class: 'btn btn-sm', href: `#/setup?m=${enc(g.id)}` }, '환경·로그인'),
           withTip(h('button', { class: 'btn btn-sm btn-primary', type: 'button', onclick: () => openRunDialog({ machine: g.id }) }, '새 실행'), 'new_run')),
         g.error ? h('div', { class: 'alert alert-warn' }, h('span', null, g.error)) : null,
         cards.length ? h('div', { class: 'grid' }, cards)
-          : g.error ? null : h('div', { class: 'card empty-state small' }, '아직 프로젝트가 없습니다. ‘새 실행’으로 시작하세요.'),
+          : g.error ? null : h('div', { class: 'card empty-state small' },
+            g.projects.length ? '조건에 맞는 프로젝트가 없습니다. 검색어나 위의 보기 설정을 바꿔 보세요.' : '아직 프로젝트가 없습니다. ‘새 실행’으로 시작하세요.'),
         jobs.length ? h('div', { class: 'jobs' }, jobs.map(jobCard)) : null);
     });
     const form = h('form', { class: 'add-form', onsubmit: ev => this.add(ev) },
-      h('input', { type: 'text', name: 'path', placeholder: '/절대/경로/프로젝트 — 이 머신의 기존 작업 폴더를 목록에 추가', value: this.addValue, spellcheck: 'false', autocomplete: 'off' }),
+      h('input', { type: 'text', name: 'path', placeholder: '절대 경로 (/home/me/proj, C:\\work\\proj) — 이 머신의 기존 작업 폴더를 목록에 추가', value: this.addValue, spellcheck: 'false', autocomplete: 'off' }),
       h('button', { class: 'btn', type: 'submit' }, '추가'));
     const noRemote = app.groups.length === 1;
     this.main.replaceChildren(h('div', { class: 'page' },
@@ -694,8 +738,17 @@ class HomeView {
         h('div', null, h('h1', null, '프로젝트'), h('div', { class: 'muted' }, '두 모델이 설계를 토론하고 서로의 코드를 리뷰한 기록을 봅니다.')),
         h('span', { class: 'spacer' }),
         h('button', { class: 'btn btn-primary', type: 'button', onclick: () => openRunDialog({}) }, '새 실행')),
-      sections, form,
+      allProjects.length ? tools : null, sections, form,
       noRemote ? h('p', { class: 'muted small' }, '다른 머신에서도 돌리려면 ', h('a', { href: '#/settings' }, '설정 > 원격 머신'), '에서 SSH 머신을 추가하세요.') : null));
+  }
+  async prune(g) {
+    const n = g.projects.filter(p => !p.exists).length;
+    if (!confirm(`폴더가 없는 프로젝트 ${n}개를 목록에서 지웁니다. 파일은 건드리지 않습니다.`)) return;
+    try {
+      const r = await api('/api/projects/prune', { method: 'POST', machine: g.id });
+      toast(`${r.removed.length}개를 목록에서 지웠습니다.`);
+      schedule(this, 0);
+    } catch (e) { toast(e.message, true); }
   }
   async add(ev) {
     ev.preventDefault();
@@ -984,15 +1037,91 @@ class RunView {
     const d = this.data, t = this.r.tab;
     const mk = (key, label, count) => h('a', { href: hrefRun(this.m, this.r.project, this.r.run, key), class: t === key ? 'active' : null,
       'data-tip': TIPS[`tab.${key}`] }, label, count !== undefined ? h('span', { class: 'count' }, count) : null);
+    const s = d.state;
+    const nIssues = (s.issues || []).length;
     this.tabsSlot.replaceChildren(
-      mk('talk', '대화', d.entries.length), mk('console', '콘솔'), mk('changes', '변경 사항'), mk('design', '설계 문서'));
+      mk('talk', '대화', d.entries.length),
+      this.hasFindings() ? mk('issues', '지적', nIssues || undefined) : null,
+      mk('console', '콘솔'), mk('changes', '변경 사항'), mk('design', '설계 문서'));
+  }
+  hasFindings() {
+    const s = this.data.state;
+    return !!((s.issues || []).length || s.arbiter || Object.keys(s.test_guard || {}).length
+      || Object.keys(s.reverts || {}).length || Object.keys(s.dedup || {}).length);
   }
   async renderPanel(force) {
     const t = this.r.tab;
+    if (t === 'issues' && this.hasFindings()) return this.renderIssues();
     if (t === 'console') return this.renderConsole(force);
     if (t === 'changes') return this.renderChanges(force);
     if (t === 'design') return this.renderDesign(force);
     return this.renderTalk(force);
+  }
+
+  // ---------------------------------------------------------------- issues (DESIGN.md 28.5)
+  renderIssues() {
+    const s = this.data.state;
+    const ST = { open: '열림', resolved: '해결', rejected: '기각' };
+    const STC = { open: 's-done_unapproved', resolved: 's-done_approved', rejected: 's-stopped_user' };
+    const BASIS = { requirement: '요구 위반', correctness: '정확성', security: '보안', preference: '취향' };
+    const DOWN = { evidence: '근거 없음', scope: '범위 밖', spec: '요구 근거', repeat: '재제기', arbiter: '중재 후' };
+    const issues = s.issues || [];
+    const table = issues.length ? h('div', { class: 'card table-wrap' }, h('table', { class: 'plain issues' },
+      h('thead', null, h('tr', null, ['ID', '리뷰어', '심각도', '지적', '근거 종류', '상태', '라운드', '메모'].map(t => h('th', null, t)))),
+      h('tbody', null, issues.map(x => h('tr', { class: x.status !== 'open' ? 'closed' : null },
+        h('td', { class: 'mono' }, x.id),
+        h('td', null, agentTag(this.cliOf(x.role), x.role)),
+        h('td', null, h('span', { class: `sev sev-${x.severity}` }, x.severity)),
+        h('td', null, h('div', null, x.title), x.file ? h('div', { class: 'mono small faint' }, x.file) : null,
+          x.requirement ? h('div', { class: 'small quote' }, `«${x.requirement}»`) : null),
+        h('td', { class: 'small' }, BASIS[x.basis] || '-'),
+        h('td', null, h('span', { class: `badge ${STC[x.status] || ''}` }, ST[x.status] || x.status)),
+        h('td', { class: 'mono small' }, `${x.round} → ${x.closed_round ?? '…'}`),
+        h('td', { class: 'small' }, x.note || '')))))) : null;
+
+    const a = s.arbiter;
+    const arbiterCard = a ? h('div', { class: 'card card-pad' },
+      h('h3', null, '중재', help('arbiter')),
+      h('div', { class: 'chips' },
+        h('span', { class: 'chip' }, `${a.round}라운드 · ${a.reason === 'stalled' ? '수렴 실패' : '리뷰 상한'}`),
+        h('span', { class: 'chip' }, '결과 ', h('b', null, { approved: '승인', continue: '마지막 라운드', stop: '멈춤', unreadable: '읽지 못함' }[a.result] || a.result || '?')),
+        h('span', { class: 'chip' }, `유지 ${(a.upheld || []).join(', ') || '-'}`),
+        h('span', { class: 'chip' }, `완화 ${(a.downgraded || []).join(', ') || '-'}`),
+        h('span', { class: 'chip' }, `기각 ${(a.rejected || []).join(', ') || '-'}`),
+        a.file ? h('a', { class: 'chip', href: hrefRun(this.m, this.r.project, this.r.run, 'talk'), onclick: () => { this.selected = a.file; } }, '중재 기록 보기') : null)) : null;
+
+    const rounds = (s.review_history || []).map(hst => {
+      const items = [];
+      const down = { ...(hst.downgraded || {}) };
+      for (const rv of hst.reviewers || []) for (const [k, n] of Object.entries(rv.downgraded || {})) down[k] = (down[k] || 0) + n;
+      const downs = Object.entries(down).filter(([, n]) => n);
+      if (downs.length) items.push(h('div', null, h('b', null, '관문 강등 '), downs.map(([k, n]) => h('span', { class: 'chip' }, `${DOWN[k] || k} ${n}`))));
+      for (const [key, dd] of Object.entries(s.dedup || {})) {
+        if (!key.startsWith(`${hst.round}:`)) continue;
+        const m = Object.entries(dd.matches || {});
+        items.push(h('div', null, h('b', null, `중복 확인(${key.split(':')[1]}) `),
+          dd.result ? h('span', { class: 'chip' }, dd.result === 'failed' ? '실패(건너뜀)' : '읽지 못함')
+            : m.length ? m.map(([n, x]) => h('span', { class: 'chip', 'data-tip': x.reason }, `${n} → ${x.old_id}`)) : h('span', { class: 'chip' }, '반복 없음')));
+      }
+      const g = (s.test_guard || {})[hst.round];
+      if (g && (g.signals || []).length) items.push(h('div', null, h('b', null, '테스트 변경 경고 '),
+        g.signals.map(x => h('span', { class: 'chip warn', 'data-tip': x.detail }, `${x.file}`))));
+      const rv = (s.reverts || {})[hst.round];
+      if (rv && (rv.reverts || []).length) items.push(h('div', null, h('b', null, '되돌림 경고 '),
+        rv.reverts.map(x => h('span', { class: 'chip warn' }, `${x.file} (${x.issues.join(', ')})`))));
+      if (!items.length) return null;
+      return h('div', { class: 'round-findings' }, h('h4', null, `${hst.round}라운드`, ' ', decisionTag(hst)), items);
+    }).filter(Boolean);
+
+    this.panelSlot.replaceChildren(h('div', { class: 'issues-panel' },
+      arbiterCard,
+      table || h('p', { class: 'muted' }, '지적 원장이 없습니다 (JSON 판정을 끈 실행이거나 막는 지적이 없었습니다).'),
+      rounds.length ? h('div', { class: 'card card-pad' }, h('h3', null, '라운드별'), rounds) : null));
+    this.panelBuilt = 'issues';
+  }
+  cliOf(role) {
+    const wf = this.data.state.workflow;
+    return (wf && wf.roles && wf.roles[role] && wf.roles[role].agent) || role;
   }
 
   // ---------------------------------------------------------------- talk
@@ -1203,6 +1332,81 @@ async function stopRun(machine, project) {
   } catch (e) { toast(e.message, true); }
 }
 // =================================================================== 공통: 머신 탭
+// =================================================================== bench (DESIGN.md 28.3)
+class BenchView {
+  constructor(main, r) { this.main = main; this.r = r; }
+  interval() { return 0; }
+  showError(e) { this.main.replaceChildren(h('div', { class: 'page' }, h('h1', null, '벤치마크'), errorBox(e))); }
+  async load() {
+    const m = this.r.machine || LOCAL;
+    if (this.r.dir) {
+      const d = await api('/api/bench/result', { query: { dir: this.r.dir }, machine: m });
+      return this.renderResult(d, m);
+    }
+    const d = await api('/api/bench', { machine: m });
+    this.renderList(d.results, m);
+  }
+  renderList(results, m) {
+    const href = r => `#/bench?dir=${enc(r.dir)}${m !== LOCAL ? `&m=${enc(m)}` : ''}`;
+    const rows = results.map(r => h('tr', null,
+      h('td', null, h('a', { href: href(r) }, r.name), r.mock ? h('span', { class: 'badge plain' }, 'mock') : null),
+      h('td', null, r.suite || '-'), h('td', null, (r.workflows || []).join(', ')),
+      h('td', { class: 'num' }, r.runs), h('td', { class: 'num' }, `${r.approved}/${r.runs}`),
+      h('td', { class: 'num' }, `${r.all_passed}/${r.runs}`),
+      h('td', { class: 'mono small faint' }, r.dir)));
+    this.main.replaceChildren(h('div', { class: 'page' },
+      h('div', { class: 'page-head' }, h('div', null, h('h1', null, '벤치마크'),
+        h('div', { class: 'muted' }, '같은 과제 묶음을 워크플로별로 돌리고 숨은 수용 테스트로 채점한 결과입니다. `duet bench run` 으로 만듭니다.'))),
+      machineTabs(m, id => `#/bench${id !== LOCAL ? `?m=${enc(id)}` : ''}`),
+      results.length ? h('div', { class: 'card table-wrap' }, h('table', { class: 'plain' },
+        h('thead', null, h('tr', null, ['결과', '묶음', '워크플로', '실행', '승인', '숨은 테스트 전부 통과', '폴더'].map(t => h('th', null, t)))),
+        h('tbody', null, rows)))
+        : h('div', { class: 'card empty-state small' }, '아직 벤치마크 결과가 없습니다. 예: duet bench run --suite hard --workflow classic --workflow lean --yes')));
+  }
+  renderResult(d, m) {
+    const meta = d.meta || {};
+    const stats = (d.stats || []).map(s => h('tr', null,
+      h('td', null, h('b', null, s.workflow)), h('td', { class: 'num' }, `${s.approved}/${s.runs}`),
+      h('td', { class: 'num' }, s.arbiter || '-'),
+      h('td', { class: 'num' }, `${s.hidden_rate.toFixed(0)}%`), h('td', { class: 'num' }, `${s.all_passed}/${s.graded}`),
+      h('td', { class: 'num' + (s.missed ? ' bad' : '') }, s.missed),
+      h('td', { class: 'num' }, s.rounds.toFixed(1)), h('td', { class: 'num' }, fmtDur(s.seconds)),
+      h('td', { class: 'num' }, s.calls.toFixed(1)),
+      h('td', { class: 'num' }, `${fmtTok(s.input.claude)} / ${fmtTok(s.input.codex)}`), h('td', { class: 'num' }, fmtTok(s.output))));
+    const rows = (d.rows || []).map(r => {
+      const hd = r.hidden;
+      const run = r.run_dir ? baseName(r.run_dir) : null;
+      const link = r.has_runs && run ? hrefRun(m, r.workdir, run) : null;
+      return h('tr', null,
+        h('td', null, link ? h('a', { href: link }, r.task) : r.task), h('td', null, r.workflow), h('td', { class: 'num' }, r.rep),
+        h('td', null, h('span', { class: `badge s-${r.approved ? 'done_approved' : r.status === 'unapproved' ? 'done_unapproved' : 'failed'}` },
+          ({ approved: '승인', unapproved: '미승인', stopped: '중단', failed: '실패', error: '오류', design_only: '설계만' }[r.status] || r.status)
+          + (r.arbiter === 'arbiter' ? ' (중재)' : ''))),
+        h('td', { class: 'num' }, r.rounds || 0),
+        h('td', { class: 'num' + (hd && !hd.all_passed ? ' bad' : '') }, hd ? `${hd.passed}/${hd.total}` : '-'),
+        h('td', { class: 'num' }, fmtDur((r.seconds || 0) - (r.limit_wait_sec || 0))),
+        h('td', { class: 'num' }, r.calls || 0));
+    });
+    this.main.replaceChildren(h('div', { class: 'page' },
+      h('div', { class: 'crumbs' }, h('a', { href: '#/bench' + (m !== LOCAL ? `?m=${enc(m)}` : '') }, '벤치마크'), h('span', { class: 'sep' }, '/'), h('span', null, baseName(d.dir))),
+      h('h1', null, baseName(d.dir)),
+      h('div', { class: 'chips' },
+        h('span', { class: 'chip' }, '묶음 ', h('b', null, meta.suite || '?')),
+        h('span', { class: 'chip' }, `과제 ${(meta.tasks || []).length}개 × 워크플로 ${(meta.workflows || []).length}개 × ${meta.repeat || 1}회`),
+        meta.mock ? h('span', { class: 'badge plain' }, 'mock') : null,
+        meta.started ? h('span', { class: 'chip' }, fmtWhen(meta.started)) : null),
+      h('h2', null, '워크플로별'),
+      h('div', { class: 'card table-wrap' }, h('table', { class: 'plain' },
+        h('thead', null, h('tr', null, ['워크플로', '승인', '중재 승인', '숨은 테스트', '전부 통과', '승인했는데 실패', '평균 라운드', '평균 시간', '평균 호출', '입력 토큰 (Claude / Codex)', '출력 토큰'].map(t => h('th', null, t)))),
+        h('tbody', null, stats))),
+      h('h2', null, '실행별'),
+      h('div', { class: 'card table-wrap' }, h('table', { class: 'plain' },
+        h('thead', null, h('tr', null, ['과제', '워크플로', '#', '결과', '라운드', '숨은 테스트', '시간', '호출'].map(t => h('th', null, t)))),
+        h('tbody', null, rows))),
+      h('p', { class: 'muted small' }, '숨은 테스트: 에이전트가 보지 못한 수용 테스트. 승인했는데 실패: 리뷰가 놓친 결함. 시간에서는 한도 대기 시간을 뺐습니다.')));
+  }
+}
+
 function machineTabs(current, hrefOf) {
   const groups = app.groups.length ? app.groups : [{ id: LOCAL, name: '이 머신', local: true }];
   return h('div', { class: 'subtabs' }, groups.map(g =>
@@ -1386,8 +1590,13 @@ class UsageView {
         : h('p', { class: 'muted' }, '최근 Codex 세션 기록이 없습니다. Codex 를 한 번 쓰면 보입니다.'),
       h('p', { class: 'desc' }, 'Codex 가 남긴 마지막 세션 기록 기준입니다(duet 밖에서 쓴 것 포함).'));
     const cw = u.claude_local.windows;
+    const ck = u.claude_limits;
+    const cwin = ck && ck.limits ? ck.limits : null;
     const claudeCard = h('div', { class: 'card section-card' },
-      h('h2', null, 'Claude Code 사용량', help('claude_tokens')),
+      h('div', { class: 'row' }, h('h2', null, 'Claude Code 사용량', help('claude_tokens')), h('span', { class: 'spacer' }),
+        ck && ck.as_of ? h('span', { class: 'muted small' }, `한도 기준 ${fmtWhen(ck.as_of)}`) : null),
+      cwin ? [cwin.five_hour ? meter('5시간 한도', cwin.five_hour) : null, cwin.seven_day ? meter('7일 한도', cwin.seven_day) : null,
+        cwin.status === 'rejected' ? h('div', { class: 'alert alert-bad' }, h('b', null, '한도 도달'), h('span', null, cwin.type || '')) : null] : null,
       h('div', { class: 'stat-grid' }, Object.entries(cw).map(([name, w]) => h('div', { class: 'card stat' },
         h('span', { class: 'k' }, `최근 ${name}`), h('span', { class: 'v' }, `출력 ${fmtTok(w.output_tokens)}`),
         h('span', { class: 's' }, `입력 ${fmtTok(w.input_tokens)} · 응답 ${w.messages}개`)))),
@@ -1395,7 +1604,8 @@ class UsageView {
         h('thead', null, h('tr', null, h('th', null, '모델 (7일)'), h('th', { class: 'num' }, '출력 토큰'))),
         h('tbody', null, Object.entries(u.claude_local.output_by_model_7d).sort((a, b) => b[1] - a[1]).map(([m, n]) =>
           h('tr', null, h('td', null, m), h('td', { class: 'num' }, fmtTok(n)))))) : null,
-      h('p', { class: 'desc' }, 'Claude CLI 는 구독 한도(%)를 알려주지 않아, 이 머신의 Claude Code 기록에서 토큰을 합산했습니다. 남은 한도는 claude 대화창의 /usage 로 확인하세요.'));
+      h('p', { class: 'desc' }, cwin ? '한도(%)는 duet 가 Claude 를 마지막으로 부를 때 받은 값입니다. 토큰은 이 머신의 Claude Code 기록(duet 밖 사용 포함)을 합산했습니다.'
+        : '한도(%)는 duet 가 Claude 를 한 번 부르면 보입니다. 토큰은 이 머신의 Claude Code 기록에서 합산했습니다.'));
     const du = u.duet;
     const agentRows = Object.entries(du.by_agent).map(([a, t]) => h('tr', null, h('td', null, agentTag(a)),
       h('td', { class: 'num' }, t.calls || 0), h('td', { class: 'num' }, fmtTok(t.input_tokens)), h('td', { class: 'num' }, fmtTok(t.output_tokens)),
@@ -1436,6 +1646,46 @@ function effortSelect(name, agent, value, sugg, model) {
 function modelDatalists(sugg) {
   $('#claude-models').replaceChildren(...sugg.claude.models.map(m => h('option', { value: m.id }, m.label)));
   $('#codex-models').replaceChildren(...sugg.codex.models.map(m => h('option', { value: m.id }, m.label)));
+}
+
+// =================================================================== 설정 항목 정의 (DESIGN.md 28.4)
+function fmtOptValue(o, v) {
+  if (v === true) return '켬';
+  if (v === false) return '끔';
+  return v === null || v === undefined || v === '' ? '없음' : String(v);
+}
+function optionInput(o, value) {
+  // 비워 두면(기본값) 저장된 값·duet.toml·내장 기본값을 따른다
+  const def = `기본값 (${fmtOptValue(o, o.effective)})`;
+  let el;
+  if (o.kind === 'bool') {
+    el = h('select', null, h('option', { value: '' }, def), h('option', { value: 'true' }, '켬'), h('option', { value: 'false' }, '끔'));
+    el.value = value === true ? 'true' : value === false ? 'false' : '';
+  } else if (o.kind === 'choice') {
+    el = h('select', null, h('option', { value: '' }, def), (o.choices || []).map(c => h('option', { value: c }, c)));
+    el.value = value ?? '';
+  } else {
+    el = h('input', { type: o.kind === 'int' ? 'number' : 'text', min: o.min ?? null, max: o.max ?? null,
+      value: value ?? '', placeholder: def, spellcheck: 'false', autocomplete: 'off' });
+  }
+  el.dataset.option = o.key;
+  return el;
+}
+function optionFields(options, values, filter) {
+  const groups = {};
+  for (const o of options.filter(filter)) (groups[o.group_label] = groups[o.group_label] || []).push(o);
+  return Object.entries(groups).map(([label, list]) => h('div', { class: 'opt-group' },
+    h('h3', null, label),
+    h('div', { class: 'form-grid' }, list.map(o => h('label', { class: 'field', 'data-tip': o.help },
+      h('span', { class: 'field-label' }, o.label), optionInput(o, values[o.key]))))));
+}
+function collectOptions(root, keepEmpty) {
+  const out = {};
+  for (const el of root.querySelectorAll('[data-option]')) {
+    const v = el.value.trim();
+    if (v || keepEmpty) out[el.dataset.option] = v;
+  }
+  return out;
 }
 
 class SettingsView {
@@ -1554,6 +1804,14 @@ class SettingsView {
         h('button', { class: 'btn btn-primary', type: 'button', onclick: () => this.saveMachine(mf) }, ed.id ? '수정 저장' : '머신 추가'),
         ed.id ? h('button', { class: 'btn', type: 'button', onclick: () => { this.editing = null; this.render(v); } }, '취소') : null));
 
+    // ---------------- 고급 설정 (설정 항목 정의에서 만든다)
+    const advBody = h('div', null, optionFields(v.options || [], d, () => true));
+    const advancedCard = h('div', { class: 'card section-card' },
+      h('h2', null, '고급 설정'),
+      h('p', { class: 'desc' }, '리뷰 관문·중재자·중복 확인·안전장치·한도 대기 같은 설정입니다. 비워 두면 기본값을 씁니다. 항목에 마우스를 올리면 설명이 나옵니다.'),
+      advBody,
+      h('div', { class: 'actions' }, h('button', { class: 'btn btn-primary', type: 'button', onclick: () => this.save({ options: collectOptions(advBody, true) }) }, '저장')));
+
     const sv = app.server || {};
     const serverCard = h('div', { class: 'card section-card' },
       h('h2', null, 'UI 서버'),
@@ -1567,7 +1825,7 @@ class SettingsView {
       h('div', { class: 'actions' }, withTip(h('button', { class: 'btn', type: 'button', onclick: restartServer }, 'UI 다시 시작'), 'restart')));
     this.main.replaceChildren(h('div', { class: 'page' },
       h('div', { class: 'page-head' }, h('div', null, h('h1', null, '설정'), h('div', { class: 'muted' }, '~/.duet/settings.json 에 저장됩니다.'))),
-      v.error ? errorBox({ message: v.error }) : null, rootsCard, defaultsCard, machinesCard, serverCard));
+      v.error ? errorBox({ message: v.error }) : null, rootsCard, defaultsCard, advancedCard, machinesCard, serverCard));
   }
   async save(body) {
     try { app.settings = await api('/api/settings', { method: 'POST', body }); toast('저장했습니다.'); this.render(app.settings); }
@@ -1682,6 +1940,8 @@ async function openRunDialog({ machine = LOCAL, project = '', defaults = null, h
   setEffortOptions('claude', (eff.claude || {}).effort);
   setEffortOptions('codex', (eff.codex || {}).effort);
   await fillWorkflows(machine, project, eff.workflow);
+  $('#run-advanced-body').replaceChildren(...optionFields(app.settings.options || [], {}, o => o.run_dialog));
+  $('#run-advanced').open = false;
   f.skip_design.disabled = project ? !hasDesign : false;
   f.skip_design.parentElement.title = project && !hasDesign ? 'DESIGN.md 가 없어서 고를 수 없습니다' : '';
   $('#run-cost-note').hidden = false;
@@ -1723,9 +1983,10 @@ form.addEventListener('submit', async ev => {
     codex_model: f.codex_model.value.trim(), codex_effort: f.codex_effort.value,
     test_command: f.test_command.value.trim(), block_severity: f.block_severity.value, stall_rounds: f.stall_rounds.value,
     design_only: f.design_only.checked, skip_design: f.skip_design.checked, mock: f.mock.checked, force: f.force.checked,
+    options: collectOptions($('#run-advanced-body'), false),
   };
   const problem = !body.project ? (f.root.value === CUSTOM ? '작업 폴더 경로를 입력하세요.' : '폴더 이름을 입력하세요.')
-    : !/^[\/~]/.test(body.project) ? '작업 폴더는 / 또는 ~ 로 시작하는 절대 경로여야 합니다.'
+    : !/^([\/~]|[A-Za-z]:[\\/]|\\\\)/.test(body.project) ? '작업 폴더는 절대 경로여야 합니다 (/…, ~/…, C:\\…).'
     : !body.task.trim() ? '과제를 입력하세요.'
     : classic && body.implementer === body.reviewer ? '구현 담당과 리뷰 담당은 달라야 합니다.' : '';
   if (problem) { formError.textContent = problem; formError.hidden = false; return; }

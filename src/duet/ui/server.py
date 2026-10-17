@@ -21,6 +21,7 @@ import threading
 import time
 import webbrowser
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import Any, Callable
@@ -39,6 +40,9 @@ from duet.usage import codex_home
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}
 MAX_BODY = 1_000_000
 TOKEN_PLACEHOLDER = "__DUET_TOKEN__"
+COOKIE_PREFIX = "duet_t_"
+COOKIE_MAX_AGE = 30 * 24 * 3600
+TOKEN_FILE = "ui-token"
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 
@@ -189,15 +193,45 @@ class DuetServer(ThreadingHTTPServer):
             err = None
         except SettingsError as e:
             data, err = {"workspace_roots": [], "defaults": {}, "machines": []}, str(e)
+        from duet.options import schema
+        from duet.workflow import list_workflows
+
+        try:
+            names = [w["id"] for w in list_workflows(None) if w.get("source") != "error"]
+        except Exception:  # noqa: BLE001 - 목록을 못 읽어도 설정 화면은 뜬다
+            names = []
         return {"settings": data, "error": err, "suggestions": model_suggestions(),
-                "effective": self.dashboard._defaults(None)}
+                "effective": self.dashboard._defaults(None), "options": schema(workflows=names)}
 
     def save_settings(self, body: dict[str, Any]) -> dict[str, Any]:
         data = load_settings()
         if "workspace_roots" in body:
             data["workspace_roots"] = [str(r).strip() for r in body["workspace_roots"] if str(r).strip()]
         if "defaults" in body:
-            data["defaults"] = _clean_defaults(body["defaults"])
+            # 기본 실행 설정 카드는 자기 칸만 보낸다. 고급 설정(options)에서 저장한 값은 지우지 않는다
+            from duet.options import BY_KEY
+
+            kept = {k: v for k, v in (data.get("defaults") or {}).items() if k in BY_KEY}
+            data["defaults"] = {**kept, **_clean_defaults(body["defaults"])}
+        if "options" in body:
+            # 고급 설정 카드 (DESIGN.md 28.4): 빈 값은 '기본값 사용' → 지운다
+            from duet.options import BY_KEY, OptionError, parse
+
+            if not isinstance(body["options"], dict):
+                raise ApiError(400, "options 는 객체여야 합니다.")
+            d = dict(data.get("defaults") or {})
+            for k, raw in body["options"].items():
+                if k not in BY_KEY:
+                    raise ApiError(400, f"알 수 없는 설정입니다: {k}")
+                try:
+                    v = parse(k, raw)
+                except OptionError as e:
+                    raise ApiError(400, str(e)) from e
+                if v is None:
+                    d.pop(k, None)
+                else:
+                    d[k] = v
+            data["defaults"] = d
         try:
             save_settings(data)
         except SettingsError as e:
@@ -411,12 +445,30 @@ class Handler(BaseHTTPRequestHandler):
         return data
 
     # ---------------------------------------------------------------- pages
+    def _cookie_name(self) -> str:
+        return f"{COOKIE_PREFIX}{self.server.port}"   # 같은 PC 의 UI 여러 개가 섞이지 않게 포트별
+
+    def _cookie_token(self) -> str | None:
+        jar = SimpleCookie()
+        try:
+            jar.load(self.headers.get("Cookie") or "")
+        except Exception:  # noqa: BLE001 - 깨진 쿠키는 없는 것으로
+            return None
+        morsel = jar.get(self._cookie_name())
+        return morsel.value if morsel is not None else None
+
     def _index(self, query: dict[str, str]) -> None:
-        if not self._token_ok(query.get("t")):
+        """?t= 가 맞으면 쿠키를 심고, 다음부터는 쿠키로 연다 (DESIGN.md 28.1). API 는 쿠키로 열지 않는다."""
+        via_query = self._token_ok(query.get("t"))
+        if not via_query and not self._token_ok(self._cookie_token()):
             self._send(HTTPStatus.FORBIDDEN, _forbidden_page().encode("utf-8"), "text/html; charset=utf-8")
             return
+        extra = None
+        if via_query:
+            extra = {"Set-Cookie": f"{self._cookie_name()}={self.server.token}; HttpOnly; SameSite=Strict; "
+                                   f"Path=/; Max-Age={COOKIE_MAX_AGE}"}
         html = _static_text("index.html").replace(TOKEN_PLACEHOLDER, self.server.token)
-        self._send(HTTPStatus.OK, html.encode("utf-8"), "text/html; charset=utf-8")
+        self._send(HTTPStatus.OK, html.encode("utf-8"), "text/html; charset=utf-8", extra)
 
     def _static(self, name: str) -> None:
         ctype = STATIC_FILES.get(name)
@@ -446,6 +498,9 @@ class Handler(BaseHTTPRequestHandler):
         ("GET", "/api/doctor"): "doctor",
         ("GET", "/api/defaults"): "defaults",
         ("GET", "/api/workflows"): "workflows",
+        ("POST", "/api/projects/prune"): "prune_projects",
+        ("GET", "/api/bench"): "bench_list",
+        ("GET", "/api/bench/result"): "bench_result",
     }
 
     def _api(self, method: str, path: str, q: dict[str, str], body: dict[str, Any]) -> Any:
@@ -603,13 +658,38 @@ def _print_flush(line: str) -> None:
     print(line, flush=True)
 
 
+def saved_token(new: bool = False) -> str:
+    """$DUET_HOME/ui-token 의 토큰. 없거나 new 면 새로 만든다 (DESIGN.md 28.1).
+
+    UI 를 다시 켜도 같은 토큰이라 즐겨찾기·쿠키가 계속 맞는다. 파일은 사용자만 읽을 수 있게 둔다.
+    """
+    from duet.registry import duet_home
+
+    path = duet_home() / TOKEN_FILE
+    if not new:
+        try:
+            tok = path.read_text(encoding="utf-8").strip()
+            if len(tok) >= 24:
+                return tok
+        except OSError:
+            pass
+    tok = secrets.token_urlsafe(24)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(tok + "\n", encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return tok
+
+
 def serve(host: str, port: int, *, open_browser: bool = True, extra_projects: list[str] = (),
-          printer: Callable[[str], None] = _print_flush) -> None:
+          printer: Callable[[str], None] = _print_flush, new_token: bool = False) -> None:
     dashboard = Dashboard()
     for p in extra_projects:
         dashboard.registry.add(p)
     # UI 의 '다시 시작'으로 뜬 경우: 같은 토큰·같은 포트 (자식 프로세스에 토큰이 새지 않게 환경에서 뺀다)
-    token = os.environ.pop(RESTART_TOKEN_ENV, None)
+    token = os.environ.pop(RESTART_TOKEN_ENV, None) or saved_token(new_token)
     exact = os.environ.pop(RESTART_PORT_ENV, None) == "1"
     server = None
     if exact:

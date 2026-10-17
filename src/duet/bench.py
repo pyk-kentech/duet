@@ -223,6 +223,7 @@ def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC
     plan = [(t, w, n) for t in tasks for w in workflows for n in range(1, repeat + 1)]
     result_dir = Path(out_root).expanduser() / (now or dt.datetime.now()).strftime("%Y%m%d-%H%M%S")
     result_dir.mkdir(parents=True, exist_ok=False)
+    remember_result_dir(result_dir)
     meta = {"suite": suite, "workflows": list(workflows), "tasks": [t.name for t in tasks], "repeat": repeat,
             "max_review": max_review, "mock": mock, "wait_on_limit": wait_on_limit,
             "started": dt.datetime.now().isoformat(timespec="seconds")}
@@ -244,7 +245,7 @@ def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC
         started = time.monotonic()
         outcome, error = None, None
         try:
-            outcome = orch.run(RunOptions(task=task.prompt, workdir=wd, mock=mock, overrides=overrides))
+            outcome = orch.run(RunOptions(task=task.prompt, workdir=wd, mock=mock, overrides=overrides, register=False))
         except OrchestratorError as e:
             error = str(e)
         seconds = time.monotonic() - started
@@ -298,6 +299,61 @@ def _mean(xs: list[float]) -> float:
     return sum(xs) / len(xs) if xs else 0.0
 
 
+INDEX_FILE = "index.json"
+INDEX_MAX = 200
+
+
+def remember_result_dir(result_dir: Path) -> None:
+    """UI 벤치마크 화면이 --out 으로 다른 곳에 둔 결과도 찾게 $DUET_HOME/bench/index.json 에 적는다 (DESIGN.md 28.3)."""
+    from duet.registry import duet_home
+
+    path = duet_home() / "bench" / INDEX_FILE
+    try:
+        items = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
+        items = [str(result_dir)] + [x for x in items if isinstance(x, str) and x != str(result_dir)]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(items[:INDEX_MAX], ensure_ascii=False, indent=1), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
+
+
+def known_result_dirs() -> list[Path]:
+    from duet.registry import duet_home
+
+    base = duet_home() / "bench"
+    found: set[Path] = set()
+    if base.is_dir():
+        found.update(p for p in base.iterdir() if (p / RESULTS_JSON).is_file())
+        try:
+            for x in json.loads((base / INDEX_FILE).read_text(encoding="utf-8")):
+                if isinstance(x, str) and (Path(x) / RESULTS_JSON).is_file():
+                    found.add(Path(x))
+        except (OSError, ValueError):
+            pass
+    return sorted(found, key=lambda p: p.name, reverse=True)
+
+
+def workflow_stats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """워크플로별 요약 수치 (요약표·UI 벤치마크 화면이 함께 쓴다, DESIGN.md 20.4·28.3)."""
+    out = []
+    for w in dict.fromkeys(r["workflow"] for r in rows):
+        rs = [r for r in rows if r["workflow"] == w]
+        graded = [r for r in rs if r.get("hidden") and r["hidden"].get("total")]
+        out.append({
+            "workflow": w, "runs": len(rs), "approved": sum(1 for r in rs if r["approved"]),
+            "arbiter": sum(1 for r in rs if r.get("arbiter") == "arbiter"),
+            "hidden_rate": _mean([r["hidden"]["passed"] / r["hidden"]["total"] for r in graded]) * 100,
+            "graded": len(graded), "all_passed": sum(1 for r in graded if r["hidden"]["all_passed"]),
+            "missed": sum(1 for r in rs if r["approved"] and r.get("hidden") and not r["hidden"]["all_passed"]),
+            "rounds": _mean([r.get("rounds") or 0 for r in rs]),
+            "seconds": _mean([(r.get("seconds") or 0) - (r.get("limit_wait_sec") or 0) for r in rs]),
+            "calls": _mean([r.get("calls") or 0 for r in rs]),
+            "input": {a: _mean([((r.get("usage") or {}).get(a) or {}).get("input", 0) for r in rs]) for a in ("claude", "codex")},
+            "output": _mean([sum(u.get("output", 0) for u in (r.get("usage") or {}).values()) for r in rs]),
+        })
+    return out
+
+
 def summarize(data: dict[str, Any]) -> str:
     meta, rows = data.get("meta", {}), data.get("rows", [])
     lines = [f"# 벤치마크 결과 ({meta.get('started', '')})", "",
@@ -307,20 +363,13 @@ def summarize(data: dict[str, Any]) -> str:
     lines += ["## 워크플로별", "",
               "| 워크플로 | 실행 | 승인 | 중재 승인 | 숨은 테스트 통과율 | 전부 통과 | 승인했는데 실패 | 평균 라운드 | 평균 시간 | 평균 호출 | 평균 입력 토큰 (Claude / Codex) | 평균 출력 토큰 |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|"]
-    for w in workflows:
-        rs = [r for r in rows if r["workflow"] == w]
-        graded = [r for r in rs if r.get("hidden") and r["hidden"].get("total")]
-        rate = _mean([r["hidden"]["passed"] / r["hidden"]["total"] for r in graded]) * 100
-        all_pass = sum(1 for r in graded if r["hidden"]["all_passed"])
-        missed = sum(1 for r in rs if r["approved"] and r.get("hidden") and not r["hidden"]["all_passed"])
-        tok = {a: _mean([((r.get("usage") or {}).get(a) or {}).get("input", 0) for r in rs]) for a in ("claude", "codex")}
-        out_tok = _mean([sum(u.get("output", 0) for u in (r.get("usage") or {}).values()) for r in rs])
+    del workflows
+    for s in workflow_stats(rows):
         lines.append(
-            f"| {w} | {len(rs)} | {sum(r['approved'] for r in rs)}/{len(rs)} | "
-            f"{sum(1 for r in rs if r.get('arbiter') == 'arbiter')} | "
-            f"{rate:.0f}% ({len(graded)}개 채점) | {all_pass}/{len(graded)} | {missed} | "
-            f"{_mean([r.get('rounds') or 0 for r in rs]):.1f} | {_fmt_sec(_mean([(r.get('seconds') or 0) - (r.get('limit_wait_sec') or 0) for r in rs]))} | "
-            f"{_mean([r.get('calls') or 0 for r in rs]):.1f} | {tok['claude']:,.0f} / {tok['codex']:,.0f} | {out_tok:,.0f} |")
+            f"| {s['workflow']} | {s['runs']} | {s['approved']}/{s['runs']} | {s['arbiter']} | "
+            f"{s['hidden_rate']:.0f}% ({s['graded']}개 채점) | {s['all_passed']}/{s['graded']} | {s['missed']} | "
+            f"{s['rounds']:.1f} | {_fmt_sec(s['seconds'])} | "
+            f"{s['calls']:.1f} | {s['input']['claude']:,.0f} / {s['input']['codex']:,.0f} | {s['output']:,.0f} |")
     lines += ["", "## 실행별", "", "| 과제 | 워크플로 | # | 결과 | 라운드 | 숨은 테스트 | 자체 테스트 | 시간 | 호출 | 입력 토큰 |",
               "|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:

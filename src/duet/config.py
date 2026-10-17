@@ -99,7 +99,7 @@ CLAUDE_SANDBOX_SETTINGS = json.dumps(
 def _default_claude() -> AgentConfig:
     return AgentConfig(
         bin="claude",
-        base_args=["-p", "--output-format", "json"],
+        base_args=["-p", "--output-format", "stream-json", "--verbose"],   # 사용률 이벤트를 받는다 (DESIGN.md 28.6)
         read_args=["--allowedTools", "Read,Glob,Grep"],
         write_args=[
             "--permission-mode", "acceptEdits",

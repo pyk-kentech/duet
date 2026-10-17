@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help='구현 후 duet 가 돌릴 테스트 명령 (기본: auto = duet.toml → 자동 감지, "none" 이면 끔)')
     p_run.add_argument("--block-severity", choices=["P1", "P2", "P3"],
                        help="이 심각도 이상의 지적이 남아 있으면 반려 (기본: P2 → P3 만 남으면 승인)")
+    p_run.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                       help="설정 덮어쓰기 (예: --set arbiter=false --set limit_wait_max_min=120). `duet ui` 의 고급 설정과 같은 키")
     p_run.add_argument("--wait-on-limit", action="store_true",
                        help="구독 한도에 걸리면 재개 시각까지 기다렸다가 이어서 실행 (최대 limit_wait_max_min 분)")
     p_run.add_argument("--claude-sandbox", action="store_true",
@@ -114,6 +116,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--port", type=int, default=8787, help="포트 (기본: 8787, 사용 중이면 다음 번호)")
     p_ui.add_argument("--workdir", action="append", default=[], metavar="PATH",
                       help="목록에 추가할 작업 폴더 (여러 번 지정 가능)")
+    p_ui.add_argument("--new-token", action="store_true",
+                      help="접속 토큰을 새로 만든다 (예전 주소·즐겨찾기는 더 이상 열리지 않음)")
     p_ui.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않음")
     p_ui.set_defaults(func=cmd_ui)
 
@@ -151,6 +155,26 @@ def read_task(task: str) -> str:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
+    from duet.options import OptionError, parse_assignments
+
+    try:
+        assigned = parse_assignments(args.set)
+    except OptionError as e:
+        raise OrchestratorError(f"설정 오류: {e}") from e
+    explicit = {
+        "workflow": args.workflow,
+        "implementer": args.implementer, "reviewer": args.reviewer, "synth": args.synth,
+        "debate_rounds": args.debate_rounds, "max_review": args.max_review,
+        "claude.model": args.claude_model, "claude.effort": args.claude_effort,
+        "codex.model": args.codex_model, "codex.effort": args.codex_effort,
+        "claude.step_effort": _step_effort(args.claude_step_effort),
+        "codex.step_effort": _step_effort(args.codex_step_effort),
+        "test_command": args.test_command, "block_severity": args.block_severity,
+        "stall_rounds": args.stall_rounds,
+        "arbiter": False if args.no_arbiter else None,
+        "claude_sandbox": True if args.claude_sandbox else None,
+        "wait_on_limit": True if args.wait_on_limit else None,
+    }
     opts = RunOptions(
         task=read_task(args.task),
         workdir=Path(args.workdir),
@@ -158,20 +182,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         skip_design=args.skip_design,
         mock=args.mock,
         force=args.force,
-        overrides={
-            "workflow": args.workflow,
-            "implementer": args.implementer, "reviewer": args.reviewer, "synth": args.synth,
-            "debate_rounds": args.debate_rounds, "max_review": args.max_review,
-            "claude.model": args.claude_model, "claude.effort": args.claude_effort,
-            "codex.model": args.codex_model, "codex.effort": args.codex_effort,
-            "claude.step_effort": _step_effort(args.claude_step_effort),
-            "codex.step_effort": _step_effort(args.codex_step_effort),
-            "test_command": args.test_command, "block_severity": args.block_severity,
-            "stall_rounds": args.stall_rounds,
-            "arbiter": False if args.no_arbiter else None,
-            "claude_sandbox": True if args.claude_sandbox else None,
-            "wait_on_limit": True if args.wait_on_limit else None,
-        },
+        # --set 은 고급 설정 (DESIGN.md 28.4). 같은 설정의 전용 플래그를 주면 그쪽이 이긴다
+        overrides={**assigned, **{k: v for k, v in explicit.items() if v is not None}},
     )
     return Orchestrator().run(opts).exit_code
 
@@ -194,7 +206,8 @@ def cmd_ui(args: argparse.Namespace) -> int:
     from duet.ui.server import serve
 
     try:
-        serve(args.host, args.port, open_browser=not args.no_browser, extra_projects=args.workdir)
+        serve(args.host, args.port, open_browser=not args.no_browser, extra_projects=args.workdir,
+              new_token=args.new_token)
     except OSError as e:
         raise OrchestratorError(str(e)) from e
     return EXIT_OK

@@ -106,8 +106,10 @@ def test_models_saved_in_run_and_reused_on_resume(isolated_duet_home, tmp_path: 
 # ====================================================================== 사용량
 def test_claude_usage_from_json(fake_cfg, tmp_path: Path):
     r = ClaudeCodeAdapter(fake_cfg).ask(AgentRequest("hi", tmp_path, Mode.READ, 20, "propose"))
+    limits = r.usage.pop("rate_limits")          # 스트림의 사용률 이벤트 (DESIGN.md 28.6)
     assert r.usage == {"input_tokens": 1110, "cached_input_tokens": 1000, "output_tokens": 50,
                        "reasoning_tokens": 7, "cost_usd": 0.0123, "model": "claude-opus-5-5"}
+    assert limits["five_hour"] == {"used_percent": 7.0, "resets_at": 1792224000} and limits["status"] == "allowed"
     assert claude_call_usage({"no": "usage"}) is None
 
 

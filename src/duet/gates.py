@@ -14,7 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
-from duet.review_json import SEVERITIES
+from duet.review_json import SEVERITIES, clean_title
 
 BLOCKING = ("P1", "P2")
 _ID_RE = re.compile(r"^I(\d+)$")
@@ -132,12 +132,12 @@ def update_ledger(state, role: str, round_: int, findings: list[dict]) -> None:
         item = by_id.get(fid)
         basis = {k: str(f[k]) for k in ("basis", "requirement") if f.get(k)}   # 요구 근거 (DESIGN.md 25.2)
         if item is not None and item.get("role") == role:
-            item.update(severity=f["severity"], title=str(f.get("title") or item["title"]),
+            item.update(severity=f["severity"], title=clean_title(f.get("title")) or item["title"],
                         file=str(f.get("file") or item.get("file") or ""), status="open",
                         note=f.get("note") or "", **basis)
         else:
             state.issues.append({"id": fid, "role": role, "round": round_, "severity": f["severity"],
-                                 "title": str(f.get("title") or ""), "file": str(f.get("file") or ""),
+                                 "title": clean_title(f.get("title")), "file": str(f.get("file") or ""),
                                  "status": "open", "closed_round": None, "note": f.get("note") or "", **basis})
     for x in state.issues:
         if x.get("role") == role and x.get("status") == "open" and x["id"] not in seen:
