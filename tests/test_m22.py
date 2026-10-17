@@ -259,3 +259,27 @@ def test_localhost_redirects_to_cookie_host(server):
     conn.close()
     assert req(server, "/", headers={"Host": f"127.0.0.1:{server.port}"})[0] == 403      # 127.0.0.1 은 그대로 안내
 
+
+
+# ====================================================================== 디자인 v2: 글꼴·로고
+def test_bundled_font_served_with_cache(server):
+    s, h, raw = req(server, "/static/fonts/PretendardVariable.woff2")
+    assert s == 200 and h["Content-Type"] == "font/woff2" and raw[:4] == b"wOF2"
+    assert "max-age" in h["Cache-Control"]
+    assert req(server, "/static/fonts/../app.js")[0] == 404          # 정해진 파일만
+
+
+def test_user_logo_served_only_when_present(server, isolated_duet_home):
+    assert req(server, "/logos/claude.svg")[0] == 404
+    assert api(server, "/api/server")[1]["logos"] == {"claude": False, "codex": False}
+    d = isolated_duet_home / "logos"
+    d.mkdir()
+    (d / "claude.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+    (d / "evil.svg").write_text("<svg/>", encoding="utf-8")
+    s, h, raw = req(server, "/logos/claude.svg")
+    assert s == 200 and h["Content-Type"] == "image/svg+xml" and raw.startswith(b"<svg")
+    assert "sandbox" in h["Content-Security-Policy"] and "script" not in h["Content-Security-Policy"]
+    assert req(server, "/logos/evil.svg")[0] == 404                  # 정해진 이름만
+    assert api(server, "/api/server")[1]["logos"] == {"claude": True, "codex": False}
+    (d / "codex.svg").write_bytes(b"<svg>" + b" " * 400_000 + b"</svg>")
+    assert req(server, "/logos/codex.svg")[0] == 404                  # 너무 큰 파일은 무시

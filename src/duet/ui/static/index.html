@@ -91,32 +91,30 @@
           <div class="agent-card ac-claude">
             <div class="ac-head"><span class="ac-logo" data-logo="claude"></span><b>Claude</b><span class="ac-sub" id="ac-sub-claude"></span></div>
             <div class="ac-fields">
-              <label class="field">
+              <div class="field">
                 <span class="field-label" data-help="claude_model">모델</span>
-                <input name="claude_model" type="text" list="claude-models" placeholder="기본값" autocomplete="off" spellcheck="false">
-              </label>
-              <label class="field">
+                <div class="model-picker" data-agent="claude"><input type="hidden" name="claude_model"></div>
+              </div>
+              <div class="field">
                 <span class="field-label" data-help="effort">추론 강도</span>
                 <select name="claude_effort"></select>
-              </label>
+              </div>
             </div>
           </div>
           <div class="agent-card ac-codex">
             <div class="ac-head"><span class="ac-logo" data-logo="codex"></span><b>Codex</b><span class="ac-sub" id="ac-sub-codex"></span></div>
             <div class="ac-fields">
-              <label class="field">
+              <div class="field">
                 <span class="field-label" data-help="codex_model">모델</span>
-                <input name="codex_model" type="text" list="codex-models" placeholder="기본값" autocomplete="off" spellcheck="false">
-              </label>
-              <label class="field">
+                <div class="model-picker" data-agent="codex"><input type="hidden" name="codex_model"></div>
+              </div>
+              <div class="field">
                 <span class="field-label" data-help="effort">추론 강도</span>
                 <select name="codex_effort"></select>
-              </label>
+              </div>
             </div>
           </div>
         </div>
-        <datalist id="claude-models"></datalist>
-        <datalist id="codex-models"></datalist>
         <div class="wf-diagram" id="workflow-diagram" aria-live="polite"></div>
         <div class="field-row">
           <label class="field">

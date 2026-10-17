@@ -8,6 +8,23 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const LOCAL = 'local';
 const LIVE = '__live__';   // 타임라인의 '진행 중' 항목
 
+// 색 테마: 배경·글자색만 바꾼다. 이 브라우저에만 기억한다(서버·다른 사람과 공유하지 않음)
+const THEMES = [
+  { id: 'system', label: '시스템', note: '운영체제 따라', sw: ['#f6f7f9', '#ffffff', '#101828', '#0e1013'] },
+  { id: 'light', label: '화이트', note: '밝고 깨끗하게', sw: ['#f6f7f9', '#ffffff', '#101828'] },
+  { id: 'paper', label: '페이퍼', note: '따뜻한 종이', sw: ['#f6f3ec', '#fffdf8', '#24211b'] },
+  { id: 'slate', label: '슬레이트', note: '차분한 회청', sw: ['#e8ecf1', '#f8fafc', '#0e1a2b'] },
+  { id: 'dark', label: '다크', note: '중성 어둠', sw: ['#0e1013', '#15181d', '#e8ebf0'] },
+  { id: 'midnight', label: '미드나잇', note: '짙은 남색', sw: ['#0a0f1e', '#10172a', '#e6eaf6'] },
+];
+function currentTheme() { try { return localStorage.getItem('duet.theme') || 'system'; } catch { return 'system'; } }
+function applyTheme(id) {
+  if (id && id !== 'system') document.documentElement.dataset.theme = id;
+  else delete document.documentElement.dataset.theme;
+  try { localStorage.setItem('duet.theme', id || 'system'); } catch { /* 저장 못 해도 지금 화면은 바뀐다 */ }
+}
+applyTheme(currentTheme());
+
 // =================================================================== DOM helpers
 function h(tag, attrs, ...children) {
   const el = document.createElement(tag);
@@ -31,25 +48,16 @@ function svg(tag, attrs, ...children) {
   for (const c of children.flat(Infinity)) if (c) el.append(c);
   return el;
 }
-// Claude·Codex 표시. 각 회사의 공식 로고 파일을 옮긴 것이 아니라, 알아볼 수 있게 단순화해 그린 아이콘이다.
+// Claude·Codex 표시. duet 는 회사 로고를 그리지 않는다: 사용자가 $DUET_HOME/logos/claude.svg·codex.svg 를 넣으면
+// 그것을, 없으면 이니셜 배지(C·X)를 쓴다. 크기는 12·16·18·22 (CSP 때문에 style 속성 대신 클래스).
 function agentLogo(agent, size = 16) {
   const base = String(agent || '').replace(/^mock-/, '');
-  const box = { viewBox: '0 0 24 24', width: size, height: size, 'aria-hidden': 'true' };
-  if (base === 'claude') {        // 주황색 햇살: 길이가 번갈아 다른 12갈래
-    const rays = [];
-    for (let i = 0; i < 12; i++) {
-      const a = i * Math.PI / 6 + 0.12, r1 = 2.4, r2 = i % 2 ? 7.4 : 10;
-      rays.push(svg('line', { x1: (12 + r1 * Math.cos(a)).toFixed(2), y1: (12 + r1 * Math.sin(a)).toFixed(2),
-        x2: (12 + r2 * Math.cos(a)).toFixed(2), y2: (12 + r2 * Math.sin(a)).toFixed(2) }));
-    }
-    return svg('svg', { ...box, class: 'logo logo-claude' }, svg('g', { stroke: 'currentColor', 'stroke-width': 2.5, 'stroke-linecap': 'round' }, rays));
-  }
-  if (base === 'codex') {         // 여섯 겹 고리
-    const petals = [];
-    for (let i = 0; i < 6; i++) petals.push(svg('ellipse', { cx: 12, cy: 7.7, rx: 3.3, ry: 5.3, transform: `rotate(${i * 60} 12 12)` }));
-    return svg('svg', { ...box, class: 'logo logo-codex' }, svg('g', { fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7 }, petals));
-  }
-  return svg('svg', { ...box, class: 'logo' }, svg('circle', { cx: 12, cy: 12, r: 6, fill: 'currentColor', opacity: .4 }));
+  const sz = [12, 16, 18, 22].includes(size) ? size : 16;
+  const logos = (typeof app !== 'undefined' && app.server && app.server.logos) || {};
+  if (logos[base]) return h('img', { src: `/logos/${base}.svg`, alt: '', class: `logo logo-img s${sz}` });
+  const kind = base === 'claude' || base === 'codex' ? base : 'x';
+  return h('span', { class: `logo logo-badge logo-${kind} s${sz}`, 'aria-hidden': 'true' },
+    kind === 'claude' ? 'C' : kind === 'codex' ? 'X' : (base[0] || '?').toUpperCase());
 }
 function append(el, children) {
   for (const c of [children].flat(Infinity)) {
@@ -203,6 +211,91 @@ function askConfirm(message, { ok = '확인', danger = false } = {}) {
     box.showModal();
     box.querySelector('[data-ok]').focus();
   });
+}
+
+// 카드의 긴 설명 문구(p.desc)는 바로 위 제목(h2·h3) 옆 ⓘ 툴팁으로 접는다. 화면이 다시 그려질 때마다 자동으로.
+// 제목에 이미 ? 도움말이 있으면 그 툴팁에 이어 붙여 아이콘을 하나만 둔다.
+function foldDescriptions(root) {
+  for (const p of root.querySelectorAll('.card > p.desc')) {
+    let head = null;
+    for (let sib = p.previousElementSibling; sib && !head; sib = sib.previousElementSibling) {
+      head = /^H[23]$/.test(sib.tagName) ? sib : sib.querySelector(':scope > h2, :scope > h3');   // 제목 줄(.row) 안의 h2 도
+    }
+    const text = p.textContent.trim();
+    if (!head || !text) continue;
+    p.remove();
+    const q = head.querySelector('.help');
+    if (q) q.setAttribute('data-tip', `${q.getAttribute('data-tip') || ''}\n\n${text}`.trim());
+    else head.append(h('span', { class: 'help note', 'data-tip': text, tabindex: '0', role: 'button', 'aria-label': `설명: ${text}` }, 'i'));
+  }
+}
+
+// <select> 를 분절 버튼으로 보이게 한다. 값·이벤트는 원래 select 에 그대로 있어 양식 코드는 바뀌지 않는다.
+function segmentize(sel, labels = {}) {
+  if (sel._seg) return sel._seg;
+  const seg = h('div', { class: 'segmented', role: 'radiogroup' });
+  const sync = () => seg.replaceChildren(...[...sel.options].map(o => h('button', {
+    type: 'button', role: 'radio', 'aria-checked': o.value === sel.value ? 'true' : 'false',
+    class: o.value === sel.value ? 'on' : null, disabled: o.disabled || null,
+    onclick: () => { sel.value = o.value; sel.dispatchEvent(new Event('change', { bubbles: true })); sync(); },
+  }, labels[o.value] ?? o.textContent)));
+  sel.classList.add('seg-native');
+  sel.after(seg);
+  sync();
+  new MutationObserver(sync).observe(sel, { childList: true });
+  sel.addEventListener('change', sync);
+  sel._seg = seg;
+  sel._sync = sync;
+  return seg;
+}
+const EFFORT_LABELS = { '': '단계별', minimal: 'min', medium: 'med' };
+
+// 모델 고르기: 브라우저 기본 자동완성(datalist) 대신 직접 만든 목록. 값은 숨은 input 에 있다.
+function buildModelPicker(box) {
+  if (box._built) return;
+  box._built = true;
+  const agent = box.dataset.agent;
+  const input = box.querySelector('input');
+  const btn = h('button', { type: 'button', class: 'mp-btn', 'aria-haspopup': 'listbox', 'aria-expanded': 'false' });
+  const menu = h('div', { class: 'mp-menu', role: 'listbox', hidden: true });
+  box.append(btn, menu);
+  const paint = () => btn.replaceChildren(agentLogo(agent, 16),
+    h('span', { class: `mp-label${input.value ? '' : ' def'}` }, input.value || '기본 모델 (CLI 기본값)'), h('span', { class: 'mp-caret' }, '▾'));
+  const setVal = v => {
+    input.value = v;
+    paint();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
+  const open = () => {
+    const sugg = ((((app.settings || {}).suggestions || {})[agent]) || {}).models || [];
+    const known = sugg.some(m => m.id === input.value);
+    const custom = h('input', { type: 'text', class: 'mp-custom', placeholder: '목록에 없으면 모델 이름을 직접 입력', spellcheck: 'false',
+      value: input.value && !known ? input.value : '' });
+    custom.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') { ev.preventDefault(); setVal(custom.value.trim()); close(); }
+      if (ev.key === 'Escape') { ev.preventDefault(); close(); btn.focus(); }
+    });
+    const items = [{ id: '', label: '기본 모델', note: 'CLI 가 정한 기본값' }, ...sugg].map(m => h('button', {
+      type: 'button', role: 'option', class: `mp-item${m.id === input.value ? ' on' : ''}`,
+      onclick: () => { setVal(m.id); close(); btn.focus(); },
+    }, h('span', null, m.label || m.id), m.note ? h('small', null, m.note) : (m.label && m.label !== m.id ? h('small', null, m.id) : null)));
+    menu.replaceChildren(...items, h('div', { class: 'mp-sep' }), custom, h('div', { class: 'mp-hint' }, 'Enter 로 적용'));
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+  };
+  btn.addEventListener('click', () => (menu.hidden ? open() : close()));
+  document.addEventListener('click', ev => { if (!box.contains(ev.target)) close(); });
+  box._set = v => { input.value = v || ''; paint(); };
+  box._repaint = paint;
+  paint();
+}
+function modelPickerEl(agent, value) {
+  const box = h('div', { class: 'model-picker', 'data-agent': agent }, h('input', { type: 'hidden', value: value || '' }));
+  buildModelPicker(box);
+  box._input = box.querySelector('input');
+  return box;
 }
 
 function toast(msg, bad = false) {
@@ -378,6 +471,7 @@ function hideTip() {
 }
 document.addEventListener('mouseover', ev => {
   const t = ev.target.closest && ev.target.closest('[data-tip]');
+  if (tipTarget && !tipTarget.isConnected) hideTip();   // 다시 그려져 사라진 요소의 툴팁
   if (t === tipTarget) return;
   clearTimeout(tipTimer);
   if (!t) { if (tipTarget && !tipPinned) hideTip(); return; }
@@ -391,7 +485,7 @@ document.addEventListener('keydown', ev => { if (ev.key === 'Escape') hideTip();
 // "?" 는 눌러도 뜬다(휴대폰). label 안에 있어도 체크박스가 바뀌지 않게 막는다.
 document.addEventListener('click', ev => {
   const t = ev.target.closest && ev.target.closest('.help');
-  if (!t) { if (tipPinned) hideTip(); return; }
+  if (!t) { hideTip(); return; }   // 다른 곳을 누르면(버튼으로 화면이 바뀌어도) 남은 툴팁을 닫는다
   // 누르면 항상 띄우고 고정한다(휴대폰은 마우스 올림이 없음). 다른 곳을 누르면 닫힌다.
   ev.preventDefault();
   ev.stopPropagation();
@@ -1214,6 +1308,7 @@ class RunView {
       items.push(h('li', { class: failed ? 'failed' : null }, h('button', {
         type: 'button', class: this.selected === e.name ? 'active' : null,
         onclick: () => { this.selected = e.name; this.autoLive = false; this.renderTimeline(); this.renderViewer(); },
+        ondblclick: () => this.openModal(e.name),
       },
         h('span', { class: 'seq' }, String(e.seq).padStart(2, '0')),
         h('span', { class: 'what' }, agentTag(m.agent, m.role), withTip(h('span', { class: 'ellipsis' }, STEP[m.step] || m.step), `step.${m.step}`)),
@@ -1284,6 +1379,7 @@ class RunView {
     const info = [m.model ? m.model + (m.effort ? `·${m.effort}` : '') : '', m.mode === 'write' ? '쓰기' : m.mode === 'read' ? '읽기 전용' : '',
       m.duration_sec ? fmtDur(m.duration_sec) : '', m.tokens_out ? `출력 ${fmtTok(m.tokens_out)} 토큰` : '',
       m.timestamp ? m.timestamp.replace('T', ' ') : ''].filter(Boolean).join(' · ');
+    const rel = this.relatedEntry(name);
     this.viewerEl.replaceChildren(
       h('div', { class: 'viewer-head' },
         agentTag(m.agent, m.role), h('b', null, STEP[m.step] || m.step || ''),
@@ -1291,8 +1387,68 @@ class RunView {
         listed ? verdictTag(listed.verdict) : null,
         h('span', { class: 'spacer' }),
         h('span', { class: 'muted small' }, info),
-        h('span', { class: 'file' }, name)),
+        rel ? h('button', { type: 'button', class: 'btn btn-sm btn-icon', onclick: () => this.openModal(name, true) }, rel.label) : null,
+        h('button', { type: 'button', class: 'btn btn-sm btn-icon', title: '가운데 창으로 크게 봅니다 (목록에서 두 번 눌러도 됨)',
+          onclick: () => this.openModal(name) }, '⤢ 크게 보기')),
       h('div', { class: 'viewer-body md' }, markdown(entry.body)));
+  }
+
+  // 이 기록과 짝이 되는 기록: 비판 → 비판한 상대 안, 수정 → 반영한 리뷰, 리뷰 → 리뷰한 구현
+  relatedEntry(name) {
+    const list = this.data.entries;
+    const i = list.findIndex(x => x.name === name);
+    if (i < 0) return null;
+    const cur = list[i].meta;
+    const before = list.slice(0, i).reverse();
+    const who = x => x.meta.role || x.meta.agent;
+    let target = null, label = '';
+    if (cur.step === 'critique') {
+      const r = Number(cur.round || 1);
+      target = before.find(x => who(x) !== who(list[i]) && (r > 1 ? x.meta.step === 'critique' && Number(x.meta.round) === r - 1 : x.meta.step === 'propose'));
+      if (target) label = `비판 대상: ${who(target)} ${r > 1 ? '개정안' : '설계안'}`;
+    } else if (cur.step === 'fix') {
+      target = before.find(x => x.meta.step === 'review');
+      if (target) label = `반영한 리뷰 (${who(target)})`;
+    } else if (cur.step === 'review') {
+      target = before.find(x => ['implement', 'fix', 'integrate'].includes(x.meta.step));
+      if (target) label = `리뷰한 구현 (${who(target)})`;
+    }
+    return target ? { name: target.name, label } : null;
+  }
+  async loadEntry(name) {
+    let entry = this.entryCache.get(name);
+    if (!entry) {
+      entry = await api('/api/entry', { query: this.q({ file: name }), machine: this.m });
+      this.entryCache.set(name, entry);
+    }
+    return entry;
+  }
+  async openModal(name, showRelated = false) {
+    const rel = this.relatedEntry(name);
+    const tabs = [{ name, label: STEP[(this.data.entries.find(x => x.name === name) || { meta: {} }).meta.step] || '기록' }];
+    if (rel) tabs.push({ name: rel.name, label: rel.label });
+    let active = showRelated && rel ? 1 : 0;
+    const body = h('div', { class: 'viewer-body md' });
+    const head = h('div', { class: 'viewer-head' });
+    const tabBar = tabs.length > 1 ? h('div', { class: 'entry-tabs' }) : null;
+    const draw = async () => {
+      const t = tabs[active];
+      if (tabBar) tabBar.replaceChildren(...tabs.map((x, k) => h('button', { type: 'button', class: k === active ? 'on' : null,
+        onclick: () => { active = k; draw(); } }, x.label)));
+      body.replaceChildren(h('div', { class: 'empty-state small' }, '불러오는 중…'));
+      let entry;
+      try { entry = await this.loadEntry(t.name); } catch (e) { body.replaceChildren(errorBox(e)); return; }
+      const m = entry.meta;
+      head.replaceChildren(agentTag(m.agent, m.role), h('b', null, STEP[m.step] || m.step || ''),
+        m.round && m.round !== '0' ? h('span', { class: 'muted' }, `${m.round}회차`) : null,
+        h('span', { class: 'spacer' }), h('span', { class: 'file' }, t.name),
+        h('button', { type: 'button', class: 'btn btn-sm', onclick: () => entryDialog.close() }, '닫기'));
+      body.replaceChildren(markdown(entry.body));
+      body.scrollTop = 0;
+    };
+    entryDialog.replaceChildren(head, tabBar, body);
+    entryDialog.showModal();
+    await draw();
   }
 
   // ---------------------------------------------------------------- console
@@ -1698,10 +1854,6 @@ function effortSelect(name, agent, value, sugg, model) {
   sel.value = value || '';
   return sel;
 }
-function modelDatalists(sugg) {
-  $('#claude-models').replaceChildren(...sugg.claude.models.map(m => h('option', { value: m.id }, m.label)));
-  $('#codex-models').replaceChildren(...sugg.codex.models.map(m => h('option', { value: m.id }, m.label)));
-}
 
 // =================================================================== 설정 항목 정의 (DESIGN.md 28.4)
 function fmtOptValue(o, v) {
@@ -1711,7 +1863,7 @@ function fmtOptValue(o, v) {
 }
 function optionInput(o, value) {
   // 비워 두면(기본값) 저장된 값·duet.toml·내장 기본값을 따른다
-  const def = `기본값 (${fmtOptValue(o, o.effective)})`;
+  const def = `기본 (${fmtOptValue(o, o.effective)})`;
   let el;
   if (o.kind === 'bool') {
     el = h('select', null, h('option', { value: '' }, def), h('option', { value: 'true' }, '켬'), h('option', { value: 'false' }, '끔'));
@@ -1727,12 +1879,26 @@ function optionInput(o, value) {
   return el;
 }
 function optionFields(options, values, filter) {
+  // 묶음별 접히는 목록. 줄마다 이름·설명은 왼쪽, 고르는 칸은 오른쪽. 기본값에서 바꾼 줄은 ● 표시
   const groups = {};
   for (const o of options.filter(filter)) (groups[o.group_label] = groups[o.group_label] || []).push(o);
-  return Object.entries(groups).map(([label, list]) => h('div', { class: 'opt-group' },
-    h('h3', null, label),
-    h('div', { class: 'form-grid' }, list.map(o => h('label', { class: 'field', 'data-tip': o.help },
-      h('span', { class: 'field-label' }, o.label), optionInput(o, values[o.key]))))));
+  return Object.entries(groups).map(([label, list]) => {
+    const set = list.filter(o => values[o.key] !== undefined && values[o.key] !== null && values[o.key] !== '').length;
+    const rows = list.map(o => {
+      const ctl = optionInput(o, values[o.key]);
+      const wrap = h('div', { class: 'opt-ctl' }, ctl);
+      if (o.kind === 'bool') segmentize(ctl, { '': `기본·${fmtOptValue(o, o.effective)}` });
+      const row = h('div', { class: `opt-row${ctl.value ? ' changed' : ''}` },
+        h('div', { class: 'opt-text' }, h('div', { class: 'opt-label' }, o.label), h('div', { class: 'opt-help' }, o.help)), wrap);
+      const mark = () => row.classList.toggle('changed', !!String(ctl.value).trim());
+      ctl.addEventListener('change', mark);
+      ctl.addEventListener('input', mark);
+      return row;
+    });
+    return h('details', { class: 'opt-section', open: true },
+      h('summary', null, label, set ? h('span', { class: 'opt-count' }, `${set}개 바꿈`) : null),
+      h('div', { class: 'opt-list' }, rows));
+  });
 }
 function collectOptions(root, keepEmpty) {
   const out = {};
@@ -1750,7 +1916,6 @@ class SettingsView {
   async load() {
     const v = await loadSettings(true);
     await checkServer();
-    modelDatalists(v.suggestions);
     this.render(v);
   }
   render(v) {
@@ -1792,14 +1957,18 @@ class SettingsView {
       require_tests_pass: h('input', { type: 'checkbox', checked: (d.require_tests_pass ?? eff.require_tests_pass) ? true : null }),
       review_diff: h('input', { type: 'checkbox', checked: ((d.review_diff ?? eff.review_diff) || 'incremental') === 'incremental' ? true : null }),
       repro_tests: h('input', { type: 'checkbox', checked: (d.repro_tests ?? eff.repro_tests ?? true) ? true : null }),
-      claude_model: h('input', { type: 'text', list: 'claude-models', value: (d.claude || {}).model || '', placeholder: 'CLI 기본값', spellcheck: 'false' }),
-      codex_model: h('input', { type: 'text', list: 'codex-models', value: (d.codex || {}).model || '', placeholder: 'CLI 기본값', spellcheck: 'false' }),
     };
+    const claudeBox = modelPickerEl('claude', (d.claude || {}).model || '');
+    const codexBox = modelPickerEl('codex', (d.codex || {}).model || '');
+    f.claude_model = claudeBox._input;
+    f.codex_model = codexBox._input;
     f.claude_effort = effortSelect('claude_effort', 'claude', (d.claude || {}).effort, sugg);
     f.codex_effort = effortSelect('codex_effort', 'codex', (d.codex || {}).effort, sugg, (d.codex || {}).model);
     f.codex_model.addEventListener('change', () => {
-      const ne = effortSelect('codex_effort', 'codex', f.codex_effort.value, sugg, f.codex_model.value);
-      f.codex_effort.replaceWith(ne); f.codex_effort = ne;
+      const cur = f.codex_effort.value;
+      const ne = effortSelect('codex_effort', 'codex', cur, sugg, f.codex_model.value);
+      f.codex_effort.replaceChildren(...ne.childNodes);   // 분절 버튼이 바뀐 목록을 따라간다
+      f.codex_effort.value = [...f.codex_effort.options].some(o => o.value === cur) ? cur : '';
     });
     const field = (label, el, tipKey) => h('label', { class: 'field' }, h('span', { class: 'field-label' }, label, tipKey ? help(tipKey) : null), el);
     const defaultsCard = h('div', { class: 'card section-card' },
@@ -1808,9 +1977,9 @@ class SettingsView {
       h('div', { class: 'form-grid' },
         field('구현', f.implementer, 'implementer'), field('리뷰', f.reviewer, 'reviewer'), field('설계 종합', f.synth, 'synth'),
         field('토론 라운드', f.debate_rounds, 'debate_rounds'), field('리뷰 최대', f.max_review, 'max_review')),
-      h('div', { class: 'form-grid' },
-        field('Claude 모델', f.claude_model, 'claude_model'), field('Claude 추론', f.claude_effort, 'effort'),
-        field('Codex 모델', f.codex_model, 'codex_model'), field('Codex 추론', f.codex_effort, 'effort')),
+      h('div', { class: 'form-grid agent-grid' },
+        field('Claude 모델', claudeBox, 'claude_model'), field('Claude 추론', f.claude_effort, 'effort'),
+        field('Codex 모델', codexBox, 'codex_model'), field('Codex 추론', f.codex_effort, 'effort')),
       h('h3', null, '리뷰·테스트'),
       h('p', { class: 'desc' }, '반려 기준: 이 심각도 이상의 지적이 남아 있으면 반려합니다(P1 핵심 동작·보안, P2 설계 위반·일반 입력 오류, P3 드문 경계 사례). 수렴 판단: 막는 지적 수가 N 라운드 연속 줄지 않으면 멈춥니다(0=끔).'),
       h('div', { class: 'form-grid' },
@@ -1859,6 +2028,34 @@ class SettingsView {
         h('button', { class: 'btn btn-primary', type: 'button', onclick: () => this.saveMachine(mf) }, ed.id ? '수정 저장' : '머신 추가'),
         ed.id ? h('button', { class: 'btn', type: 'button', onclick: () => { this.editing = null; this.render(v); } }, '취소') : null));
 
+    segmentize(f.claude_effort, EFFORT_LABELS);
+    segmentize(f.codex_effort, EFFORT_LABELS);
+
+    // ---------------- 화면: 색 테마와 로고
+    const themeGrid = h('div', { class: 'theme-grid' });
+    const drawThemes = () => themeGrid.replaceChildren(...THEMES.map(t => {
+      const sw = h('div', { class: 'theme-swatch' }, h('i', { class: 'sw-panel' }), h('i', { class: 'sw-dot' }));
+      sw.style.background = t.id === 'system' ? `linear-gradient(135deg, ${t.sw[0]} 50%, ${t.sw[3]} 50%)` : t.sw[0];
+      sw.querySelector('.sw-panel').style.background = t.sw[1];
+      sw.querySelector('.sw-panel').style.boxShadow = `inset 0 0 0 1px ${t.sw[2]}22`;
+      sw.querySelector('.sw-dot').style.background = t.sw[2];
+      return h('button', { type: 'button', class: `theme-card${currentTheme() === t.id ? ' on' : ''}`,
+        onclick: () => { applyTheme(t.id); drawThemes(); } }, sw, h('div', { class: 'theme-name' }, t.label, h('small', null, t.note)));
+    }));
+    drawThemes();
+    const sv0 = app.server || {};
+    const logoInfo = ['claude', 'codex'].map(a => h('span', null, agentLogo(a, 16), ' ',
+      `${a === 'claude' ? 'Claude' : 'Codex'}: ${(sv0.logos || {})[a] ? '공식 로고 파일 사용 중' : '이니셜 배지'}`));
+    const screenCard = h('div', { class: 'card section-card' },
+      h('h2', null, '화면'),
+      h('p', { class: 'desc' }, '색 테마는 이 브라우저에만 저장됩니다. 배경·글자색만 바뀌고 배치는 같습니다.'),
+      themeGrid,
+      h('h3', null, '로고'),
+      h('div', { class: 'logo-status' }, logoInfo),
+      h('div', { class: 'muted small' }, '공식 로고를 쓰려면 SVG 파일을 ',
+        h('code', null, `${sv0.logo_dir || '~/.duet/logos'}${/\\/.test(sv0.logo_dir || '') ? '\\' : '/'}claude.svg`), ', ',
+        h('code', null, 'codex.svg'), ' 로 넣고 새로고침하세요. duet 는 회사 로고를 함께 배포하지 않습니다.'));
+
     // ---------------- 고급 설정 (설정 항목 정의에서 만든다)
     const advBody = h('div', null, optionFields(v.options || [], d, () => true));
     const advancedCard = h('div', { class: 'card section-card' },
@@ -1880,7 +2077,7 @@ class SettingsView {
       h('div', { class: 'actions' }, withTip(h('button', { class: 'btn', type: 'button', onclick: restartServer }, 'UI 다시 시작'), 'restart')));
     this.main.replaceChildren(h('div', { class: 'page' },
       h('div', { class: 'page-head' }, h('div', null, h('h1', null, '설정'), h('div', { class: 'muted' }, '~/.duet/settings.json 에 저장됩니다.'))),
-      v.error ? errorBox({ message: v.error }) : null, rootsCard, defaultsCard, advancedCard, machinesCard, serverCard));
+      v.error ? errorBox({ message: v.error }) : null, screenCard, rootsCard, defaultsCard, advancedCard, machinesCard, serverCard));
   }
   async save(body) {
     try { app.settings = await api('/api/settings', { method: 'POST', body }); toast('저장했습니다.'); this.render(app.settings); }
@@ -2170,7 +2367,6 @@ async function openRunDialog({ machine = LOCAL, project = '', defaults = null, h
   formError.hidden = true;
   dlgState = { fixedProject: project || null };
   const f = form.elements;
-  modelDatalists(app.settings.suggestions);
   f.machine.replaceChildren(...app.groups.map(g => h('option', { value: g.id }, g.local ? '이 머신' : g.name)));
   f.machine.value = machine;
   f.machine.disabled = !!project;
@@ -2190,10 +2386,14 @@ async function openRunDialog({ machine = LOCAL, project = '', defaults = null, h
   f.stall_rounds.value = eff.stall_rounds ?? 2;
   f.test_command.value = '';
   f.test_command.placeholder = eff.test_command && eff.test_command !== 'auto' ? `설정값: ${eff.test_command}` : '자동 감지 (예: python3 -m pytest -q)';
-  f.claude_model.value = (eff.claude || {}).model || '';
-  f.codex_model.value = (eff.codex || {}).model || '';
-  setEffortOptions('claude', (eff.claude || {}).effort);
-  setEffortOptions('codex', (eff.codex || {}).effort);
+  document.querySelectorAll('#run-form .model-picker').forEach(buildModelPicker);
+  document.querySelectorAll('#run-form [data-logo]').forEach(el => el.replaceChildren(agentLogo(el.getAttribute('data-logo'), 22)));
+  for (const a of ['claude', 'codex']) {
+    f[`${a}_model`].closest('.model-picker')._set((eff[a] || {}).model || '');
+    setEffortOptions(a, (eff[a] || {}).effort);
+    segmentize(f[`${a}_effort`], EFFORT_LABELS);
+    f[`${a}_effort`]._sync();
+  }
   await fillWorkflows(machine, project, eff.workflow);
   $('#run-advanced-body').replaceChildren(...optionFields(app.settings.options || [], {}, o => o.run_dialog));
   $('#run-advanced').open = false;
@@ -2311,11 +2511,17 @@ async function restartServer() {
 }
 $('#restart-btn').addEventListener('click', restartServer);
 
+// 기록 크게 보기 창 (실행 상세의 대화 탭)
+const entryDialog = h('dialog', { class: 'dialog entry-dialog', 'aria-label': '기록 크게 보기' });
+document.body.append(entryDialog);
+entryDialog.addEventListener('click', ev => { if (ev.target === entryDialog) entryDialog.close(); });   // 바깥을 누르면 닫기
+new MutationObserver(() => foldDescriptions($('#main'))).observe($('#main'), { childList: true, subtree: true });
+
 // =================================================================== boot
 document.querySelectorAll('[data-logo]').forEach(el => el.replaceChildren(agentLogo(el.getAttribute('data-logo'), 22)));
 decorateHelp();
 window.addEventListener('hashchange', route);
-checkServer();
 setInterval(checkServer, 20000);
 api('/api/setup/actions').then(a => { app.actions = a.actions; }).catch(() => {});
-route();
+// 로고(공식 파일 여부)를 알고 첫 화면을 그린다. 서버가 늦으면 1.5초 뒤 그냥 그린다
+Promise.race([checkServer(), new Promise(r => setTimeout(r, 1500))]).finally(route);

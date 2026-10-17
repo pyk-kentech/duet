@@ -24,6 +24,7 @@ from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlsplit
 
@@ -38,6 +39,11 @@ from duet.ui.terminal import TermJob
 from duet.usage import codex_home
 
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}
+# 함께 배포하는 글꼴 (Pretendard, SIL OFL 1.1 — static/fonts/Pretendard-LICENSE.txt)
+STATIC_BINARY = {"fonts/PretendardVariable.woff2": "font/woff2"}
+# 사용자가 넣는 공식 로고 ($DUET_HOME/logos/<이름>.svg). duet 는 회사 로고를 직접 그리지 않는다
+LOGO_NAMES = ("claude", "codex")
+LOGO_MAX_BYTES = 300_000
 MAX_BODY = 1_000_000
 TOKEN_PLACEHOLDER = "__DUET_TOKEN__"
 COOKIE_PREFIX = "duet_t_"
@@ -85,7 +91,9 @@ class DuetServer(ThreadingHTTPServer):
         running = [t.title for t in self.terms.values() if t.running]
         return {"version": __version__, "loaded": self.loaded_hash[:12], "current": cur[:12],
                 "stale": bool(cur and self.loaded_hash and cur != self.loaded_hash),
-                "uptime_sec": int(time.time() - self.started_at), "running_terms": running}
+                "uptime_sec": int(time.time() - self.started_at), "running_terms": running,
+                "logos": {n: logo_path(n) is not None for n in LOGO_NAMES},
+                "logo_dir": str(duet_home_dir() / "logos")}
 
     def restart(self) -> dict[str, Any]:
         running = [t.title for t in self.terms.values() if t.running]
@@ -346,11 +354,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        if "Cache-Control" not in (extra or {}):
+            self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", CSP)
+        if "Content-Security-Policy" not in (extra or {}):
+            self.send_header("Content-Security-Policy", CSP)
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -411,6 +421,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._index(query)
             if method == "GET" and path.startswith("/static/"):
                 return self._static(path[len("/static/"):])
+            if method == "GET" and path.startswith("/logos/") and path.endswith(".svg"):
+                return self._logo(path[len("/logos/"):-len(".svg")])
             if path.startswith("/api/"):
                 if not self._fetch_site_ok():
                     return self._json(HTTPStatus.FORBIDDEN, {"error": "다른 사이트에서 온 요청은 받지 않습니다."})
@@ -477,11 +489,24 @@ class Handler(BaseHTTPRequestHandler):
         self._send(HTTPStatus.OK, html.encode("utf-8"), "text/html; charset=utf-8", extra)
 
     def _static(self, name: str) -> None:
+        if name in STATIC_BINARY:
+            data = resources.files("duet.ui").joinpath("static", name).read_bytes()
+            self._send(HTTPStatus.OK, data, STATIC_BINARY[name], {"Cache-Control": "public, max-age=604800"})
+            return
         ctype = STATIC_FILES.get(name)
         if ctype is None:
             self._text(HTTPStatus.NOT_FOUND, "없는 파일입니다.")
             return
         self._send(HTTPStatus.OK, _static_text(name).encode("utf-8"), ctype)
+
+    def _logo(self, name: str) -> None:
+        """사용자가 넣은 로고 SVG. <img> 로만 쓰므로 안의 스크립트는 돌지 않고, 직접 열어도 CSP 로 막는다."""
+        path = logo_path(name)
+        if path is None:
+            self._text(HTTPStatus.NOT_FOUND, "로고 파일이 없습니다.")
+            return
+        self._send(HTTPStatus.OK, path.read_bytes(), "image/svg+xml",
+                   {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"})
 
     # ---------------------------------------------------------------- api
     # HTTP 경로 → 대시보드 메서드. 쿼리/본문의 machine 이 원격이면 SSH 로 그 머신의 duet _api 를 부른다.
@@ -608,6 +633,24 @@ def _int(v: str | None) -> int:
         return int(v or 0)
     except ValueError:
         return 0
+
+
+def duet_home_dir() -> Path:
+    from duet.registry import duet_home
+
+    return duet_home()
+
+
+def logo_path(name: str) -> Path | None:
+    if name not in LOGO_NAMES:
+        return None
+    p = duet_home_dir() / "logos" / f"{name}.svg"
+    try:
+        if p.is_file() and p.stat().st_size <= LOGO_MAX_BYTES:
+            return p
+    except OSError:
+        pass
+    return None
 
 
 def _static_text(name: str) -> str:
