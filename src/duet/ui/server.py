@@ -544,6 +544,7 @@ class Handler(BaseHTTPRequestHandler):
         ("GET", "/api/jobs"): "jobs",
         ("POST", "/api/actions/run"): "start_run",
         ("POST", "/api/actions/resume"): "resume",
+        ("POST", "/api/actions/report"): "make_report",
         ("POST", "/api/actions/stop"): "stop",
         ("GET", "/api/usage"): "usage",
         ("GET", "/api/activity"): "activity",

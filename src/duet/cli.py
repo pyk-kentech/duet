@@ -78,6 +78,12 @@ def build_parser() -> argparse.ArgumentParser:
                           help="구현-리뷰 상한을 늘려서 이어감 (미승인으로 끝난 실행을 계속할 때 필요, 최대 10)")
     p_resume.set_defaults(func=cmd_resume)
 
+    p_report = sub.add_parser("report", help="끝난 실행의 결과 요약 만들기 (작은 모델 1회, DESIGN.md 32장)")
+    _add_workdir(p_report)
+    p_report.add_argument("--run", metavar="RUN_ID", help="특정 실행 ID (기본: 마지막 실행)")
+    p_report.add_argument("--mock", action="store_true", help="실제 CLI 호출 없이 (기본: 그 실행이 mock 이었는지 따름)")
+    p_report.set_defaults(func=cmd_report)
+
     p_log = sub.add_parser("log", help="지난 실행 기록 보기")
     _add_workdir(p_log)
     p_log.add_argument("--full", action="store_true", help="전체 발언을 순서대로 출력")
@@ -208,6 +214,16 @@ def _step_effort(text, parse=parse_step_effort):
 
 def cmd_resume(args: argparse.Namespace) -> int:
     return Orchestrator().resume(Path(args.workdir), args.run, max_review=args.max_review).exit_code
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    path = Orchestrator().report(Path(args.workdir), args.run, mock=True if args.mock else None)
+    if path is None:
+        print("결과 요약을 만들지 못했습니다. 위의 로그를 확인하세요.")
+        return 1
+    print(path.read_text(encoding="utf-8").split("-->", 1)[-1].strip())
+    print(f"\n기록: {path}")
+    return EXIT_OK
 
 
 # ---------------------------------------------------------------------- ui

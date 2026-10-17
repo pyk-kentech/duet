@@ -19,13 +19,16 @@ from typing import IO, Any, Callable, Mapping
 
 from duet.agents import (AgentAdapter, AgentNotAvailable, ClaudeCodeAdapter, CodexAdapter, MockAdapter,
                          make_agents, make_role_agents)
-from duet.config import Config, ConfigError, dedup_agent_config, describe_effort, describe_model, load_config
+from duet.config import (
+    Config, ConfigError, dedup_agent_config, describe_effort, describe_model, load_config, report_agent_config,
+)
 from duet.dedup import DEDUP_ROLE
 from duet.lock import LockBusy, RunLock
 from duet.phases.build import BuildPhase
 from duet.phases.common import PhaseContext, PhaseStop
 from duet.phases.debate import DESIGN_FILENAME, DebatePhase
 from duet.phases.extra import run_audit, run_explore
+from duet.report import REPORT_ROLE, run_report
 from duet.registry import register_quietly
 from duet.runner import env_drops
 from duet.state import (
@@ -55,6 +58,7 @@ CONFIG_KEYS = ("workflow", "implementer", "reviewer", "synth", "debate_rounds", 
                "review_diff", "repro_tests", "review_packet", "review_json", "review_session",
                "review_session_rounds", "review_gates", "arbiter", "test_guard", "claude_sandbox", "spec_gate",
                "wait_on_limit", "limit_wait_max_min", "dedup", "dedup_agent", "dedup_model", "dedup_effort",
+               "report", "report_agent", "report_model", "report_effort",
                "timeout_sec", "test_timeout_sec", "max_diff_chars")
 CONSOLE_LOG = "console.log"
 CHANGES_DIR = "docs/changes"   # 기존 프로젝트의 변경 설계를 두는 곳 (DESIGN.md 19.5)
@@ -223,6 +227,9 @@ class Orchestrator:
             state.config["max_review"] = cfg.max_review
             if state.status == DONE_UNAPPROVED and "build" in state.done:
                 state.done.remove("build")   # 리뷰 루프를 이어간다
+                if "report" in state.done:   # 끝나면 결과 요약을 다시 만든다 (DESIGN.md 32.1)
+                    state.done.remove("report")
+                state.report = None
             if state.stop_reason in ("stalled", "arbiter_final"):
                 # 사람이 계속하라고 했으니 수렴 판단은 지금부터 다시 센다
                 state.stall_baseline_round = state.round
@@ -279,6 +286,8 @@ class Orchestrator:
                 state.status = DONE_APPROVED
                 ctx.set_position(PHASE_DONE, "approved", state.round)
                 state.save(run_dir)
+            if state.status in (DONE_APPROVED, DONE_UNAPPROVED):
+                self._report(ctx, run_dir)          # 결과 요약 (DESIGN.md 32장, 보조 호출)
         except PhaseStop as stop:
             self.log(f"중단: {stop}")
             if state.status == STOPPED_RATE_LIMIT:
@@ -409,7 +418,61 @@ class Orchestrator:
                 agents[name].check()
             except AgentNotAvailable as e:
                 raise OrchestratorError(str(e)) from e
-        return self._add_dedup(cfg, mock, agents)
+        return self._add_report(cfg, mock, self._add_dedup(cfg, mock, agents))
+
+    def _add_report(self, cfg: Config, mock: bool, agents: Mapping[str, AgentAdapter]) -> Mapping[str, AgentAdapter]:
+        """결과 요약자 (DESIGN.md 32.2). 쓸 수 없으면 건너뛴다(보조 호출)."""
+        if not cfg.report or REPORT_ROLE in agents:
+            return agents
+        out = dict(agents)
+        if mock:
+            out[REPORT_ROLE] = MockAdapter(label=REPORT_ROLE)
+            return out
+        ac = report_agent_config(cfg)
+        adapter = ClaudeCodeAdapter(cfg, ac) if cfg.report_agent == "claude" else CodexAdapter(cfg, ac)
+        try:
+            adapter.check()
+        except AgentNotAvailable:
+            self.log(f"결과 요약자({cfg.report_agent})를 쓸 수 없어 건너뜁니다.")
+            return agents
+        out[REPORT_ROLE] = adapter
+        return out
+
+    def _report(self, ctx: PhaseContext, run_dir: Path, *, force: bool = False) -> None:
+        """보조 호출: 한도에 걸려도 실행 결과(승인·미승인)와 위치는 그대로 둔다."""
+        st = ctx.state
+        keep = (st.status, st.stop_reason, st.error, st.phase, st.step, st.round)
+        try:
+            run_report(ctx, force=force)
+        except PhaseStop as e:
+            st.status, st.stop_reason, st.error, st.phase, st.step, st.round = keep
+            st.mark_done("report")
+            st.save(run_dir)
+            self.log(f"결과 요약을 건너뜀: {e}. 나중에 `duet report --workdir {ctx.workdir}` 로 만들 수 있습니다.")
+            return
+        st.status, st.stop_reason, st.error, st.phase, st.step, st.round = keep
+        st.save(run_dir)
+
+    def report(self, workdir: Path, run_id: str | None = None, *, mock: bool | None = None) -> Path | None:
+        """끝난 실행의 결과 요약을 (다시) 만든다: `duet report` (DESIGN.md 32.3)."""
+        workdir = Path(workdir).expanduser().resolve()
+        run_dir = self._find_run(workdir, run_id)
+        state = RunState.load(run_dir)
+        if state.status not in (DONE_APPROVED, DONE_UNAPPROVED):
+            raise OrchestratorError(f"승인·미승인으로 끝난 실행만 요약할 수 있습니다 ({state.run_id}: status={state.status}).")
+        cfg = replace(self._load_config(workdir, {k: state.config.get(k) for k in CONFIG_KEYS}), report=True)
+        use_mock = bool(state.config.get("mock")) if mock is None else mock
+        agents = self._add_report(cfg, use_mock, {})
+        if REPORT_ROLE not in agents:
+            raise OrchestratorError(f"결과 요약에 쓸 CLI({cfg.report_agent})를 찾을 수 없습니다.")
+        with self._locked(workdir, "report") as lock:
+            state = RunState.load(run_dir)
+            lock.set_run(run_dir.name)
+            ctx = PhaseContext(task=state.task, workdir=workdir, cfg=cfg, agents=agents, state=state,
+                               transcript=Transcript(run_dir), run_dir=run_dir, log=self.log, workflow=None)
+            with self._console_to(run_dir):
+                self._report(ctx, run_dir, force=True)
+        return run_dir / state.report if state.report else None
 
     def _add_dedup(self, cfg: Config, mock: bool, agents: Mapping[str, AgentAdapter]) -> Mapping[str, AgentAdapter]:
         """재제기 확인자(DESIGN.md 26.2). 워크플로에 dedup 역할이 있으면 그것, 없으면 설정의 작은 모델."""
@@ -453,6 +516,8 @@ class Orchestrator:
             "review_gates": cfg.review_gates, "arbiter": cfg.arbiter,
             "test_guard": cfg.test_guard, "claude_sandbox": cfg.claude_sandbox, "spec_gate": cfg.spec_gate,
             "wait_on_limit": cfg.wait_on_limit, "limit_wait_max_min": cfg.limit_wait_max_min,
+            "report": cfg.report, "report_agent": cfg.report_agent, "report_model": cfg.report_model,
+            "report_effort": cfg.report_effort,
             "dedup": cfg.dedup, "dedup_agent": cfg.dedup_agent, "dedup_model": cfg.dedup_model,
             "dedup_effort": cfg.dedup_effort,
             "timeout_sec": cfg.timeout_sec, "test_timeout_sec": cfg.test_timeout_sec,

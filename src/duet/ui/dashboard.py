@@ -32,7 +32,7 @@ from duet.registry import Registry, duet_home, normalize
 from duet.runner import ExecutableNotFound, pid_alive, spawn_detached
 from duet.agents.claude_code import load_claude_limits
 from duet.usage import claude_local_usage, codex_rate_limits
-from duet.state import DONE_UNAPPROVED, DUET_DIR, RUNNING, RunState, list_run_dirs
+from duet.state import DONE_APPROVED, DONE_UNAPPROVED, DUET_DIR, RUNNING, RunState, list_run_dirs
 from duet.transcript import Transcript, split_header
 from duet.verdict import parse_verdict
 from duet.workspace import GitError, Workspace, WorkdirRefused, check_workdir
@@ -478,6 +478,19 @@ class Dashboard:
                         items.append(f"{role}.{step}.{k}={v}")
         return items
 
+    def make_report(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """끝난 실행의 결과 요약을 작업으로 만든다 (DESIGN.md 32.3)."""
+        wd = self.project(payload.get("project"))
+        rd = self.run_dir(wd, payload.get("run"))
+        st = RunState.load(rd)
+        if st.status not in (DONE_APPROVED, DONE_UNAPPROVED):
+            raise ApiError(400, "승인·미승인으로 끝난 실행만 요약할 수 있습니다.")
+        self._ensure_not_busy(wd)
+        argv = ["report", "--workdir", str(wd), "--run", rd.name]
+        if st.config.get("mock"):
+            argv.append("--mock")
+        return self._spawn("report", wd, argv)
+
     def resume(self, payload: dict[str, Any]) -> dict[str, Any]:
         wd = self.project(payload.get("project"))
         rd = self.run_dir(wd, payload.get("run"))
@@ -799,6 +812,7 @@ API_METHODS: dict[str, Any] = {
     "jobs": lambda d, a: {"jobs": d.jobs_list()},
     "start_run": lambda d, a: d.start_run(a),
     "resume": lambda d, a: d.resume(a),
+    "make_report": lambda d, a: d.make_report(a),
     "stop": lambda d, a: d.stop(a),
     "usage": lambda d, a: d.usage_summary(),
     "activity": lambda d, a: d.activity(a.get("project"), a.get("run")),

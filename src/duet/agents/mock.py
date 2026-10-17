@@ -85,6 +85,9 @@ class MockAdapter:
             ids = re.findall(r"^- (I\d+) ", req.prompt, re.MULTILINE)
             return json.dumps({"decisions": [{"id": i, "decision": "uphold", "reason": "요구사항에 해당"} for i in ids],
                                "summary": "지적이 타당하다"}, ensure_ascii=False)
+        if step == "report":      # 결과 요약 (DESIGN.md 32장)
+            return ("## 만든 것\n- (mock) 과제의 결과물\n\n## 실행 방법\n```bash\npython main.py\n```\n\n"
+                    "## 테스트\n- (mock) 테스트 통과\n\n## 확인할 것\n없음\n")
         if step == "dedup":       # 기본: 중복 없음 (DESIGN.md 26.2)
             return json.dumps({"matches": []})
         if step == "explore":

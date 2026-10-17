@@ -164,7 +164,7 @@ def test_run_detail_entries_console_design(server, tmp_path: Path):
     s, run, _ = call(server, "GET", f"/api/run?{q}")
     assert s == 200 and run["state"]["status"] == DONE_APPROVED and run["live"] is False and run["stale"] is False
     names = [e["name"] for e in run["entries"]]
-    assert names[0] == "01_propose_claude.md" and names[-1] == "09_review2_codex.md"
+    assert names[0] == "01_propose_claude.md" and names[-2] == "09_review2_codex.md" and names[-1] == "10_report_claude.md"
     reviews = [e for e in run["entries"] if e["meta"]["step"] == "review"]
     assert [r["verdict"]["status"] for r in reviews] == ["CHANGES_REQUESTED", "APPROVED"]
     assert run["resume"]["possible"] is False and run["current_call"] is None

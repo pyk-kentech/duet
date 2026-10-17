@@ -75,7 +75,7 @@ const STATUS = {
 };
 const STEP = {
   propose: '설계안', critique: '비판·개정', synthesize: '설계 종합', implement: '구현', fix: '리뷰 반영',
-  review: '리뷰', explore: '사전 조사', audit: '감사', arbitrate: '중재', test: '테스트', repro: '재현 테스트', testguard: '테스트 변경 감지', dedup: '중복 확인', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
+  review: '리뷰', report: '결과 요약', explore: '사전 조사', audit: '감사', arbitrate: '중재', test: '테스트', repro: '재현 테스트', testguard: '테스트 변경 감지', dedup: '중복 확인', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
 };
 const PHASE = { init: '준비', explore: '사전 조사', debate: '설계 토론', build: '구현·리뷰', audit: '감사', done: '끝' };
 const CHECK_STATUS = { ok: '정상', warn: '확인 필요', missing: '없음', error: '오류' };
@@ -476,6 +476,7 @@ const TIPS = {
   'step.synthesize': '두 안을 합친 최종 설계입니다. DESIGN.md 로 저장됩니다.',
   'step.implement': '설계대로 처음 코드를 작성한 AI 의 요약입니다.',
   'step.fix': '리뷰 지적을 반영해 고친 내용의 요약입니다.',
+  'step.report': '실행이 끝난 뒤 작은 모델이 만든 것과 실행 방법을 정리한 결과 요약입니다.',
   'step.test': 'duet 가 직접 돌린 테스트 결과입니다. 실패하면 리뷰어가 승인해도 승인되지 않습니다.',
   'step.dedup': '작은 모델이 새 지적이 이미 해결·기각된 지적의 반복인지 확인한 결과입니다. 기각된 지적의 재제기는 P3 로 낮추고, 해결된 지적의 재발은 표시만 합니다.',
   'nav.bench': '벤치마크 결과(워크플로별 승인률·숨은 테스트 통과율·비용)를 봅니다.',
@@ -1125,13 +1126,14 @@ class RunView {
   }
   build() {
     this.headSlot = h('div');
+    this.resultSlot = h('div');       // 결과 요약 (DESIGN.md 32장)
     this.errorSlot = h('div');
     this.tabsSlot = h('nav', { class: 'tabs' });
     this.panelSlot = h('div');
     this.main.replaceChildren(h('div', { class: 'page' },
       crumbs(this.r, h('a', { href: hrefProject(this.m, this.r.project) }, baseName(this.r.project)), h('span', { class: 'sep' }, '/'),
         h('span', null, this.r.run)),
-      this.headSlot, this.errorSlot, this.tabsSlot, this.panelSlot));
+      this.headSlot, this.resultSlot, this.errorSlot, this.tabsSlot, this.panelSlot));
     this.built = true;
   }
   switchTab(tab) {
@@ -1145,8 +1147,41 @@ class RunView {
     if (!this.built) this.build();
     this.errorSlot.replaceChildren();
     this.renderHead();
+    await this.renderResult();
     this.renderTabs();
     await this.renderPanel(false);
+  }
+
+  // ---------------------------------------------------------------- 결과 요약 (DESIGN.md 32장)
+  async renderResult() {
+    const d = this.data, st = d.state;
+    const finished = st.status === 'done_approved' || st.status === 'done_unapproved';
+    if (!finished || d.live) { this.resultSlot.replaceChildren(); this.resultFor = null; return; }
+    const key = st.report || '(none)';
+    if (this.resultFor === key) return;
+    this.resultFor = key;
+    const head = (...extra) => h('div', { class: 'result-head' }, h('h2', null, '결과 요약'),
+      h('span', { class: 'muted small' }, '무엇을 만들었고 어떻게 실행하는지 · 작은 모델이 정리'), h('span', { class: 'spacer' }), ...extra);
+    if (!st.report) {
+      this.resultSlot.replaceChildren(h('div', { class: 'card card-pad result-card empty' },
+        head(h('button', { type: 'button', class: 'btn btn-primary btn-sm', onclick: () => this.makeReport() }, '결과 요약 만들기')),
+        h('p', { class: 'muted small' }, '이 실행에는 아직 요약이 없습니다. 만들면 작은 모델을 한 번 부릅니다.')));
+      return;
+    }
+    let entry;
+    try { entry = await this.loadEntry(st.report); } catch (e) { this.resultSlot.replaceChildren(errorBox(e)); return; }
+    this.resultSlot.replaceChildren(h('div', { class: 'card card-pad result-card' },
+      head(h('button', { type: 'button', class: 'btn btn-sm btn-icon', title: '작은 모델을 한 번 더 불러 다시 만듭니다', onclick: () => this.makeReport() }, '다시 만들기'),
+        h('button', { type: 'button', class: 'btn btn-sm btn-icon', onclick: () => this.openModal(st.report) }, '⤢ 크게 보기')),
+      h('div', { class: 'md result-body' }, markdown(entry.body))));
+  }
+  async makeReport() {
+    try {
+      await api('/api/actions/report', { method: 'POST', body: { project: this.r.project, run: this.r.run }, machine: this.m });
+      toast('결과 요약을 만드는 중입니다. 끝나면 여기에 보입니다.');
+      this.resultFor = null;
+      schedule(this, 1500);
+    } catch (e) { toast(e.message, true); }
   }
 
   // ---------------------------------------------------------------- head
@@ -2535,6 +2570,14 @@ function renderWorkflowDiagram() {
       const reviewNodes = reviewers.map(rv => node('리뷰', rv, [['review', '1회차'], ['rereview', '2회차부터']]));
       const extras = [];
       if (arbiterOn && arbiterRole && gatesOn) extras.push(node('중재', arbiterRole, [['arbitrate', '']], { small: true, note: '수렴 실패·상한일 때 한 번' }));
+      if (dlgOption('report') !== false) {
+        const agent = dlgOption('report_agent') || 'claude';
+        const model = dlgOption('report_model') || '';
+        const effort = dlgOption('report_effort') || '';
+        sig['결과 요약'] = `${agent}|${model}|${effort}`;
+        extras.push(wfCard('결과 요약', agent, agent, modelLabel(agent, model), [['', effort]],
+          { small: true, key: '결과 요약', note: '끝나면 만든 것·실행 방법 정리 (작은 모델)' }));
+      }
       if (dedupOn) {
         const agent = dlgOption('dedup_agent') || 'claude';
         const model = dlgOption('dedup_model') || '';

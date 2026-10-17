@@ -38,6 +38,7 @@ def test_full_run_approved(tmp_path: Path, capsys):
         "05_synthesize_codex.md",
         "06_impl1_claude.md", "07_review1_codex.md",
         "08_impl2_claude.md", "09_review2_codex.md",
+        "10_report_claude.md",                                   # 결과 요약 (DESIGN.md 32장)
     ]
     ws = Workspace(wd)
     assert ws.commit_count() == 3 and not ws.dirty()
@@ -71,7 +72,7 @@ def test_skip_design(tmp_path: Path):
     run_dir = only_run(wd)
     st = RunState.load(run_dir)
     assert st.status == DONE_UNAPPROVED
-    assert file_names(run_dir) == ["01_impl1_claude.md", "02_review1_codex.md"]
+    assert file_names(run_dir) == ["01_impl1_claude.md", "02_review1_codex.md", "03_report_claude.md"]
     assert (wd / "DESIGN.md").read_text(encoding="utf-8") == "# 내 설계\n"
 
 
@@ -85,7 +86,7 @@ def test_roles_and_toml_precedence(tmp_path: Path):
     assert st.config["implementer"] == "codex" and st.config["reviewer"] == "claude"
     assert st.config["synth"] == "claude" and st.config["max_review"] == 2
     assert file_names(run_dir)[2:] == ["03_synthesize_claude.md", "04_impl1_codex.md", "05_review1_claude.md",
-                                       "06_impl2_codex.md", "07_review2_claude.md"]
+                                       "06_impl2_codex.md", "07_review2_claude.md", "08_report_claude.md"]
 
 
 def test_task_from_file(tmp_path: Path):
@@ -137,7 +138,7 @@ def test_resume_after_failure(tmp_path: Path, monkeypatch, capsys):
     assert run_cli("resume", "--workdir", str(wd)) == 0
     st = RunState.load(run_dir)
     assert st.status == DONE_APPROVED
-    assert file_names(run_dir) == before + ["07_review1_codex.md"]
+    assert file_names(run_dir) == before + ["07_review1_codex.md", "08_report_claude.md"]
     assert Workspace(wd).commit_count() == 2
     assert len(list_run_dirs(wd)) == 1
     out = capsys.readouterr().out
@@ -156,7 +157,8 @@ def test_resume_after_rate_limit_keeps_roles(tmp_path: Path, monkeypatch):
     assert RunState.load(run_dir).status == STOPPED_RATE_LIMIT
     assert run_cli("resume", "--workdir", str(wd)) == 0
     assert file_names(run_dir) == ["01_propose_claude_failed.md", "02_propose_claude.md", "03_propose_codex.md",
-                                   "04_synthesize_claude.md", "05_impl1_codex.md", "06_review1_claude.md"]
+                                   "04_synthesize_claude.md", "05_impl1_codex.md", "06_review1_claude.md",
+                                   "07_report_claude.md"]
     assert [c.step for c in second["claude"].calls] == ["propose", "synthesize", "review"]
 
 
@@ -173,7 +175,7 @@ def test_log_command(tmp_path: Path, capsys):
     assert run_cli("log", "--workdir", str(wd)) == 0
     out = capsys.readouterr().out
     assert "[done_approved]" in out and "과제: 메모 CLI" in out and "마지막 판정: APPROVED" in out
-    assert "propose" in out and "review" in out and "호출 7회" in out
+    assert "propose" in out and "review" in out and "호출 8회" in out
 
     assert run_cli("log", "--workdir", str(wd), "--full") == 0
     out = capsys.readouterr().out
@@ -220,9 +222,11 @@ def test_resume_unapproved_with_higher_max_review(tmp_path: Path, monkeypatch, c
     assert "리뷰 상한 1 → 3회" in out and "[2/3] 리뷰 반영: claude" in out and "✅" in out
     st = RunState.load(run_dir)
     assert st.status == DONE_APPROVED and st.config["max_review"] == 3
+    # 미승인으로 끝날 때 만든 요약(06)은 이어서 리뷰를 더 돈 뒤 끝에서 새로 만든다(09)
     assert file_names(run_dir) == ["01_propose_claude.md", "02_propose_codex.md", "03_synthesize_codex.md",
-                                   "04_impl1_claude.md", "05_review1_codex.md",
-                                   "06_impl2_claude.md", "07_review2_codex.md"]
+                                   "04_impl1_claude.md", "05_review1_codex.md", "06_report_claude.md",
+                                   "07_impl2_claude.md", "08_review2_codex.md", "09_report_claude.md"]
+    assert st.report == "09_report_claude.md"
     assert [c.step for c in second["claude"].calls] == ["fix"]        # 구현이 아니라 리뷰 반영
     assert "## 반드시 고칠 것" in second["claude"].calls[0].prompt      # 이전 리뷰가 프롬프트에 들어감
     assert Workspace(wd).commit_count() == 3

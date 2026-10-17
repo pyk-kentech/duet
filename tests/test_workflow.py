@@ -188,8 +188,8 @@ def test_classic_run_unchanged(tmp_path: Path):
     assert st.workflow is None and st.config["workflow"] == "classic"
     assert file_names(rd) == ["01_propose_claude.md", "02_propose_codex.md", "03_synthesize_codex.md",
                               "04_impl1_claude.md", "05_review1_codex.md", "06_impl2_claude.md",
-                              "07_review2_codex.md"]
-    assert all(c.role is None for c in st.calls)
+                              "07_review2_codex.md", "08_report_claude.md"]
+    assert all(c.role is None for c in st.calls if c.step != "report")      # 결과 요약자는 따로 (32장)
     assert "role" not in Transcript(rd).entries()[0].meta
 
 
@@ -200,8 +200,9 @@ def test_secure_builtin_two_reviewers_and_audit(tmp_path: Path, capsys):
     st = RunState.load(rd)
     assert st.status == DONE_APPROVED and st.workflow["name"] == "secure"
     names = file_names(rd)
-    assert names[-6:] == ["05_review1_codex.md", "06_review1_security.md", "07_impl2_claude.md",
-                          "08_review2_codex.md", "09_review2_security.md", "10_audit_auditor.md"]
+    assert names[-7:] == ["05_review1_codex.md", "06_review1_security.md", "07_impl2_claude.md",
+                          "08_review2_codex.md", "09_review2_security.md", "10_audit_auditor.md",
+                          "11_report_claude.md"]                     # 결과 요약은 감사 뒤
     h1, h2 = st.review_history
     assert not h1["approved"] and h1["blocking"] == 2 and [r["role"] for r in h1["reviewers"]] == ["codex", "security"]
     assert h2["approved"] and h2["files"] == ["08_review2_codex.md", "09_review2_security.md"]

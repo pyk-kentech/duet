@@ -78,6 +78,8 @@ class PhaseContext:
             return self.workflow.roles[role].agent
         if role == DEDUP_ROLE:                    # 재제기 확인자 (DESIGN.md 26.2)
             return self.cfg.dedup_agent
+        if role == "report":                      # 결과 요약자 (DESIGN.md 32장)
+            return self.cfg.report_agent
         return role
 
     @property
@@ -102,6 +104,10 @@ class PhaseContext:
             return self.workflow.roles[role].agent_config(self.cfg)
         if role == DEDUP_ROLE:
             return dedup_agent_config(self.cfg)
+        if role == "report":
+            from duet.config import report_agent_config
+
+            return report_agent_config(self.cfg)
         from duet.config import apply_step_overrides
 
         return apply_step_overrides(self.cfg.agent(self.cli_of(role)), self.cfg, role)

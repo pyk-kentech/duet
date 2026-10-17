@@ -133,7 +133,8 @@ def test_stall_then_arbiter_approves(tmp_path, monkeypatch, capsys):
     assert st.arbiter["result"] == "approved" and st.arbiter["downgraded"] == ["I1"] and st.arbiter["round"] == 3
     assert [x["severity"] for x in st.issues] == ["P3"]
     names = file_names(rd)
-    assert names[-1].endswith("_arbiter3_codex.md") and len([n for n in names if "review" in n]) == 3
+    assert names[-2].endswith("_arbiter3_codex.md") and names[-1].endswith("_report_claude.md")
+    assert len([n for n in names if "review" in n]) == 3
     arb_call = [c for c in seen["codex"].calls if c.step == "arbitrate"][0]
     assert "- I1 [P2] 예외 처리 없음" in arb_call.prompt and arb_call.output_schema == arb.ARBITER_SCHEMA
     assert "막는 지적 수가 줄지 않음" in arb_call.prompt
@@ -227,7 +228,7 @@ def test_workflow_explicit_arbiter_role(tmp_path, monkeypatch):
     assert main(["run", "t", "--workdir", str(wd), "--mock", "--workflow", "j", "--max-review", "5"]) == 0
     assert [c.step for c in store["a"]["judge"].calls] == ["arbitrate"]
     st = RunState.load(list_run_dirs(wd)[0])
-    assert st.stop_reason == "arbiter" and file_names(list_run_dirs(wd)[0])[-1].endswith("_arbiter3_judge.md")
+    assert st.stop_reason == "arbiter" and file_names(list_run_dirs(wd)[0])[-2].endswith("_arbiter3_judge.md")
 
 
 def test_bench_summary_counts_arbiter():

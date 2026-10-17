@@ -177,6 +177,11 @@ class Config:
     dedup_agent: str = "claude"
     dedup_model: str = "claude-haiku-5-5"
     dedup_effort: str = ""              # 비우면 CLI 기본
+    # 결과 요약: 실행이 끝나면 작은 모델이 만든 것·실행 방법을 정리 (DESIGN.md 32장)
+    report: bool = True
+    report_agent: str = "claude"
+    report_model: str = "claude-haiku-5-5"
+    report_effort: str = ""
     # 실행마다 칸(역할·단계) 단위로 모델·강도를 덮어쓴다 {역할: {단계: {model, effort}}} (DESIGN.md 30.3)
     step_overrides: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
@@ -231,15 +236,16 @@ class Config:
         if not isinstance(self.repro_tests, bool):
             raise ConfigError("repro_tests 는 true/false 여야 합니다")
         for key in ("review_packet", "review_json", "review_gates", "arbiter", "test_guard", "claude_sandbox",
-                    "spec_gate", "wait_on_limit", "dedup"):
+                    "spec_gate", "wait_on_limit", "dedup", "report"):
             if not isinstance(getattr(self, key), bool):
                 raise ConfigError(f"{key} 는 true/false 여야 합니다")
         if (not isinstance(self.limit_wait_max_min, int) or isinstance(self.limit_wait_max_min, bool)
                 or not 1 <= self.limit_wait_max_min <= 7 * 24 * 60):
             raise ConfigError(f"limit_wait_max_min 은 1~10080(분) 사이여야 합니다: {self.limit_wait_max_min}")
-        if self.dedup_agent not in AGENT_NAMES:
-            raise ConfigError(f"dedup_agent 값이 잘못됨: {self.dedup_agent!r} (가능: {', '.join(AGENT_NAMES)})")
-        for key in ("dedup_model", "dedup_effort"):
+        for key in ("dedup_agent", "report_agent"):
+            if getattr(self, key) not in AGENT_NAMES:
+                raise ConfigError(f"{key} 값이 잘못됨: {getattr(self, key)!r} (가능: {', '.join(AGENT_NAMES)})")
+        for key in ("dedup_model", "dedup_effort", "report_model", "report_effort"):
             v = getattr(self, key)
             if not isinstance(v, str) or not _TOKEN_RE.match(v):
                 raise ConfigError(f"{key} 값이 잘못되었습니다: {v!r}")
@@ -319,6 +325,12 @@ def apply_step_overrides(ac: AgentConfig, cfg: "Config", role: str) -> AgentConf
         if vals.get("effort"):
             step_effort[step] = vals["effort"]
     return replace(ac, step_model=step_model, step_effort=step_effort)
+
+
+def report_agent_config(cfg: "Config") -> AgentConfig:
+    """결과 요약자가 쓰는 CLI 설정 (DESIGN.md 32.2)."""
+    return replace(cfg.agent(cfg.report_agent), model=cfg.report_model, effort=cfg.report_effort, step_effort={},
+                   step_model={})
 
 
 def dedup_agent_config(cfg: "Config") -> AgentConfig:
