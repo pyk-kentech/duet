@@ -988,9 +988,9 @@ class HomeView {
             g.projects.length ? '조건에 맞는 프로젝트가 없습니다. 검색어나 위의 보기 설정을 바꿔 보세요.' : '아직 프로젝트가 없습니다. ‘새 실행’으로 시작하세요.'),
         jobs.length ? h('div', { class: 'jobs' }, jobs.map(jobCard)) : null);
     });
+    const addInput = h('input', { type: 'text', name: 'path', placeholder: '절대 경로 (/home/me/proj, C:\\work\\proj) — 이 머신의 기존 작업 폴더를 목록에 추가', value: this.addValue, spellcheck: 'false', autocomplete: 'off' });
     const form = h('form', { class: 'add-form', onsubmit: ev => this.add(ev) },
-      h('input', { type: 'text', name: 'path', placeholder: '절대 경로 (/home/me/proj, C:\\work\\proj) — 이 머신의 기존 작업 폴더를 목록에 추가', value: this.addValue, spellcheck: 'false', autocomplete: 'off' }),
-      h('button', { class: 'btn', type: 'submit' }, '추가'));
+      addInput, pathPickButton(addInput), h('button', { class: 'btn', type: 'submit' }, '추가'));
     const noRemote = app.groups.length === 1;
     this.main.replaceChildren(h('div', { class: 'page' },
       h('div', { class: 'page-head' },
@@ -2077,7 +2077,7 @@ class SettingsView {
       h('h2', null, '작업 폴더 위치', help('roots')),
       h('p', { class: 'desc' }, '새 실행 때 이 위치를 고르고 폴더 이름만 쓰면 됩니다. 첫 번째가 기본입니다.'),
       rootList,
-      h('div', { class: 'add-form' }, newRoot, h('button', { class: 'btn', type: 'button', onclick: () => {
+      h('div', { class: 'add-form' }, newRoot, pathPickButton(newRoot), h('button', { class: 'btn', type: 'button', onclick: () => {
         if (newRoot.value.trim()) { roots.push(newRoot.value.trim()); newRoot.value = ''; drawRoots(); }
       } }, '추가')),
       h('div', { class: 'actions' }, h('button', { class: 'btn btn-primary', type: 'button', onclick: () => this.save({ workspace_roots: roots.filter(x => x.trim()) }) }, '저장')));
@@ -2650,6 +2650,12 @@ $('#sidebar-new-run').addEventListener('click', () => {
 });
 dlg.addEventListener('click', ev => { if (ev.target.closest('[data-close]')) dlg.close(); });
 form.elements.machine.addEventListener('change', () => { fillRoots(); fillWorkflows(form.elements.machine.value, '', form.elements.workflow.value); });
+{
+  const projIn = form.elements.project;
+  const row = h('div', { class: 'path-row' });
+  projIn.replaceWith(row);
+  row.append(projIn, pathPickButton(projIn, () => form.elements.machine.value));
+}
 form.elements.workflow.addEventListener('change', workflowPreview);
 form.addEventListener('input', scheduleWorkflowDiagram);
 form.addEventListener('change', scheduleWorkflowDiagram);
@@ -2771,6 +2777,112 @@ function summarizeMarkdown(text) {
   }
   const t = out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
   return { text: t, same: t.length >= String(text || '').trim().length * 0.85 };
+}
+
+// =================================================================== 폴더 고르기 (DESIGN.md 28.9)
+// 브라우저는 폴더의 절대 경로를 주지 않으므로 duet 서버가 고른다: 이 머신이면 OS 폴더 선택 창, 아니면 duet 폴더 창.
+function folderIcon() {   // 함수 선언(호이스팅): 새 실행 창 설정 코드가 이 정의보다 먼저 돈다
+  return svg('svg', { class: 'ico', viewBox: '0 0 16 16', 'aria-hidden': 'true' },
+    svg('path', { d: 'M1.75 4.25c0-.55.45-1 1-1h3.4l1.5 1.6h5.6c.55 0 1 .45 1 1v6.4c0 .55-.45 1-1 1H2.75c-.55 0-1-.45-1-1z' }));
+}
+function pathPickButton(input, getMachine = () => LOCAL) {
+  const btn = h('button', { type: 'button', class: 'btn path-pick', title: '폴더 고르기', 'aria-label': '폴더 고르기' }, folderIcon());
+  const set = p => {
+    input.value = p;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.focus();
+  };
+  btn.addEventListener('click', async () => {
+    const machine = getMachine();
+    if (machine === LOCAL && (app.server || {}).native_picker) {
+      btn.disabled = true;
+      toast('폴더 선택 창을 열었습니다. 안 보이면 작업 표시줄을 확인하세요.');
+      try {
+        const r = await api('/api/fs/pick', { method: 'POST', body: { start: input.value.trim() } });
+        if (r.path) set(r.path);
+        return;
+      } catch (e) {
+        toast(`${e.message} duet 폴더 창으로 엽니다.`, true);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+    const picked = await folderBrowser({ machine, start: input.value.trim() });
+    if (picked) set(picked);
+  });
+  return btn;
+}
+
+const fsDialog = h('dialog', { class: 'dialog fs-dialog', 'aria-label': '폴더 고르기' });
+document.body.append(fsDialog);
+let fsFinish = null;
+function folderBrowser({ machine = LOCAL, start = '' } = {}) {
+  if (fsFinish) fsFinish(null);                   // 이전 창이 남아 있으면 취소로 끝낸다
+  return new Promise(resolve => {
+    let cur = null, sep = '/', done = false;
+    const finish = v => { if (done) return; done = true; fsFinish = null; if (fsDialog.open) fsDialog.close(); resolve(v); };
+    fsFinish = finish;
+    const pathIn = h('input', { type: 'text', class: 'fs-path', spellcheck: 'false', autocomplete: 'off', placeholder: '경로를 쓰고 Enter' });
+    const up = h('button', { type: 'button', class: 'btn btn-sm', title: '위 폴더로' }, '↑ 위로');
+    const quick = h('div', { class: 'fs-quick' });
+    const list = h('div', { class: 'fs-list' });
+    const status = h('div', { class: 'fs-status' });
+    const newName = h('input', { type: 'text', class: 'fs-new', placeholder: '이 안에 새 폴더 이름 (선택)', spellcheck: 'false', autocomplete: 'off' });
+    const choose = h('button', { type: 'button', class: 'btn btn-primary' }, '이 폴더 선택');
+    const label = () => { choose.textContent = newName.value.trim() ? '새 폴더로 선택' : '이 폴더 선택'; };
+    const load = async (path, fallback = false) => {
+      list.replaceChildren(h('div', { class: 'empty-state small' }, '불러오는 중…'));
+      status.textContent = '';
+      let r;
+      try {
+        r = await api('/api/fs/dirs', { query: { path: path || '' }, machine });
+      } catch (e) {
+        if (fallback) return load('');
+        list.replaceChildren(errorBox(e));
+        return;
+      }
+      cur = r.path;
+      sep = r.sep || '/';
+      pathIn.value = r.path || '';
+      up.disabled = !r.parent;
+      up.onclick = () => load(r.parent);
+      choose.disabled = !r.path;
+      const mine = rootsFor(machine).map(p => ({ name: p.split(/[\\/]/).filter(Boolean).pop() || p, path: p, star: true }));
+      quick.replaceChildren(...[...r.roots, ...mine].map(x => h('button', {
+        type: 'button', class: `fs-chip${x.path === r.path ? ' on' : ''}`, title: x.path, onclick: () => load(x.path),
+      }, x.star ? `★ ${x.name}` : x.name)));
+      if (!r.path) {
+        list.replaceChildren(h('div', { class: 'empty-state small' }, '위에서 시작할 곳을 고르세요.'));
+        return;
+      }
+      list.replaceChildren(...(r.entries.length ? r.entries.map(e => h('button', {
+        type: 'button', class: 'fs-item', title: e.path, onclick: () => load(e.path),
+      }, folderIcon(), h('span', { class: 'fs-name' }, e.name),
+      e.duet ? h('span', { class: 'badge s-ok' }, 'duet') : e.git ? h('span', { class: 'chip' }, 'git') : null))
+        : [h('div', { class: 'empty-state small' }, '하위 폴더가 없습니다.')]));
+      if (r.truncated) status.textContent = `폴더가 많아 앞의 ${r.entries.length}개만 보입니다. 경로를 직접 써서 들어가세요.`;
+      list.scrollTop = 0;
+    };
+    newName.addEventListener('input', label);
+    pathIn.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); load(pathIn.value.trim()); } });
+    choose.addEventListener('click', () => {
+      if (!cur) return;
+      const n = newName.value.trim();
+      if (n && /[\\/:*?"<>|]/.test(n)) { status.textContent = '폴더 이름에 \\ / : * ? " < > | 는 쓸 수 없습니다.'; return; }
+      finish(n ? cur.replace(/[\\/]+$/, '') + sep + n : cur);   // 그 머신의 경로 구분자로
+    });
+    fsDialog.replaceChildren(
+      h('div', { class: 'dialog-head' }, h('h2', null, '폴더 고르기'),
+        h('button', { type: 'button', class: 'icon-btn', 'aria-label': '닫기', onclick: () => finish(null) }, '×')),
+      h('div', { class: 'dialog-body fs-body' }, quick, h('div', { class: 'fs-bar' }, up, pathIn), list, status),
+      h('div', { class: 'dialog-foot fs-foot' }, newName, h('button', { type: 'button', class: 'btn', onclick: () => finish(null) }, '취소'), choose));
+    // Esc 는 cancel 이벤트(바로 일어남)로 끝낸다. close 이벤트는 늦게 와서 다음 창에 닿을 수 있어 이 창이 닫혔을 때만 본다
+    fsDialog.oncancel = ev => { ev.preventDefault(); finish(null); };
+    fsDialog.onclose = () => { if (fsFinish === finish && !fsDialog.open) finish(null); };
+    fsDialog.showModal();
+    load(start, true);
+  });
 }
 
 // 기록 크게 보기 창 (실행 상세의 대화 탭)

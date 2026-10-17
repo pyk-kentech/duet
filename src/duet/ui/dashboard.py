@@ -719,6 +719,64 @@ def current_call(console: Path, now: dt.datetime | None = None) -> dict[str, Any
     return None
 
 
+# ====================================================================== 폴더 고르기 (DESIGN.md 28.9)
+FS_MAX_ENTRIES = 500
+_FILE_ATTRIBUTE_HIDDEN, _FILE_ATTRIBUTE_SYSTEM = 0x2, 0x4
+
+
+def _fs_roots() -> list[dict[str, str]]:
+    roots = [{"name": "홈", "path": str(Path.home())}]
+    if os.name == "nt":
+        import string
+
+        roots += [{"name": f"{c}:", "path": f"{c}:\\"} for c in string.ascii_uppercase if os.path.isdir(f"{c}:\\")]
+    else:
+        roots.append({"name": "/", "path": "/"})
+    return roots
+
+
+def _visible_dir(entry: os.DirEntry) -> bool:
+    if entry.name.startswith(".") or entry.name.startswith("$"):
+        return False
+    try:
+        if not entry.is_dir(follow_symlinks=True):
+            return False
+        attrs = getattr(entry.stat(follow_symlinks=True), "st_file_attributes", 0)
+    except OSError:
+        return False
+    return not attrs & (_FILE_ATTRIBUTE_HIDDEN | _FILE_ATTRIBUTE_SYSTEM)
+
+
+def list_dirs(path: Any) -> dict[str, Any]:
+    """폴더 고르기 창용: 하위 폴더 이름만 (파일 내용은 읽지 않는다)."""
+    raw = str(path or "").strip()
+    base = {"roots": _fs_roots(), "sep": os.sep, "home": str(Path.home())}
+    if not raw:
+        return {**base, "path": None, "parent": None, "entries": [], "truncated": False}
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        raise ApiError(400, f"절대 경로여야 합니다: {raw}")
+    try:
+        p = p.resolve()
+    except OSError:
+        pass
+    if not p.is_dir():
+        raise ApiError(404, f"없는 폴더입니다: {p}")
+    try:
+        with os.scandir(p) as it:
+            found = [e for e in it if _visible_dir(e)]
+    except OSError as e:
+        raise ApiError(403, f"열 수 없는 폴더입니다: {p} ({e.strerror or e})") from None
+    found.sort(key=lambda e: e.name.lower())
+    entries = []
+    for e in found[:FS_MAX_ENTRIES]:
+        full = Path(e.path)
+        entries.append({"name": e.name, "path": str(full), "git": (full / ".git").exists(),
+                        "duet": (full / DUET_DIR).is_dir()})
+    parent = str(p.parent) if p.parent != p else None
+    return {**base, "path": str(p), "parent": parent, "entries": entries, "truncated": len(found) > FS_MAX_ENTRIES}
+
+
 # ====================================================================== API 메서드 표 (로컬 HTTP 와 원격 _api 가 같이 씀)
 def _req(args: dict[str, Any], key: str) -> Any:
     return args.get(key)
@@ -747,6 +805,7 @@ API_METHODS: dict[str, Any] = {
     "doctor": lambda d, a: d.doctor(),
     "defaults": lambda d, a: d._defaults(None),
     "workflows": lambda d, a: d.workflows(a.get("project")),
+    "list_dirs": lambda d, a: list_dirs(a.get("path")),
 }
 
 

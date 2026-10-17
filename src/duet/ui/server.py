@@ -33,6 +33,7 @@ from duet.config import CLAUDE_MODEL_SUGGESTIONS, EFFORT_SUGGESTIONS
 from duet.doctor import ACTIONS, PATH_PREFIX, action_shell
 from duet import __version__
 from duet.remote import Remote, RemoteError, package_digest
+from duet.runner import run_process
 from duet.settings import LOCAL_MACHINE, SettingsError, load_settings, save_settings, validate_machine
 from duet.ui.dashboard import ApiError, Dashboard, dispatch
 from duet.ui.terminal import TermJob
@@ -92,7 +93,7 @@ class DuetServer(ThreadingHTTPServer):
         return {"version": __version__, "loaded": self.loaded_hash[:12], "current": cur[:12],
                 "stale": bool(cur and self.loaded_hash and cur != self.loaded_hash),
                 "uptime_sec": int(time.time() - self.started_at), "running_terms": running,
-                "logos": {n: True for n in LOGO_NAMES}}
+                "logos": {n: True for n in LOGO_NAMES}, "native_picker": native_picker_available()}
 
     def restart(self) -> dict[str, Any]:
         running = [t.title for t in self.terms.values() if t.running]
@@ -120,6 +121,26 @@ class DuetServer(ThreadingHTTPServer):
             return list(load_settings().get("machines") or [])
         except SettingsError:
             return []
+
+    def native_pick(self, start: Any) -> dict[str, Any]:
+        """OS 폴더 선택 창을 띄우고 고른 경로를 돌려준다(취소하면 path=None). 이 머신에서만 (DESIGN.md 28.9)."""
+        if not native_picker_available():
+            raise ApiError(400, "이 서버에서는 폴더 선택 창을 띄울 수 없습니다.")
+        if not _pick_lock.acquire(blocking=False):
+            raise ApiError(409, "폴더 선택 창이 이미 열려 있습니다.")
+        try:
+            initial = str(start or "").strip()
+            initial = str(Path(initial).expanduser()) if initial and Path(initial).expanduser().is_dir() else ""
+            r = run_process([sys.executable, "-c", _PICK_SCRIPT, initial], Path.home(), timeout_sec=PICK_TIMEOUT_SEC,
+                            env={"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+        finally:
+            _pick_lock.release()
+        if r.timed_out:
+            raise ApiError(504, "폴더 선택 창이 너무 오래 열려 있어 닫았습니다.")
+        if r.exit_code != 0:
+            raise ApiError(500, f"폴더 선택 창을 띄우지 못했습니다: {(r.stderr or '').strip()[-300:]}")
+        picked = (r.stdout or "").strip()
+        return {"path": os.path.normpath(picked) if picked else None}
 
     def machine(self, mid: str) -> dict[str, Any]:
         for m in self.machines():
@@ -532,6 +553,7 @@ class Handler(BaseHTTPRequestHandler):
         ("POST", "/api/projects/prune"): "prune_projects",
         ("GET", "/api/bench"): "bench_list",
         ("GET", "/api/bench/result"): "bench_result",
+        ("GET", "/api/fs/dirs"): "list_dirs",
     }
 
     def _api(self, method: str, path: str, q: dict[str, str], body: dict[str, Any]) -> Any:
@@ -554,6 +576,7 @@ class Handler(BaseHTTPRequestHandler):
             ("GET", "/api/terms"): lambda: {"terms": srv.terms_list()},
             ("POST", "/api/term/input"): lambda: srv.term_input(body.get("id"), body.get("text")),
             ("POST", "/api/term/kill"): lambda: srv.term_kill(body.get("id")),
+            ("POST", "/api/fs/pick"): lambda: srv.native_pick(body.get("start")),
         }
         handler = special.get((method, path))
         if handler is not None:
@@ -595,6 +618,35 @@ CODEX_NOTE_KO = {
     "Older fast and efficient model.": "구세대 · 빠르고 효율적",
     "Latest frontier agentic coding model for broad defensive cybersecurity work.": "최신 에이전트 코딩 모델 · 방어적 보안 작업용",
 }
+
+
+# ---------------------------------------------------------------- 폴더 고르기 (DESIGN.md 28.9)
+PICK_TIMEOUT_SEC = 600
+_PICK_SCRIPT = """
+import sys, tkinter
+from tkinter import filedialog
+root = tkinter.Tk()
+root.withdraw()
+try:
+    root.attributes("-topmost", True)
+except tkinter.TclError:
+    pass
+root.update()
+path = filedialog.askdirectory(parent=root, initialdir=sys.argv[1] or None, title="작업 폴더 고르기", mustexist=False)
+sys.stdout.write(path or "")
+"""
+_pick_lock = threading.Lock()
+
+
+def native_picker_available() -> bool:
+    """서버가 있는 머신에서 OS 폴더 선택 창을 띄울 수 있는가 (Windows·macOS, 또는 화면이 있는 Linux + tkinter)."""
+    import importlib.util
+
+    if os.environ.get("DUET_NO_NATIVE_PICKER"):
+        return False
+    if sys.platform not in ("win32", "darwin") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return False
+    return importlib.util.find_spec("tkinter") is not None
 
 
 def cli_default_models() -> dict[str, str | None]:

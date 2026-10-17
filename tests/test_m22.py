@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import urllib.error
 import urllib.request
@@ -296,3 +297,75 @@ def test_settings_api_has_builtin_default_and_model_notes(server):
     claude = {m["id"]: m for m in data["suggestions"]["claude"]["models"]}
     assert claude["claude-sonnet-5-5"]["label"] == "Sonnet 5.5" and claude["claude-sonnet-5-5"]["note"]
     assert all("-" in k and k[-1].isdigit() for k in claude)                                 # 버전 있는 이름만
+
+
+# ====================================================================== 28.9 폴더 고르기
+def test_list_dirs_and_api(server, tmp_path: Path):
+    from duet.ui.dashboard import ApiError, list_dirs
+
+    (tmp_path / "b-proj" / ".git").mkdir(parents=True)
+    (tmp_path / "a-run" / ".duet").mkdir(parents=True)
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / "C-upper").mkdir()
+    (tmp_path / "file.txt").write_text("x", encoding="utf-8")
+    r = list_dirs(str(tmp_path))
+    assert [e["name"] for e in r["entries"]] == ["a-run", "b-proj", "C-upper"]          # 폴더만, 숨김 제외, 대소문자 무시 정렬
+    flags = {e["name"]: (e["git"], e["duet"]) for e in r["entries"]}
+    assert flags == {"a-run": (False, True), "b-proj": (True, False), "C-upper": (False, False)}
+    assert r["parent"] == str(tmp_path.resolve().parent) and r["truncated"] is False and r["sep"]
+    start = list_dirs("")
+    assert start["path"] is None and start["entries"] == [] and start["roots"][0]["path"] == str(Path.home())
+    for bad, code in (("relative/path", 400), (str(tmp_path / "nope"), 404), (str(tmp_path / "file.txt"), 404)):
+        with pytest.raises(ApiError) as ei:
+            list_dirs(bad)
+        assert ei.value.status == code
+    s, data = api(server, f"/api/fs/dirs?path={tmp_path}")
+    assert s == 200 and [e["name"] for e in data["entries"]] == ["a-run", "b-proj", "C-upper"]
+    assert req(server, f"/api/fs/dirs?path={tmp_path}")[0] == 401                     # 토큰이 있어야
+    assert "native_picker" in api(server, "/api/server")[1]
+
+
+def test_list_dirs_truncates(tmp_path: Path, monkeypatch):
+    import duet.ui.dashboard as dash
+
+    monkeypatch.setattr(dash, "FS_MAX_ENTRIES", 3)
+    for i in range(5):
+        (tmp_path / f"d{i}").mkdir()
+    r = dash.list_dirs(str(tmp_path))
+    assert [e["name"] for e in r["entries"]] == ["d0", "d1", "d2"] and r["truncated"] is True
+
+
+def test_native_pick(server, tmp_path: Path, monkeypatch):
+    import duet.ui.server as srvmod
+    from duet.runner import ProcessResult
+
+    monkeypatch.setattr(srvmod, "native_picker_available", lambda: False)
+    s, data = api(server, "/api/fs/pick", method="POST", body={"start": str(tmp_path)})
+    assert s == 400 and "띄울 수 없습니다" in data["error"]
+    monkeypatch.setattr(srvmod, "native_picker_available", lambda: True)
+    seen = {}
+
+    def fake_run(cmd, cwd, **kw):
+        seen["argv"] = cmd
+        return ProcessResult(cmd=cmd, exit_code=0, stdout=seen.get("out", ""), stderr="", duration_sec=0.1)
+
+    monkeypatch.setattr(srvmod, "run_process", fake_run)
+    seen["out"] = (tmp_path / "picked").as_posix()
+    s, data = api(server, "/api/fs/pick", method="POST", body={"start": str(tmp_path)})
+    assert s == 200 and data["path"] == os.path.normpath(str(tmp_path / "picked"))
+    assert seen["argv"][-1] == str(tmp_path)                                           # 시작 폴더
+    seen["out"] = ""
+    assert api(server, "/api/fs/pick", method="POST", body={"start": str(tmp_path / "nope")})[1] == {"path": None}
+    assert seen["argv"][-1] == ""                                                       # 없는 시작 폴더는 비움
+
+
+def test_native_picker_available_rules(monkeypatch):
+    import duet.ui.server as srvmod
+
+    monkeypatch.setenv("DUET_NO_NATIVE_PICKER", "1")
+    assert srvmod.native_picker_available() is False
+    monkeypatch.delenv("DUET_NO_NATIVE_PICKER")
+    monkeypatch.setattr(srvmod.sys, "platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    assert srvmod.native_picker_available() is False                                   # 화면 없는 리눅스(css53)
