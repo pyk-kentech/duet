@@ -54,7 +54,7 @@ function agentLogo(agent, size = 16) {
   const base = String(agent || '').replace(/^mock-/, '');
   const sz = [12, 16, 18, 22].includes(size) ? size : 16;
   const logos = (typeof app !== 'undefined' && app.server && app.server.logos) || {};
-  if (logos[base]) return h('img', { src: `/logos/${base}.svg`, alt: '', class: `logo logo-img s${sz}` });
+  if (logos[base]) return h('img', { src: `/logos/${base}.svg`, alt: '', class: `logo logo-img logo-${base} s${sz}` });
   const kind = base === 'claude' || base === 'codex' ? base : 'x';
   return h('span', { class: `logo logo-badge logo-${kind} s${sz}`, 'aria-hidden': 'true' },
     kind === 'claude' ? 'C' : kind === 'codex' ? 'X' : (base[0] || '?').toUpperCase());
@@ -230,63 +230,175 @@ function foldDescriptions(root) {
   }
 }
 
+// 프로그램이 select.value 를 바꿔도(이벤트 없음) 보이는 부분을 다시 그리게 한다.
+function watchSelect(sel, paint) {
+  (sel._paints = sel._paints || []).push(paint);
+  if (sel._watched) return;
+  sel._watched = true;
+  const run = () => sel._paints.forEach(f => f());
+  const proto = HTMLSelectElement.prototype;
+  for (const prop of ['value', 'selectedIndex']) {
+    const d = Object.getOwnPropertyDescriptor(proto, prop);
+    Object.defineProperty(sel, prop, { configurable: true, get() { return d.get.call(this); }, set(v) { d.set.call(this, v); run(); } });
+  }
+  new MutationObserver(run).observe(sel, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
+  sel.addEventListener('change', run);
+  if (sel.form) sel.form.addEventListener('reset', () => setTimeout(run));
+}
+
+// 떠 있는 메뉴: 창(dialog) 안에 있어도 잘리지 않게 화면 기준으로 띄우고, 아래 자리가 모자라면 위로 연다.
+let openFloat = null;
+function closeFloat() { if (openFloat) openFloat.close(); }
+function floatMenu(anchor, menu) {
+  closeFloat();
+  const host = anchor.closest('dialog[open]') || document.body;
+  menu.classList.add('float-menu');
+  host.append(menu);
+  const place = () => {
+    const r = anchor.getBoundingClientRect();
+    const w = Math.max(r.width, 260);
+    const below = window.innerHeight - r.bottom - 12, above = r.top - 12;
+    const up = below < 240 && above > below;
+    menu.style.width = `${Math.min(w, window.innerWidth - 16)}px`;
+    menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
+    menu.style.maxHeight = `${Math.max(160, Math.min(440, up ? above : below))}px`;
+    menu.style.top = up ? '' : `${r.bottom + 6}px`;
+    menu.style.bottom = up ? `${window.innerHeight - r.top + 6}px` : '';
+  };
+  place();
+  const onDown = ev => { if (!menu.contains(ev.target) && !anchor.contains(ev.target)) st.close(); };
+  const onScroll = ev => { if (!menu.contains(ev.target)) st.close(); };
+  const onKey = ev => {
+    if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); st.close(); anchor.focus(); return; }
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      const items = [...menu.querySelectorAll('.fm-item:not(:disabled)')];
+      if (!items.length) return;
+      ev.preventDefault();
+      const i = items.indexOf(document.activeElement);
+      items[(i + (ev.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+    }
+  };
+  const st = {
+    anchor,
+    close() {
+      if (openFloat !== st) return;
+      openFloat = null;
+      menu.remove();
+      document.removeEventListener('mousedown', onDown, true);
+      document.removeEventListener('scroll', onScroll, true);
+      document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('resize', st.close);
+      anchor.setAttribute('aria-expanded', 'false');
+    },
+  };
+  document.addEventListener('mousedown', onDown, true);
+  document.addEventListener('scroll', onScroll, true);
+  document.addEventListener('keydown', onKey, true);
+  window.addEventListener('resize', st.close);
+  anchor.setAttribute('aria-expanded', 'true');
+  openFloat = st;
+  (menu.querySelector('.fm-item.on') || menu.querySelector('.fm-item'))?.scrollIntoView({ block: 'nearest' });
+  return st;
+}
+function fmItem({ label, note, on, disabled, icon, onPick }) {
+  return h('button', { type: 'button', role: 'option', class: `fm-item${on ? ' on' : ''}`, 'aria-selected': on ? 'true' : 'false', disabled: disabled || null,
+    onclick: () => { closeFloat(); onPick(); } },
+  icon || null,
+  h('span', { class: 'fm-text' }, h('span', { class: 'fm-label' }, label), note ? h('span', { class: 'fm-note' }, note) : null),
+  h('span', { class: 'fm-check', 'aria-hidden': 'true' }, on ? '✓' : ''));
+}
+const chevron = () => svg('svg', { class: 'chev', viewBox: '0 0 16 16', 'aria-hidden': 'true' }, svg('path', { d: 'M4 6l4 4 4-4' }));
+
+// 기본 <select> 를 같은 모양의 고르는 상자로. 값·이벤트는 원래 select 에 그대로 있다.
+// 항목 설명은 <option data-note="..."> 로 붙인다.
+function fancySelect(sel) {
+  if (sel._fancy || sel.multiple || sel.classList.contains('seg-native')) return;
+  const btn = h('button', { type: 'button', class: 'fs-btn', 'aria-haspopup': 'listbox', 'aria-expanded': 'false' });
+  sel.classList.add('fs-native');
+  sel.after(btn);
+  sel._fancy = btn;
+  const paint = () => {
+    const o = sel.options[sel.selectedIndex];
+    btn.replaceChildren(h('span', { class: 'fs-label' }, o ? o.textContent : ''), chevron());
+    btn.disabled = sel.disabled;
+  };
+  watchSelect(sel, paint);
+  paint();
+  btn.addEventListener('click', () => {
+    if (openFloat && openFloat.anchor === btn) { closeFloat(); return; }
+    const pick = o => () => { sel.value = o.value; sel.dispatchEvent(new Event('input', { bubbles: true })); sel.dispatchEvent(new Event('change', { bubbles: true })); btn.focus(); };
+    const item = o => fmItem({ label: o.textContent, note: o.dataset.note, on: o.selected, disabled: o.disabled, onPick: pick(o) });
+    const menu = h('div', { class: 'fm', role: 'listbox' }, [...sel.children].map(c => c.tagName === 'OPTGROUP'
+      ? [h('div', { class: 'fm-group' }, c.label), [...c.children].map(item)] : item(c)));
+    floatMenu(btn, menu);
+  });
+}
+function enhanceSelects(root) {
+  if (root) root.querySelectorAll('select:not(.seg-native):not(.fs-native)').forEach(fancySelect);
+}
+
 // <select> 를 분절 버튼으로 보이게 한다. 값·이벤트는 원래 select 에 그대로 있어 양식 코드는 바뀌지 않는다.
 function segmentize(sel, labels = {}) {
   if (sel._seg) return sel._seg;
   const seg = h('div', { class: 'segmented', role: 'radiogroup' });
   const sync = () => seg.replaceChildren(...[...sel.options].map(o => h('button', {
     type: 'button', role: 'radio', 'aria-checked': o.value === sel.value ? 'true' : 'false',
-    class: o.value === sel.value ? 'on' : null, disabled: o.disabled || null,
-    onclick: () => { sel.value = o.value; sel.dispatchEvent(new Event('change', { bubbles: true })); sync(); },
+    class: o.value === sel.value ? 'on' : null, disabled: o.disabled || sel.disabled || null,
+    onclick: () => { sel.value = o.value; sel.dispatchEvent(new Event('change', { bubbles: true })); },
   }, labels[o.value] ?? o.textContent)));
+  if (sel._fancy) { sel._fancy.remove(); sel._fancy = null; sel.classList.remove('fs-native'); }
   sel.classList.add('seg-native');
   sel.after(seg);
+  watchSelect(sel, sync);
   sync();
-  new MutationObserver(sync).observe(sel, { childList: true });
-  sel.addEventListener('change', sync);
   sel._seg = seg;
   sel._sync = sync;
   return seg;
 }
 const EFFORT_LABELS = { '': '단계별', minimal: 'min', medium: 'med' };
 
-// 모델 고르기: 브라우저 기본 자동완성(datalist) 대신 직접 만든 목록. 값은 숨은 input 에 있다.
+// 모델 고르기: 추천 모델(이름 + 짧은 설명) + 직접 입력. 값은 숨은 input 에 있다.
+function modelInfo(agent, id) {
+  const list = ((((app.settings || {}).suggestions || {})[agent]) || {}).models || [];
+  return list.find(m => m.id === id);
+}
 function buildModelPicker(box) {
   if (box._built) return;
   box._built = true;
   const agent = box.dataset.agent;
   const input = box.querySelector('input');
   const btn = h('button', { type: 'button', class: 'mp-btn', 'aria-haspopup': 'listbox', 'aria-expanded': 'false' });
-  const menu = h('div', { class: 'mp-menu', role: 'listbox', hidden: true });
-  box.append(btn, menu);
-  const paint = () => btn.replaceChildren(agentLogo(agent, 16),
-    h('span', { class: `mp-label${input.value ? '' : ' def'}` }, input.value || '기본 모델 (CLI 기본값)'), h('span', { class: 'mp-caret' }, '▾'));
+  box.append(btn);
+  const paint = () => {
+    const m = input.value ? modelInfo(agent, input.value) : null;
+    const label = !input.value ? '기본 모델' : m ? m.label : input.value;
+    const note = !input.value ? 'CLI 기본값' : m ? (m.note || '') : '직접 입력한 모델';
+    btn.title = input.value || 'CLI 기본값';
+    btn.replaceChildren(agentLogo(agent, 18), h('span', { class: `mp-label${input.value ? '' : ' def'}` }, label),
+      note ? h('span', { class: 'mp-note' }, note) : null, chevron());
+  };
   const setVal = v => {
     input.value = v;
     paint();
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
   };
-  const close = () => { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); };
-  const open = () => {
+  btn.addEventListener('click', () => {
+    if (openFloat && openFloat.anchor === btn) { closeFloat(); return; }
     const sugg = ((((app.settings || {}).suggestions || {})[agent]) || {}).models || [];
     const known = sugg.some(m => m.id === input.value);
-    const custom = h('input', { type: 'text', class: 'mp-custom', placeholder: '목록에 없으면 모델 이름을 직접 입력', spellcheck: 'false',
+    const custom = h('input', { type: 'text', class: 'mp-custom', placeholder: '목록에 없는 모델 이름을 직접 입력', spellcheck: 'false',
       value: input.value && !known ? input.value : '' });
     custom.addEventListener('keydown', ev => {
-      if (ev.key === 'Enter') { ev.preventDefault(); setVal(custom.value.trim()); close(); }
-      if (ev.key === 'Escape') { ev.preventDefault(); close(); btn.focus(); }
+      if (ev.key === 'Enter') { ev.preventDefault(); setVal(custom.value.trim()); closeFloat(); btn.focus(); }
     });
-    const items = [{ id: '', label: '기본 모델', note: 'CLI 가 정한 기본값' }, ...sugg].map(m => h('button', {
-      type: 'button', role: 'option', class: `mp-item${m.id === input.value ? ' on' : ''}`,
-      onclick: () => { setVal(m.id); close(); btn.focus(); },
-    }, h('span', null, m.label || m.id), m.note ? h('small', null, m.note) : (m.label && m.label !== m.id ? h('small', null, m.id) : null)));
-    menu.replaceChildren(...items, h('div', { class: 'mp-sep' }), custom, h('div', { class: 'mp-hint' }, 'Enter 로 적용'));
-    menu.hidden = false;
-    btn.setAttribute('aria-expanded', 'true');
-  };
-  btn.addEventListener('click', () => (menu.hidden ? open() : close()));
-  document.addEventListener('click', ev => { if (!box.contains(ev.target)) close(); });
+    const menu = h('div', { class: 'fm', role: 'listbox' },
+      fmItem({ label: '기본 모델', note: 'CLI 에 설정된 기본값을 씁니다', on: !input.value, icon: agentLogo(agent, 18), onPick: () => { setVal(''); btn.focus(); } }),
+      sugg.length ? h('div', { class: 'fm-group' }, '추천 모델') : null,
+      sugg.map(m => fmItem({ label: m.label || m.id, note: m.note, on: m.id === input.value, onPick: () => { setVal(m.id); btn.focus(); } })),
+      h('div', { class: 'fm-sep' }), h('div', { class: 'fm-custom' }, custom, h('div', { class: 'fm-hint' }, 'Enter 로 적용')));
+    floatMenu(btn, menu);
+  });
   box._set = v => { input.value = v || ''; paint(); };
   box._repaint = paint;
   paint();
@@ -1424,17 +1536,24 @@ class RunView {
     return entry;
   }
   async openModal(name, showRelated = false) {
+    closeFloat();
     const rel = this.relatedEntry(name);
     const tabs = [{ name, label: STEP[(this.data.entries.find(x => x.name === name) || { meta: {} }).meta.step] || '기록' }];
     if (rel) tabs.push({ name: rel.name, label: rel.label });
     let active = showRelated && rel ? 1 : 0;
     const body = h('div', { class: 'viewer-body md' });
     const head = h('div', { class: 'viewer-head' });
-    const tabBar = tabs.length > 1 ? h('div', { class: 'entry-tabs' }) : null;
+    const tabBar = h('div', { class: 'entry-tabs' });
+    let mode = 'full';
+    try { mode = localStorage.getItem('duet.entryMode') || 'full'; } catch { /* 기억 못 해도 된다 */ }
+    const modeSel = h('select', { 'aria-label': '보기 방식' }, h('option', { value: 'summary' }, '요약'), h('option', { value: 'full' }, '원문'));
+    modeSel.value = mode;
+    modeSel.addEventListener('change', () => { mode = modeSel.value; try { localStorage.setItem('duet.entryMode', mode); } catch { /* 무시 */ } draw(); });
+    const modeSeg = segmentize(modeSel);
     const draw = async () => {
       const t = tabs[active];
-      if (tabBar) tabBar.replaceChildren(...tabs.map((x, k) => h('button', { type: 'button', class: k === active ? 'on' : null,
-        onclick: () => { active = k; draw(); } }, x.label)));
+      tabBar.replaceChildren(...tabs.map((x, k) => h('button', { type: 'button', class: k === active ? 'on' : null,
+        onclick: () => { active = k; draw(); } }, x.label)), h('span', { class: 'spacer' }), modeSel, modeSeg);
       body.replaceChildren(h('div', { class: 'empty-state small' }, '불러오는 중…'));
       let entry;
       try { entry = await this.loadEntry(t.name); } catch (e) { body.replaceChildren(errorBox(e)); return; }
@@ -1443,7 +1562,11 @@ class RunView {
         m.round && m.round !== '0' ? h('span', { class: 'muted' }, `${m.round}회차`) : null,
         h('span', { class: 'spacer' }), h('span', { class: 'file' }, t.name),
         h('button', { type: 'button', class: 'btn btn-sm', onclick: () => entryDialog.close() }, '닫기'));
-      body.replaceChildren(markdown(entry.body));
+      const sum = mode === 'summary' ? summarizeMarkdown(entry.body) : null;
+      body.replaceChildren(
+        sum && sum.same ? h('div', { class: 'entry-note' }, '짧은 기록이라 요약과 원문이 같습니다.') : null,
+        sum && !sum.same ? h('div', { class: 'entry-note' }, `제목과 항목 첫 줄만 추렸습니다 (원문 ${entry.body.length.toLocaleString()}자). 전부 보려면 '원문'.`) : null,
+        markdown(sum ? sum.text : entry.body));
       body.scrollTop = 0;
     };
     entryDialog.replaceChildren(head, tabBar, body);
@@ -1567,7 +1690,7 @@ class BenchView {
       h('td', { class: 'mono small faint' }, r.dir)));
     this.main.replaceChildren(h('div', { class: 'page' },
       h('div', { class: 'page-head' }, h('div', null, h('h1', null, '벤치마크'),
-        h('div', { class: 'muted' }, '같은 과제 묶음을 워크플로별로 돌리고 숨은 수용 테스트로 채점한 결과입니다. `duet bench run` 으로 만듭니다.'))),
+        h('div', { class: 'muted' }, '어떤 워크플로가 더 잘 만드는지 비교합니다. 같은 과제들을 워크플로마다 돌리고, 에이전트에게 보이지 않는 채점용 테스트로 결과물을 채점합니다. 터미널에서 duet bench run 으로 만듭니다.'))),
       machineTabs(m, id => `#/bench${id !== LOCAL ? `?m=${enc(id)}` : ''}`),
       results.length ? h('div', { class: 'card table-wrap' }, h('table', { class: 'plain' },
         h('thead', null, h('tr', null, ['결과', '묶음', '워크플로', '실행', '승인', '숨은 테스트 전부 통과', '폴더'].map(t => h('th', null, t)))),
@@ -1861,49 +1984,71 @@ function fmtOptValue(o, v) {
   if (v === false) return '끔';
   return v === null || v === undefined || v === '' ? '없음' : String(v);
 }
-function optionInput(o, value) {
-  // 비워 두면(기본값) 저장된 값·duet.toml·내장 기본값을 따른다
-  const def = `기본 (${fmtOptValue(o, o.effective)})`;
+// 고급 설정 칸. 비교 기준(base)은 설정 화면에서는 duet 내장 기본값, 새 실행 창에서는 지금 설정값이다.
+// 칸에는 늘 실제 값을 보이고, 기준과 같으면 저장하지 않는다(기준이 바뀌면 그대로 따라감).
+function optStr(v) { return v === true ? 'true' : v === false ? 'false' : v === null || v === undefined ? '' : String(v); }
+function optionInput(o, value, base) {
+  const cur = optStr(value ?? base);
   let el;
   if (o.kind === 'bool') {
-    el = h('select', null, h('option', { value: '' }, def), h('option', { value: 'true' }, '켬'), h('option', { value: 'false' }, '끔'));
-    el.value = value === true ? 'true' : value === false ? 'false' : '';
+    el = h('select', null, h('option', { value: 'true' }, '켬'), h('option', { value: 'false' }, '끔'));
   } else if (o.kind === 'choice') {
-    el = h('select', null, h('option', { value: '' }, def), (o.choices || []).map(c => h('option', { value: c }, c)));
-    el.value = value ?? '';
+    const choices = [...(o.choices || [])];
+    el = h('select', null, base == null || base === '' ? h('option', { value: '' }, '없음') : null, choices.map(c => h('option', { value: c }, c)));
+    if (cur && !choices.includes(cur)) el.append(h('option', { value: cur }, cur));
   } else {
     el = h('input', { type: o.kind === 'int' ? 'number' : 'text', min: o.min ?? null, max: o.max ?? null,
-      value: value ?? '', placeholder: def, spellcheck: 'false', autocomplete: 'off' });
+      placeholder: base == null || base === '' ? '없음' : String(base), spellcheck: 'false', autocomplete: 'off' });
   }
+  el.value = cur;
   el.dataset.option = o.key;
+  el.dataset.base = optStr(base);
   return el;
 }
-function optionFields(options, values, filter) {
-  // 묶음별 접히는 목록. 줄마다 이름·설명은 왼쪽, 고르는 칸은 오른쪽. 기본값에서 바꾼 줄은 ● 표시
+function optionFields(options, values, filter, { baseKey = 'default', resetLabel = '기본값' } = {}) {
+  // 묶음별 접히는 목록. 줄마다 이름·설명은 왼쪽, 값은 오른쪽. 기준과 다른 줄은 표시하고 ↺ 로 되돌린다
   const groups = {};
   for (const o of options.filter(filter)) (groups[o.group_label] = groups[o.group_label] || []).push(o);
   return Object.entries(groups).map(([label, list]) => {
-    const set = list.filter(o => values[o.key] !== undefined && values[o.key] !== null && values[o.key] !== '').length;
+    const count = h('span', { class: 'opt-count', hidden: true });
     const rows = list.map(o => {
-      const ctl = optionInput(o, values[o.key]);
-      const wrap = h('div', { class: 'opt-ctl' }, ctl);
-      if (o.kind === 'bool') segmentize(ctl, { '': `기본·${fmtOptValue(o, o.effective)}` });
-      const row = h('div', { class: `opt-row${ctl.value ? ' changed' : ''}` },
-        h('div', { class: 'opt-text' }, h('div', { class: 'opt-label' }, o.label), h('div', { class: 'opt-help' }, o.help)), wrap);
-      const mark = () => row.classList.toggle('changed', !!String(ctl.value).trim());
+      const base = o[baseKey];
+      const ctl = optionInput(o, values[o.key], base);
+      const isChanged = () => { const v = ctl.value.trim(); return v !== '' && v !== ctl.dataset.base; };
+      const reset = h('button', { type: 'button', class: 'opt-reset', title: `${resetLabel}(${fmtOptValue(o, base)})으로 되돌리기`, 'aria-label': `${o.label} ${resetLabel}으로 되돌리기` }, '↺');
+      const row = h('div', { class: 'opt-row' },
+        h('div', { class: 'opt-text' }, h('div', { class: 'opt-label' }, o.label), h('div', { class: 'opt-help' }, o.help)),
+        h('div', { class: 'opt-ctl' }, reset, ctl));
+      if (o.kind === 'bool') segmentize(ctl);
+      const mark = () => {
+        row.classList.toggle('changed', isChanged());
+        const n = list.length && rows.filter(r => r.classList.contains('changed')).length;
+        count.hidden = !n;
+        count.textContent = `${n}개 바꿈`;
+      };
+      reset.addEventListener('click', () => { ctl.value = ctl.dataset.base; ctl.dispatchEvent(new Event('change', { bubbles: true })); });
       ctl.addEventListener('change', mark);
       ctl.addEventListener('input', mark);
+      row._mark = mark;
       return row;
     });
-    return h('details', { class: 'opt-section', open: true },
-      h('summary', null, label, set ? h('span', { class: 'opt-count' }, `${set}개 바꿈`) : null),
-      h('div', { class: 'opt-list' }, rows));
+    rows.forEach(r => r._mark());
+    return h('details', { class: 'opt-section', open: true }, h('summary', null, label, count), h('div', { class: 'opt-list' }, rows));
   });
 }
+function resetOptions(root) {
+  for (const el of root.querySelectorAll('[data-option]')) {
+    el.value = el.dataset.base;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+}
+
 function collectOptions(root, keepEmpty) {
+  // 기준과 같은 값은 '지정 안 함'(설정 화면은 지움, 새 실행 창은 안 보냄)
   const out = {};
   for (const el of root.querySelectorAll('[data-option]')) {
-    const v = el.value.trim();
+    let v = el.value.trim();
+    if (v === (el.dataset.base ?? '')) v = '';
     if (v || keepEmpty) out[el.dataset.option] = v;
   }
   return out;
@@ -2060,9 +2205,12 @@ class SettingsView {
     const advBody = h('div', null, optionFields(v.options || [], d, () => true));
     const advancedCard = h('div', { class: 'card section-card' },
       h('h2', null, '고급 설정'),
-      h('p', { class: 'desc' }, '리뷰 관문·중재자·중복 확인·안전장치·한도 대기 같은 설정입니다. 비워 두면 기본값을 씁니다. 항목에 마우스를 올리면 설명이 나옵니다.'),
+      h('p', { class: 'desc' }, '리뷰 관문·중재자·중복 확인·안전장치·한도 대기 같은 설정입니다. 칸에는 지금 쓰는 값이 보입니다. 기본값과 다른 줄은 표시되고, ↺ 로 하나씩, \'기본값으로\' 로 전부 되돌립니다.'),
       advBody,
-      h('div', { class: 'actions' }, h('button', { class: 'btn btn-primary', type: 'button', onclick: () => this.save({ options: collectOptions(advBody, true) }) }, '저장')));
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn btn-primary', type: 'button', onclick: () => this.save({ options: collectOptions(advBody, true) }) }, '저장'),
+        h('button', { class: 'btn', type: 'button', onclick: () => resetOptions(advBody) }, '기본값으로'),
+        h('span', { class: 'muted small' }, '되돌린 뒤 저장해야 적용됩니다.')));
 
     const sv = app.server || {};
     const serverCard = h('div', { class: 'card section-card' },
@@ -2148,7 +2296,7 @@ async function fillWorkflows(machine, project, value) {
   let data = { workflows: [], default: 'classic' };
   try { data = await api('/api/workflows', { query: { project }, machine }); } catch (e) { /* 예전 원격 duet: classic 만 */ }
   dlgWorkflows = data.workflows && data.workflows.length ? data.workflows : [{ id: 'classic', name: 'classic', summary: '', roles: [], source: 'config', source_label: '기본' }];
-  f.workflow.replaceChildren(...dlgWorkflows.map(w => h('option', { value: w.id, disabled: w.source === 'error' },
+  f.workflow.replaceChildren(...dlgWorkflows.map(w => h('option', { value: w.id, disabled: w.source === 'error', 'data-note': w.source === 'error' ? w.error : (w.description || w.summary || null) },
     `${w.id}${w.source_label ? ` · ${w.source_label}` : ''}${w.source === 'error' ? ' (오류)' : ''}`)));
   const want = value || data.default || 'classic';
   f.workflow.value = dlgWorkflows.some(w => w.id === want && w.source !== 'error') ? want : 'classic';
@@ -2387,15 +2535,16 @@ async function openRunDialog({ machine = LOCAL, project = '', defaults = null, h
   f.test_command.value = '';
   f.test_command.placeholder = eff.test_command && eff.test_command !== 'auto' ? `설정값: ${eff.test_command}` : '자동 감지 (예: python3 -m pytest -q)';
   document.querySelectorAll('#run-form .model-picker').forEach(buildModelPicker);
+  enhanceSelects($('#run-form'));
   document.querySelectorAll('#run-form [data-logo]').forEach(el => el.replaceChildren(agentLogo(el.getAttribute('data-logo'), 22)));
   for (const a of ['claude', 'codex']) {
     f[`${a}_model`].closest('.model-picker')._set((eff[a] || {}).model || '');
     setEffortOptions(a, (eff[a] || {}).effort);
     segmentize(f[`${a}_effort`], EFFORT_LABELS);
-    f[`${a}_effort`]._sync();
   }
   await fillWorkflows(machine, project, eff.workflow);
-  $('#run-advanced-body').replaceChildren(...optionFields(app.settings.options || [], {}, o => o.run_dialog));
+  $('#run-advanced-body').replaceChildren(...optionFields(app.settings.options || [], {}, o => o.run_dialog, { baseKey: 'effective', resetLabel: '설정값' }));
+  enhanceSelects($('#run-form'));
   $('#run-advanced').open = false;
   renderWorkflowDiagram();
   f.skip_design.disabled = project ? !hasDesign : false;
@@ -2511,11 +2660,40 @@ async function restartServer() {
 }
 $('#restart-btn').addEventListener('click', restartServer);
 
+// 기록 요약: 제목, 목록 항목의 첫 줄, 각 단락의 첫 문장만 남긴다(코드·표는 뺌). 모델을 부르지 않는다.
+function summarizeMarkdown(text) {
+  const out = [];
+  let inCode = false, paraTaken = false, inList = false;
+  const clip = s => (s.length > 180 ? `${s.slice(0, 177)}…` : s);
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.replace(/\s+$/, '');
+    if (/^\s*```/.test(line)) { inCode = !inCode; continue; }
+    if (inCode) continue;
+    if (/^#{1,6}\s/.test(line)) { out.push('', line); paraTaken = false; continue; }
+    if (/^\s*<\/?verdict>/.test(line) || /^\s*(status|must_fix|blocking)\s*:/.test(line)) { out.push(line); continue; }
+    const li = line.match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+    if (li) {
+      if (li[1].length <= 2) { if (!inList && out.length && out[out.length - 1] !== '') out.push(''); out.push(`${li[1]}${li[2]} ${clip(li[3])}`); }
+      inList = true;
+      continue;
+    }
+    if (inList && /^\s+\S/.test(line)) continue;     // 목록 항목의 이어지는 줄
+    if (/^\s*\|/.test(line) || /^\s*>/.test(line)) continue;
+    if (!line.trim()) { paraTaken = false; inList = false; continue; }
+    inList = false;
+    if (!paraTaken) { const m = line.trim().match(/^.*?[.!?。](\s|$)/); out.push('', clip(m ? m[0].trim() : line.trim())); paraTaken = true; }
+  }
+  const t = out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return { text: t, same: t.length >= String(text || '').trim().length * 0.85 };
+}
+
 // 기록 크게 보기 창 (실행 상세의 대화 탭)
 const entryDialog = h('dialog', { class: 'dialog entry-dialog', 'aria-label': '기록 크게 보기' });
 document.body.append(entryDialog);
 entryDialog.addEventListener('click', ev => { if (ev.target === entryDialog) entryDialog.close(); });   // 바깥을 누르면 닫기
-new MutationObserver(() => foldDescriptions($('#main'))).observe($('#main'), { childList: true, subtree: true });
+entryDialog.addEventListener('close', closeFloat);
+new MutationObserver(() => { foldDescriptions($('#main')); enhanceSelects($('#main')); }).observe($('#main'), { childList: true, subtree: true });
+window.addEventListener('hashchange', () => { closeFloat(); if (entryDialog.open) entryDialog.close(); });
 
 // =================================================================== boot
 document.querySelectorAll('[data-logo]').forEach(el => el.replaceChildren(agentLogo(el.getAttribute('data-logo'), 22)));

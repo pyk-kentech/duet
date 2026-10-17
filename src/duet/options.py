@@ -134,6 +134,7 @@ def schema(cfg: Config | None = None, workflows: list[str] | None = None) -> lis
             cfg = load_config(None)
         except ConfigError:
             cfg = Config()
+    builtin = Config()
     out = []
     order = list(GROUPS)
     for o in sorted(OPTIONS, key=lambda o: order.index(o.group)):     # 묶음 순서대로 (정렬은 안정적)
@@ -141,6 +142,7 @@ def schema(cfg: Config | None = None, workflows: list[str] | None = None) -> lis
         if o.key == "workflow" and workflows:
             d["choices"] = list(workflows)
         d["effective"] = getattr(cfg, o.key)
+        d["default"] = getattr(builtin, o.key)            # duet 내장 기본값 (설정 화면의 '기본값으로')
         d["group_label"] = GROUPS[o.group]
         out.append(d)
     return out

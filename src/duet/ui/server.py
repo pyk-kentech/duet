@@ -577,6 +577,19 @@ def local_action_argv(action) -> tuple[list[str], str]:
     return ["sh", "-c", PATH_PREFIX + action.shell], "pty"
 
 
+# 모델 고르기 목록의 이름·한 줄 설명 (Codex 는 ~/.codex/models_cache.json 의 설명을 그대로 쓴다)
+CLAUDE_MODEL_INFO = {
+    "fable": {"label": "Fable", "note": "가장 강력한 최신 모델 · 어려운 설계·대형 작업 (별칭)"},
+    "opus": {"label": "Opus", "note": "높은 품질 · 복잡한 구현·리뷰 (별칭)"},
+    "sonnet": {"label": "Sonnet", "note": "속도와 품질의 균형 · 분업 작업자에 알맞음 (별칭)"},
+    "haiku": {"label": "Haiku", "note": "가장 빠르고 가벼움 · 중복 확인 같은 작은 일 (별칭)"},
+    "claude-fable-5-1": {"label": "Fable 5.1", "note": "버전 고정 · 별칭이 바뀌어도 이 모델"},
+    "claude-opus-5-5": {"label": "Opus 5.5", "note": "버전 고정 · 별칭이 바뀌어도 이 모델"},
+    "claude-sonnet-5-5": {"label": "Sonnet 5.5", "note": "버전 고정 · 별칭이 바뀌어도 이 모델"},
+    "claude-haiku-5-5": {"label": "Haiku 5.5", "note": "버전 고정 · 별칭이 바뀌어도 이 모델"},
+}
+
+
 def model_suggestions() -> dict[str, Any]:
     """모델 선택 상자에 보여줄 후보. Codex 는 ~/.codex/models_cache.json 에서 읽는다."""
     codex: list[dict[str, Any]] = []
@@ -584,13 +597,13 @@ def model_suggestions() -> dict[str, Any]:
         cache = json.loads((codex_home() / "models_cache.json").read_text(encoding="utf-8"))
         for m in cache.get("models", []):
             if isinstance(m, dict) and m.get("slug") and m.get("visibility") == "list":
-                codex.append({"id": m["slug"], "label": m.get("display_name") or m["slug"],
+                codex.append({"id": m["slug"], "label": m.get("display_name") or m["slug"], "note": m.get("description") or "",
                               "efforts": [e.get("effort") for e in m.get("supported_reasoning_levels") or [] if isinstance(e, dict)],
                               "default_effort": m.get("default_reasoning_level")})
     except (OSError, ValueError, AttributeError):
         pass
     return {
-        "claude": {"models": [{"id": x, "label": x} for x in CLAUDE_MODEL_SUGGESTIONS],
+        "claude": {"models": [{"id": x, **CLAUDE_MODEL_INFO.get(x, {"label": x})} for x in CLAUDE_MODEL_SUGGESTIONS],
                    "efforts": EFFORT_SUGGESTIONS["claude"]},
         "codex": {"models": codex, "efforts": EFFORT_SUGGESTIONS["codex"]},
     }

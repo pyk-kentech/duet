@@ -675,12 +675,19 @@ table, .num, .dur, .chip { font-variant-numeric: tabular-nums; }
 /* ---- 제목 뒤 은은한 빛 (화면 전체에 한 번만) */
 .main { position: relative; isolation: isolate; }
 .main::before {
-  content: ""; position: absolute; inset: 0 0 auto 0; height: 260px; z-index: -1; pointer-events: none;
+  /* 오른쪽 위 모서리에서 번지는 빛 한 번. 글자 뒤로는 오지 않는다 */
+  content: ""; position: absolute; top: 0; right: 0; width: min(620px, 70%); height: 340px; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(520px 220px at 12% -60px, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%),
-    radial-gradient(420px 200px at 88% -80px, color-mix(in srgb, var(--codex) 8%, transparent), transparent 70%),
-    radial-gradient(380px 180px at 55% -90px, color-mix(in srgb, var(--claude) 7%, transparent), transparent 70%);
+    radial-gradient(260px 200px at 100% 0%, color-mix(in srgb, var(--purple) 30%, transparent), transparent 70%),
+    radial-gradient(340px 240px at 78% -12%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 72%),
+    radial-gradient(300px 220px at 100% 38%, color-mix(in srgb, var(--codex) 16%, transparent), transparent 70%),
+    radial-gradient(240px 180px at 58% -18%, color-mix(in srgb, var(--claude) 10%, transparent), transparent 70%);
+  filter: blur(18px); opacity: .95;
+  -webkit-mask-image: linear-gradient(to left, #000 35%, transparent), linear-gradient(to bottom, #000 40%, transparent);
+  -webkit-mask-composite: source-in; mask-image: linear-gradient(to left, #000 35%, transparent), linear-gradient(to bottom, #000 40%, transparent);
+  mask-composite: intersect;
 }
+.main { overflow-x: clip; }
 
 /* ---- 제목 영역 */
 .page-head { align-items: flex-end; padding: 6px 0 4px; }
@@ -803,7 +810,7 @@ img.logo { object-fit: contain; }
 @media (max-width: 640px) { .opt-row { flex-direction: column; align-items: stretch; } .opt-ctl { max-width: none; justify-content: flex-start; } }
 
 /* ---- 기록 크게 보기 (가운데 창) */
-.entry-dialog { width: min(920px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; display: flex; flex-direction: column; }
+.entry-dialog { width: min(920px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; flex-direction: column; }
 .entry-dialog[open] { display: flex; }
 .entry-dialog .viewer-head { padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .entry-dialog .entry-tabs { display: flex; gap: 4px; padding: 8px 14px 0; border-bottom: 1px solid var(--line); }
@@ -844,3 +851,72 @@ input::placeholder, textarea::placeholder { color: var(--faint); }
 #workflow-preview { font-family: var(--sans); word-break: keep-all; }
 html[data-theme="dark"] .brand-mark span, html[data-theme="midnight"] .brand-mark span { mix-blend-mode: screen; }
 html[data-theme="light"] .brand-mark span, html[data-theme="paper"] .brand-mark span, html[data-theme="slate"] .brand-mark span { mix-blend-mode: multiply; }
+
+/* ---- 떠 있는 메뉴 (고르는 상자·모델 고르기 공통) */
+.float-menu {
+  position: fixed; z-index: 1000; padding: 6px; border-radius: 12px; overflow: auto; overscroll-behavior: contain;
+  background: color-mix(in srgb, var(--panel) 96%, transparent); border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 18px 48px rgba(15, 23, 42, .18); backdrop-filter: blur(12px);
+  animation: fm-in .12s ease-out;
+}
+@keyframes fm-in { from { opacity: 0; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) { .float-menu { animation: none; } }
+.fm-item {
+  width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--text); cursor: pointer; text-align: left; font: inherit;
+}
+.fm-item:hover, .fm-item:focus-visible { background: var(--panel-2); outline: none; }
+.fm-item.on { background: var(--accent-soft); }
+.fm-item:disabled { opacity: .45; cursor: default; }
+.fm-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.fm-label { font-size: 13.5px; font-weight: 500; }
+.fm-item.on .fm-label { color: var(--accent); font-weight: 600; }
+.fm-note { font-size: 11.5px; color: var(--faint); line-height: 1.4; }
+.fm-check { width: 14px; color: var(--accent); font-size: 12px; font-weight: 700; text-align: center; }
+.fm-group { padding: 8px 10px 4px; font-size: 11px; font-weight: 600; color: var(--faint); letter-spacing: .02em; }
+.fm-sep { height: 1px; background: var(--line); margin: 6px 4px; }
+.fm-custom { padding: 2px 4px 2px; }
+.fm-custom input { width: 100%; height: 34px; font-family: var(--mono); font-size: 12.5px; }
+.fm-hint { font-size: 11px; color: var(--faint); padding: 4px 2px 0; }
+svg.chev { width: 14px; height: 14px; flex: 0 0 auto; fill: none; stroke: var(--faint); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
+[aria-expanded="true"] > svg.chev { transform: rotate(180deg); }
+
+/* ---- 고르는 상자 */
+.fs-native { display: none !important; }
+.fs-btn {
+  display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px 0 12px; min-width: 0; max-width: 100%;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--text); font: inherit; cursor: pointer;
+  text-align: left; transition: border-color .15s, box-shadow .15s, background .15s;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, .03);
+}
+.fs-btn:hover:not(:disabled) { border-color: var(--line-strong); }
+.fs-btn[aria-expanded="true"], .fs-btn:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); outline: none; }
+.fs-btn:disabled { opacity: .6; cursor: default; background: var(--panel-2); }
+.fs-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.field .fs-btn, .form-grid .fs-btn, .field-row .fs-btn { width: 100%; }
+.opt-ctl .fs-btn { width: 180px; height: 34px; }
+
+/* ---- 모델 고르기 버튼: 로고 · 이름 · 짧은 설명 */
+.mp-btn { height: 40px; gap: 9px; }
+.mp-label { flex: 0 1 auto; font-family: var(--sans); font-size: 13.5px; font-weight: 600; }
+.mp-label.def { color: var(--text); font-weight: 500; font-size: 13.5px; }
+.mp-note { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--faint); }
+.mp-caret, .mp-menu { display: none; }
+
+/* ---- 고급 설정: 되돌리기 */
+.opt-ctl { display: flex; align-items: center; gap: 6px; }
+.opt-reset {
+  width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent; color: var(--faint); cursor: pointer;
+  font-size: 14px; visibility: hidden;
+}
+.opt-row.changed .opt-reset { visibility: visible; }
+.opt-reset:hover { background: var(--panel-2); color: var(--accent); }
+
+/* ---- 기록 크게 보기 */
+.entry-dialog .entry-tabs { align-items: center; }
+.entry-dialog .entry-tabs .segmented { margin: 0 4px 6px 0; }
+.entry-note { font-size: 12px; color: var(--faint); margin-bottom: 12px; padding: 6px 10px; border-radius: 8px; background: var(--panel-2); }
+
+/* ---- 다크 테마에서 단색(검정) Codex 로고는 뒤집어 보이게 */
+html[data-theme="dark"] img.logo-codex, html[data-theme="midnight"] img.logo-codex { filter: invert(1); }
+@media (prefers-color-scheme: dark) { html:not([data-theme]) img.logo-codex { filter: invert(1); } }

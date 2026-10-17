@@ -283,3 +283,15 @@ def test_user_logo_served_only_when_present(server, isolated_duet_home):
     assert api(server, "/api/server")[1]["logos"] == {"claude": True, "codex": False}
     (d / "codex.svg").write_bytes(b"<svg>" + b" " * 400_000 + b"</svg>")
     assert req(server, "/logos/codex.svg")[0] == 404                  # 너무 큰 파일은 무시
+
+
+def test_settings_api_has_builtin_default_and_model_notes(server):
+    """고급 설정은 '기본값으로' 되돌릴 내장 기본값을, 모델 목록은 이름·한 줄 설명을 준다."""
+    s, data = api(server, "/api/settings")
+    assert s == 200
+    opts = {o["key"]: o for o in data["options"]}
+    assert all("default" in o and "effective" in o for o in opts.values())
+    from duet.config import Config
+    assert opts["timeout_sec"]["default"] == Config().timeout_sec
+    claude = {m["id"]: m for m in data["suggestions"]["claude"]["models"]}
+    assert claude["sonnet"]["label"] == "Sonnet" and claude["sonnet"]["note"]
