@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from duet import stopflag
+from duet.procs import replace_file
 from duet.runner import pid_alive
 from duet.state import DUET_DIR
 
@@ -88,7 +89,7 @@ class RunLock:
         if self.held:
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps(asdict(self.info), ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, self.path)
+            replace_file(tmp, self.path)
 
     def release(self) -> None:
         if not self.held:

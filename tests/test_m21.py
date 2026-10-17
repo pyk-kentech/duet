@@ -14,7 +14,7 @@ import duet.ui.server as srv_mod
 from duet import doctor, limits, procs, stopflag
 from duet.agents.base import prompt_via_stdin
 from duet.doctor import ACTIONS
-from duet.lock import RunLock
+from duet.lock import RunLock, read_lock
 from duet.remote import Remote
 from duet.runner import pid_alive, run_process
 from duet.testing import run_tests
@@ -62,6 +62,33 @@ def test_kill_tree_kills_grandchildren(tmp_path: Path):
     procs.kill_tree(p, grace=1.0)
     assert p.poll() is not None
     assert wait_until(lambda: not pid_alive(grand)), "손자 프로세스가 남았다"
+
+
+# ====================================================================== 파일 바꿔 쓰기 (27.2)
+def test_set_run_survives_reader_holding_lock_file(tmp_path: Path):
+    """Windows 는 누가 열어 둔 파일을 os.replace 로 바꾸지 못한다. UI 가 잠금을 읽는 순간에 실행이 죽으면 안 된다."""
+    import threading
+    with RunLock(tmp_path, "t") as lock:
+        reader = lock.path.open("rb")             # read_lock 이 파일을 읽고 있는 순간
+        threading.Timer(0.3, reader.close).start()
+        try:
+            lock.set_run("20260101-000000")
+        finally:
+            reader.close()
+        assert read_lock(tmp_path).run_id == "20260101-000000"
+
+
+@pytest.mark.skipif(not WIN, reason="Windows 의 파일 공유 규칙")
+def test_replace_file_gives_up_if_file_stays_open(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(procs, "REPLACE_RETRY_SEC", 0.2)
+    dst, tmp = tmp_path / "a.json", tmp_path / "a.tmp"
+    dst.write_text("old", encoding="utf-8")
+    tmp.write_text("new", encoding="utf-8")
+    with dst.open("rb"):
+        with pytest.raises(PermissionError):
+            procs.replace_file(tmp, dst)
+    procs.replace_file(tmp, dst)
+    assert dst.read_text(encoding="utf-8") == "new"
 
 
 # ====================================================================== 중지 요청 파일 (27.3)

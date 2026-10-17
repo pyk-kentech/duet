@@ -75,6 +75,12 @@ def wait_for(pred, timeout=30.0, step=0.1):
     raise AssertionError("시간 안에 조건이 만족되지 않음")
 
 
+def live_get(srv, path: str, key: str):
+    """실행 중 조회에서 body[key] 가 찼으면 body. 잠금에 run_id 가 찍힌 직후에는 run.json 이 아직 없어 404 일 수 있다."""
+    s, body, _ = call(srv, "GET", path)
+    return body if s == 200 and body[key] else None
+
+
 def mock_run(wd: Path, *extra: str) -> Path:
     assert main(["run", "메모 CLI", "--workdir", str(wd), "--mock", "--debate-rounds", "1", *extra]) in (0, 1)
     return list_run_dirs(wd)[-1]
@@ -272,8 +278,7 @@ def test_stop_then_resume_via_ui(server, tmp_path: Path, monkeypatch):
     project = str(wd.resolve())
 
     # 실행 중 상세: live, current_call
-    run = wait_for(lambda: (lambda r: r if r["current_call"] else None)(
-        call(server, "GET", f"/api/run?project={project}&run={info.run_id}")[1]))
+    run = wait_for(lambda: live_get(server, f"/api/run?project={project}&run={info.run_id}", "current_call"))
     assert run["live"] is True and run["live_pid"] == info.pid
     assert run["current_call"]["agent"] in ("claude", "codex")
     assert run["resume"]["possible"] is False
@@ -428,8 +433,7 @@ def test_activity_api_during_live_run(server, tmp_path: Path, monkeypatch):
     wd = tmp_path / "live"
     s, job, _ = call(server, "POST", "/api/actions/run", body={"project": str(wd), "task": "t", "mock": True, "debate_rounds": 0})
     info = wait_for(lambda: (lambda i: i if i and i.run_id else None)(read_lock(wd)))
-    a = wait_for(lambda: (lambda r: r if r["call"] else None)(
-        call(server, "GET", f"/api/activity?project={wd.resolve()}&run={info.run_id}")[1]))
+    a = wait_for(lambda: live_get(server, f"/api/activity?project={wd.resolve()}&run={info.run_id}", "call"))
     assert a["live"] is True and a["call"]["agent"] in ("claude", "codex") and a["events"] == []
     call(server, "POST", "/api/actions/stop", body={"project": str(wd.resolve())})
     wait_for(lambda: read_lock(wd) is None)

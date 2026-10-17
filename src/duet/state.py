@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from duet.procs import replace_file
 
 RUN_JSON = "run.json"
 DUET_DIR = ".duet"
@@ -143,7 +144,7 @@ class RunState:
         path = run_dir / RUN_JSON
         tmp = run_dir / (RUN_JSON + ".tmp")
         tmp.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        replace_file(tmp, path)
         return path
 
     @classmethod

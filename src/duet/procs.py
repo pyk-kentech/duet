@@ -3,6 +3,7 @@
 나머지 코드는 OS 를 직접 따지지 않고 이 모듈의 함수만 쓴다.
 - 자식 실행 옵션, 프로세스 트리 종료, 생존 확인, 분리 실행
 - 실행 파일 찾기(PATHEXT·배치 파일·파이썬 스크립트), 셸 명령, 파이썬 명령 이름
+- 파일 바꿔 쓰기(Windows 는 다른 프로세스가 읽는 중이면 거부)
 
 Windows 에서는 os.kill 을 쓰지 않는다: os.kill(pid, 0) 이 그 프로세스를 강제 종료한다.
 """
@@ -14,6 +15,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Sequence
@@ -25,6 +27,8 @@ PYTHON_CMD = "python" if IS_WINDOWS else "python3"
 BATCH_SUFFIXES = (".cmd", ".bat")
 # Windows 명령줄은 32767 글자까지. 넉넉히 남기고 그보다 긴 프롬프트는 stdin 으로
 WINDOWS_ARG_MAX_BYTES = 24_000
+# Windows: 다른 프로세스가 대상 파일을 읽는 동안 os.replace 가 거부되면 이 시간까지 다시 시도
+REPLACE_RETRY_SEC = 5.0
 
 _CREATE_NEW_PROCESS_GROUP = 0x00000200
 _DETACHED_PROCESS = 0x00000008
@@ -168,6 +172,29 @@ def looks_like_duet(pid: int) -> bool:
         return b"duet" in cmdline.read_bytes()
     except OSError:
         return False
+
+
+# ====================================================================== 파일
+def replace_file(src: str | Path, dst: str | Path) -> None:
+    """임시 파일로 dst 를 바꿔 쓴다(os.replace).
+
+    Windows 는 다른 프로세스가 dst 를 열어 둔 순간 바꾸기를 거부한다(PermissionError). UI·시험이 잠금·run.json 을
+    자주 읽으므로 그 순간에 걸리면 실행이 죽는다. 읽기는 금방 끝나니 잠깐씩 다시 시도한다.
+    """
+    if not IS_WINDOWS:
+        os.replace(src, dst)
+        return
+    deadline = time.monotonic() + REPLACE_RETRY_SEC
+    wait = 0.005
+    while True:
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(wait)
+            wait = min(wait * 2, 0.1)
 
 
 # ====================================================================== 실행 파일

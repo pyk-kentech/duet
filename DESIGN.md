@@ -987,6 +987,7 @@ OS 마다 다른 부분을 한곳에 모은다. 나머지 코드는 이 함수�
 - **생존 확인**: POSIX 는 `os.kill(pid, 0)` + 좀비 제외. Windows 는 `OpenProcess` + `GetExitCodeProcess`(ctypes, 표준 라이브러리). **Windows 에서 `os.kill` 은 쓰지 않는다.**
 - **분리 실행**(UI 가 띄우는 duet): Windows 는 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`. UI 를 꺼도 실행은 계속된다.
 - **duet 프로세스인지**: Linux 는 `/proc/<pid>/cmdline`, 그 밖에는 잠금 파일을 믿는다(지금처럼).
+- **파일 바꿔 쓰기**(잠금·run.json·projects.json·settings.json, 임시 파일 → `os.replace`): Windows 는 다른 프로세스가 대상 파일을 열어 둔 순간 바꾸기를 거부한다(`PermissionError`). UI·시험이 잠금과 run.json 을 자주 읽으므로 그 순간에 걸리면 실행이 죽는다 → Windows 에서는 최대 5초까지 잠깐씩 다시 시도한다(`procs.replace_file`).
 
 ### 27.3 중지 요청 파일 (모든 OS)
 UI 의 중지는 POSIX 에서 SIGTERM 을 보냈다. Windows 에는 다른 프로세스에 보낼 SIGTERM 이 없고(`TerminateProcess` 는 상태 저장 없이 죽인다), 분리 실행한 프로세스에는 Ctrl-Break 도 닿지 않는다.

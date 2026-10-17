@@ -18,12 +18,12 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import threading
 from pathlib import Path
 from typing import Any
 
+from duet.procs import replace_file
 from duet.registry import duet_home
 
 SETTINGS_FILENAME = "settings.json"
@@ -64,7 +64,7 @@ def save_settings(data: dict[str, Any], home: Path | None = None) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, path)
+        replace_file(tmp, path)
 
 
 def validate_settings(data: dict[str, Any]) -> None:

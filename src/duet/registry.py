@@ -12,6 +12,8 @@ import os
 import threading
 from pathlib import Path
 
+from duet.procs import replace_file
+
 REGISTRY_FILENAME = "projects.json"
 _lock = threading.Lock()
 
@@ -38,7 +40,7 @@ class Registry:
         self.home.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"projects": items}, ensure_ascii=False, indent=2), encoding="utf-8")
-        os.replace(tmp, self.path)
+        replace_file(tmp, self.path)
 
     def list(self) -> list[str]:
         with _lock:
