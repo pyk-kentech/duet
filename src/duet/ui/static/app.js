@@ -153,6 +153,30 @@ async function api(path, { method = 'GET', body, query, machine } = {}) {
 
 // =================================================================== toast
 let toastTimer = null;
+// 확인 창. 브라우저의 confirm() 은 일부 내장 브라우저(앱 안 미리보기 등)에서 창을 띄우지 않고 바로 '취소'를
+// 돌려줘서, 확인이 필요한 버튼(다시 시작·중지·목록에서 지우기·설치)이 아무 일도 안 하는 것처럼 보였다.
+function askConfirm(message, { ok = '확인', danger = false } = {}) {
+  return new Promise(resolve => {
+    const box = h('dialog', { class: 'dialog confirm-dialog', 'aria-label': '확인' },
+      h('div', { class: 'dialog-body' }, h('p', { class: 'confirm-text' }, message)),
+      h('footer', { class: 'dialog-foot' },
+        h('button', { class: 'btn', type: 'button', onclick: () => done(false) }, '취소'),
+        h('button', { class: `btn ${danger ? 'btn-danger' : 'btn-primary'}`, type: 'button', 'data-ok': '', onclick: () => done(true) }, ok)));
+    let settled = false;
+    function done(v) {
+      if (settled) return;
+      settled = true;
+      if (box.open) box.close();
+      box.remove();
+      resolve(v);
+    }
+    box.addEventListener('cancel', ev => { ev.preventDefault(); done(false); });   // Esc
+    document.body.append(box);
+    box.showModal();
+    box.querySelector('[data-ok]').focus();
+  });
+}
+
 function toast(msg, bad = false) {
   const t = $('#toast');
   t.textContent = msg;
@@ -743,7 +767,7 @@ class HomeView {
   }
   async prune(g) {
     const n = g.projects.filter(p => !p.exists).length;
-    if (!confirm(`폴더가 없는 프로젝트 ${n}개를 목록에서 지웁니다. 파일은 건드리지 않습니다.`)) return;
+    if (!(await askConfirm(`폴더가 없는 프로젝트 ${n}개를 목록에서 지웁니다. 파일은 건드리지 않습니다.`, { ok: '목록에서 지우기' }))) return;
     try {
       const r = await api('/api/projects/prune', { method: 'POST', machine: g.id });
       toast(`${r.removed.length}개를 목록에서 지웠습니다.`);
@@ -836,7 +860,7 @@ class ProjectView {
     this.main.replaceChildren(h('div', { class: 'page' }, head, banner, tabs, body));
   }
   async remove() {
-    if (!confirm(`목록에서만 제거합니다. 파일은 지우지 않습니다.\n\n${this.r.project}`)) return;
+    if (!(await askConfirm(`목록에서만 제거합니다. 파일은 지우지 않습니다.\n\n${this.r.project}`, { ok: '목록에서 제거' }))) return;
     try {
       await api('/api/projects', { method: 'DELETE', query: { project: this.r.project }, machine: this.r.machine });
       location.hash = '#/';
@@ -1324,7 +1348,7 @@ class RunView {
 }
 
 async function stopRun(machine, project) {
-  if (!confirm('실행을 중지할까요?\n진행 중인 호출은 버리고, 나중에 이어하기로 그 단계부터 다시 할 수 있습니다.')) return;
+  if (!(await askConfirm('실행을 중지할까요?\n진행 중인 호출은 버리고, 나중에 이어하기로 그 단계부터 다시 할 수 있습니다.', { ok: '중지', danger: true }))) return;
   try {
     const r = await api('/api/actions/stop', { method: 'POST', body: { project }, machine });
     toast(`중지 신호를 보냈습니다 (pid ${r.stopped}).`);
@@ -1512,7 +1536,7 @@ class SetupView {
   }
   async runAction(id) {
     const a = (app.actions || {})[id] || {};
-    if (id.startsWith('install') && !confirm(`${a.title || id}\n\n다음 명령을 실행합니다:\n${this.actCommand(a) || ''}`)) return;
+    if (id.startsWith('install') && !(await askConfirm(`${a.title || id}\n\n다음 명령을 실행합니다:\n${this.actCommand(a) || ''}`, { ok: '실행' }))) return;
     try {
       const job = await api('/api/setup/action', { method: 'POST', body: { action: id }, machine: this.r.machine });
       this.openTerm(job);
@@ -1842,7 +1866,7 @@ class SettingsView {
     } catch (e) { toast(e.message, true); }
   }
   async removeMachine(m) {
-    if (!confirm(`${m.name || m.id} 머신을 목록에서 지울까요? 원격의 파일은 그대로 둡니다.`)) return;
+    if (!(await askConfirm(`${m.name || m.id} 머신을 목록에서 지울까요? 원격의 파일은 그대로 둡니다.`, { ok: '지우기', danger: true }))) return;
     try { app.settings = await api('/api/machines', { method: 'DELETE', query: { id: m.id } }); await loadGroups(); this.render(app.settings); }
     catch (e) { toast(e.message, true); }
   }
@@ -2034,7 +2058,7 @@ async function checkServer() {
 async function restartServer() {
   const running = (app.server && app.server.running_terms) || [];
   if (running.length) { toast(`진행 중인 터미널 작업이 있습니다: ${running.join(', ')}`, true); return; }
-  if (!confirm('UI 를 다시 시작할까요? 같은 주소로 다시 뜨고, 진행 중인 실행은 그대로 돕니다.')) return;
+  if (!(await askConfirm('UI 를 다시 시작할까요? 같은 주소로 다시 뜨고, 진행 중인 실행은 그대로 돕니다.', { ok: '다시 시작' }))) return;
   try { await api('/api/server/restart', { method: 'POST' }); }
   catch (e) { toast(e.message, true); return; }
   $('#restart-overlay').hidden = false;
