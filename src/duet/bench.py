@@ -270,15 +270,6 @@ def week_delta(marks: dict[str, tuple[float, float]], prev: dict[str, float]) ->
     return out
 
 
-def _team(st: RunState) -> dict[str, Any] | None:
-    t = st.team or {}
-    if not t.get("plan"):
-        return None
-    parts = t.get("parts") or {}
-    return {"packages": len(t["plan"].get("packages") or []), "fallback": t.get("fallback"),
-            "parts_done": len(parts), "reverted": sum(len(r.get("reverted") or []) for r in parts.values())}
-
-
 def _row(task: Task, workflow: str, rep: int, wd: Path, seconds: float, outcome: Any | None,
          error: str | None, hidden: dict[str, Any] | None) -> dict[str, Any]:
     row: dict[str, Any] = {"task": task.name, "kind": task.kind, "workflow": workflow, "rep": rep,
@@ -295,7 +286,7 @@ def _row(task: Task, workflow: str, rep: int, wd: Path, seconds: float, outcome:
                stop_reason=st.stop_reason, rounds=len(st.review_history), calls=len(st.calls),
                usage=usage, cost_usd=round(cost, 4), run_dir=str(outcome.run_dir),
                own_tests=last_test.get("status") if last_test else None, hidden=hidden, error=st.error,
-               max_input=_max_input(st), codex_equiv=codex_limit_equiv(usage), team=_team(st))
+               max_input=_max_input(st), codex_equiv=codex_limit_equiv(usage))
     if st.limit_waited_sec:
         row["limit_wait_sec"] = round(st.limit_waited_sec, 1)   # 소요 시간에서 뺄 수 있게 (DESIGN.md 25.1)
     return row
@@ -489,13 +480,6 @@ def summarize(data: dict[str, Any]) -> str:
         lines.append(f"| {r['task']} | {r['workflow']} | {r['rep']} | {STATUS_KO.get(r['status'], r['status'])} | "
                      f"{r.get('rounds') or 0} | {hidden} | {r.get('own_tests') or '-'} | "
                      f"{_fmt_sec(r.get('seconds') or 0)} | {r.get('calls') or 0} | {tok:,} |")
-    teams = [r for r in rows if r.get("team")]
-    if teams:
-        lines += ["", "## 분업", "", "| 과제 | 워크플로 | # | 묶음 | 구현한 묶음 | 되돌린 파일 | 계획 대체 |", "|---|---|---|---|---|---|---|"]
-        for r in teams:
-            t = r["team"]
-            lines.append(f"| {r['task']} | {r['workflow']} | {r['rep']} | {t['packages']} | {t['parts_done']} | "
-                         f"{t['reverted']} | {t['fallback'] or '-'} |")
     lines += ["", "- 숨은 테스트: 에이전트가 보지 못한 수용 테스트. 승인·미승인으로 끝난 실행만 채점한다.",
               "- Codex 한도 환산: 미캐시 입력 + 0.1×캐시 입력 + 5×출력 (요금표 비율). 주간 사용률 변화: 호출에 기록된 7일 창 "
               "사용률의 차이(앞 실행 마지막 값 기준, 같은 시간에 따로 쓴 양이 섞일 수 있음).",

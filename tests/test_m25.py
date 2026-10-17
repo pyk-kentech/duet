@@ -109,9 +109,9 @@ def _with_designs(tmp_path: Path) -> Path:
     return suite
 
 
-def test_run_bench_fixed_design_mock_classic_and_extended(tmp_path: Path):
+def test_run_bench_fixed_design_mock(tmp_path: Path):
     suite = _with_designs(tmp_path)
-    rd = run_bench(suite=str(suite), workflows=["classic", "extended"], task_names=["hello"], out_root=tmp_path / "out",
+    rd = run_bench(suite=str(suite), workflows=["classic", "lean"], task_names=["hello"], out_root=tmp_path / "out",
                    mock=True, fixed_design=True, printer=lambda s: None, pytest_cmd=PYTEST)
     data = json.loads((rd / RESULTS_JSON).read_text(encoding="utf-8"))
     assert data["meta"]["fixed_design"] is True
@@ -122,11 +122,8 @@ def test_run_bench_fixed_design_mock_classic_and_extended(tmp_path: Path):
         steps = [c["step"] for c in json.loads((Path(r["run_dir"]) / "run.json").read_text(encoding="utf-8"))["calls"]]
         assert "propose" not in steps and "synthesize" not in steps        # 설계 토론을 건너뜀
         assert "max_input" in r and "codex_equiv" in r and "week_pct" in r
-    assert rows["classic"]["team"] is None
-    team = rows["extended"]["team"]
-    assert team and team["packages"] >= 1 and team["parts_done"] >= 1 and "reverted" in team
     summary = (rd / SUMMARY_MD).read_text(encoding="utf-8")
-    assert "고정 설계" in summary and "## 분업" in summary and "Codex 한도 환산" in summary
+    assert "고정 설계" in summary and "Codex 한도 환산" in summary
 
 
 def test_cli_fixed_design_flag(tmp_path: Path):
@@ -170,7 +167,6 @@ def test_summary_new_columns():
     rows = [{"task": "a", "workflow": "classic", "rep": 1, "status": "approved", "approved": True, "rounds": 1,
              "seconds": 60, "calls": 7, "usage": {"codex": {"input": 10, "output": 1}}, "hidden": None,
              "codex_equiv": 12345.0, "max_input": {"claude": 50_000, "codex": 90_000},
-             "week_pct": {"claude": 1.5, "codex": None}, "team": None}]
+             "week_pct": {"claude": 1.5, "codex": None}}]
     text = summarize({"meta": {"suite": "large", "tasks": ["a"], "repeat": 1, "fixed_design": True}, "rows": rows})
     assert "12,345" in text and "50,000 / 90,000" in text and "1.5%p / -" in text and ", 고정 설계" in text
-    assert "## 분업" not in text

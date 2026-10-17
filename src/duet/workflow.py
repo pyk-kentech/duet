@@ -33,8 +33,7 @@ ROLE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
 STEP_KINDS = ("explore", "debate", "build", "audit")
 # 역할이 프롬프트 템플릿을 바꿀 수 있는 단계
 PROMPT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "rereview", "explore", "audit",
-                "arbitrate", "dedup", "plan", "part", "integrate")
-MAX_WORKERS = 3
+                "arbitrate", "dedup")
 MAX_INSTRUCTIONS = 4000
 MAX_REVIEWERS = 3
 MAX_AUDITORS = 3
@@ -46,7 +45,7 @@ _ROLE_KEYS = {"agent", "model", "effort", "step_effort", "step_model", "instruct
 _STEP_KEYS = {
     "explore": {"kind", "id", "role"},
     "debate": {"kind", "id", "proposers", "rounds", "synth", "output"},
-    "build": {"kind", "id", "implementer", "manager", "workers", "reviewers", "max_review", "arbiter"},
+    "build": {"kind", "id", "implementer", "reviewers", "max_review", "arbiter"},
     "audit": {"kind", "id", "roles"},
 }
 _TOP_KEYS = {"name", "description", "roles", "steps"}
@@ -108,21 +107,13 @@ class Step:
     reviewers: list[str] = field(default_factory=list)
     max_review: int | None = None
     arbiter: str | None = None                               # 분쟁 중재자 역할 (DESIGN.md 23.2)
-    manager: str | None = None                               # 관리자·작업자 분업 (DESIGN.md 29장)
-    workers: list[str] = field(default_factory=list)
     roles: list[str] = field(default_factory=list)           # audit
 
     def role_names(self) -> list[str]:
         names = [*([self.role] if self.role else []), *self.proposers, *([self.synth] if self.synth else []),
-                 *([self.implementer] if self.implementer else []), *([self.manager] if self.manager else []),
-                 *self.workers, *self.reviewers,
+                 *([self.implementer] if self.implementer else []), *self.reviewers,
                  *([self.arbiter] if self.arbiter else []), *self.roles]
         return list(dict.fromkeys(names))
-
-    @property
-    def lead(self) -> str | None:
-        """build 의 구현 책임자: 구현자, 분업이면 관리자."""
-        return self.implementer or self.manager
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"kind": self.kind, "id": self.id}
@@ -148,8 +139,7 @@ class Step:
             extra = f", 최대 {self.max_review}회" if self.max_review is not None else ""
             if self.arbiter:
                 extra += f", 중재 {self.arbiter}"
-            who = f"관리자 {self.manager} → 작업자 {', '.join(self.workers)}" if self.manager else self.implementer
-            return f"build({who}; 리뷰 {', '.join(self.reviewers)}{extra})"
+            return f"build({self.implementer}; 리뷰 {', '.join(self.reviewers)}{extra})"
         return f"audit({', '.join(self.roles)})"
 
 
@@ -316,6 +306,8 @@ def _parse_step(i: int, sdata: Any, roles: Mapping[str, Role], err) -> Step:
     if kind not in STEP_KINDS:
         raise err(f"{i}번째 단계: kind 는 {', '.join(STEP_KINDS)} 중 하나여야 합니다: {kind!r}")
     label = f"{i}번째 단계({kind})"
+    if kind == "build" and ("manager" in sdata or "workers" in sdata):
+        raise err(f"{label}: 관리자·작업자 분업(manager·workers)은 없앤 기능입니다 (DESIGN.md 29장). implementer 를 쓰세요")
     unknown = set(sdata) - _STEP_KEYS[kind]
     if unknown:
         raise err(f"{label}: 알 수 없는 키: {', '.join(sorted(unknown))}")
@@ -340,23 +332,11 @@ def _parse_step(i: int, sdata: Any, roles: Mapping[str, Role], err) -> Step:
             raise err(f"{label}: output 은 design 또는 change 여야 합니다: {output!r}")
         step.output = None if output in (None, "design") else output
     elif kind == "build":
-        if sdata.get("manager") is not None or sdata.get("workers") is not None:
-            # 관리자·작업자 분업 (DESIGN.md 29.1): implementer 대신
-            if sdata.get("implementer") is not None:
-                raise err(f"{label}: implementer 와 manager·workers 는 함께 쓸 수 없습니다")
-            step.manager = _need_role(sdata.get("manager"), label, roles, err)
-            step.workers = _role_list(sdata, "workers", label, roles, err, lo=1, hi=MAX_WORKERS)
-            if step.manager in step.workers:
-                raise err(f"{label}: 관리자({step.manager})는 작업자가 될 수 없습니다")
-        else:
-            step.implementer = _need_role(sdata.get("implementer"), label, roles, err)
-        lead = step.lead
+        step.implementer = _need_role(sdata.get("implementer"), label, roles, err)
+        lead = step.implementer
         step.reviewers = _role_list(sdata, "reviewers", label, roles, err, lo=1, hi=MAX_REVIEWERS)
         if lead in step.reviewers:
             raise err(f"{label}: 구현자({lead})는 리뷰어가 될 수 없습니다")
-        for w in step.workers:
-            if w in step.reviewers:
-                raise err(f"{label}: 작업자({w})는 리뷰어가 될 수 없습니다")
         step.max_review = _int_in(sdata, "max_review", label, 1, MAX_REVIEW_ROUNDS, err)
         if sdata.get("arbiter") is not None:
             step.arbiter = _need_role(sdata.get("arbiter"), label, roles, err)

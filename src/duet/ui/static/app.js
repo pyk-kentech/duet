@@ -75,7 +75,7 @@ const STATUS = {
 };
 const STEP = {
   propose: '설계안', critique: '비판·개정', synthesize: '설계 종합', implement: '구현', fix: '리뷰 반영',
-  review: '리뷰', plan: '분해', part: '묶음 구현', integrate: '통합', explore: '사전 조사', audit: '감사', arbitrate: '중재', test: '테스트', repro: '재현 테스트', testguard: '테스트 변경 감지', dedup: '중복 확인', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
+  review: '리뷰', explore: '사전 조사', audit: '감사', arbitrate: '중재', test: '테스트', repro: '재현 테스트', testguard: '테스트 변경 감지', dedup: '중복 확인', base: '기준 커밋', stalled: '수렴 안 됨', design_only: '설계만', approved: '승인', unapproved: '미승인',
 };
 const PHASE = { init: '준비', explore: '사전 조사', debate: '설계 토론', build: '구현·리뷰', audit: '감사', done: '끝' };
 const CHECK_STATUS = { ok: '정상', warn: '확인 필요', missing: '없음', error: '오류' };
@@ -477,9 +477,6 @@ const TIPS = {
   'step.implement': '설계대로 처음 코드를 작성한 AI 의 요약입니다.',
   'step.fix': '리뷰 지적을 반영해 고친 내용의 요약입니다.',
   'step.test': 'duet 가 직접 돌린 테스트 결과입니다. 실패하면 리뷰어가 승인해도 승인되지 않습니다.',
-  'step.plan': '관리자가 설계를 작업 묶음(파일 소유)으로 나눈 계획입니다 (extended 워크플로).',
-  'step.part': '작업자가 맡은 묶음의 파일만 구현한 결과입니다. 맡지 않은 파일을 바꾸면 duet 가 되돌립니다.',
-  'step.integrate': '관리자가 묶음 사이의 이음새(import·호출·형식)를 맞추고 테스트를 고친 결과입니다.',
   'step.dedup': '작은 모델이 새 지적이 이미 해결·기각된 지적의 반복인지 확인한 결과입니다. 기각된 지적의 재제기는 P3 로 낮추고, 해결된 지적의 재발은 표시만 합니다.',
   'nav.bench': '벤치마크 결과(워크플로별 승인률·숨은 테스트 통과율·비용)를 봅니다.',
   prune: '목록(~/.duet/projects.json)에서만 지웁니다. 폴더와 파일은 건드리지 않습니다.',
@@ -1523,7 +1520,7 @@ class RunView {
       target = before.find(x => x.meta.step === 'review');
       if (target) label = `반영한 리뷰 (${who(target)})`;
     } else if (cur.step === 'review') {
-      target = before.find(x => ['implement', 'fix', 'integrate'].includes(x.meta.step));
+      target = before.find(x => ['implement', 'fix'].includes(x.meta.step));
       if (target) label = `리뷰한 구현 (${who(target)})`;
     }
     return target ? { name: target.name, label } : null;
@@ -2312,7 +2309,7 @@ function dlgOption(key) {
 }
 // 모델도 같은 층 규칙(30.2): 모델만 고른 층은 단계별 모델을 비운다. 칸 단위 지정(30.3)은 마지막에 덮어쓴다.
 const STEP_KEYS = ['propose', 'critique', 'synthesize', 'implement', 'fix', 'review', 'rereview', 'arbitrate',
-  'plan', 'part', 'integrate', 'explore', 'audit'];
+  'explore', 'audit'];
 function agentSetting(agent) {
   const f = form.elements;
   const base = ((dlgState.eff || {})[agent]) || {};
@@ -2525,29 +2522,9 @@ function renderWorkflowDiagram() {
       const arbiterOn = dlgOption('arbiter') !== false;
       const gatesOn = dlgOption('review_gates') !== false && dlgOption('review_json') !== false;
       const dedupOn = dlgOption('dedup') !== false && gatesOn;
-      const lead = st.manager || st.implementer;
+      const lead = st.implementer;
       const arbiterRole = st.arbiter || (m.classic ? synthOfDebate : (synthOfDebate && synthOfDebate !== lead ? synthOfDebate : reviewers[0]));
-      const workers = st.workers || [];
-      if (st.manager) {
-        // 관리자·작업자 분업 (DESIGN.md 29장): 분해 → 묶음을 순서대로 → 통합
-        // 작업자 수 = 묶음 수(관리자가 실행 중에 정함, 보통 2~5개). 묶음마다 새 세션이라 서로의 대화를 보지 않는다.
-        // workers 는 작업자 '역할'(모델 설정) 목록이고, 여럿이면 묶음을 돌아가며 맡는다.
-        stage('분해 · 분업 구현', ['큰 과제용', '작업자 = 묶음 수 (관리자가 정함)',
-          workers.length > 1 ? `모델 설정 ${workers.length}가지를 번갈아` : null],
-          h('div', { class: 'wf-row' }, node('분해', st.manager, [['plan', '']], { note: '설계를 작업 묶음으로 나눔 · 파일 소유를 정함' })),
-          arrow('묶음마다 순서대로 (맡은 파일만 고침, 밖은 duet 가 되돌림)'),
-          h('div', { class: 'wf-row' }, workers.map(w => {
-            const el = node('묶음 구현', w, [['part', '']], { note: '묶음마다 새 작업자(새 세션) · 맡은 파일만 봄' });
-            el.classList.add('stack');
-            el.querySelector('.wf-node-head').append(h('span', { class: 'wf-many', title: '묶음 수만큼' }, '× 묶음 수'));
-            return el;
-          })),
-          arrow('이음새 맞추기'),
-          h('div', { class: 'wf-row' }, node('통합', st.manager, [['integrate', '']], { note: 'import·호출·형식을 맞추고 테스트를 고침' })));
-      }
-      const implNode = st.manager
-        ? h('div', { class: 'wf-col' }, workers.map(w => node('수정', w, [['fix', '']], { note: '지적의 파일 주인이 고침 · 나머지는 관리자' })))
-        : node('구현', st.implementer, [['implement', '처음'], ['fix', '수정']]);
+      const implNode = node('구현', st.implementer, [['implement', '처음'], ['fix', '수정']]);
       const reviewNodes = reviewers.map(rv => node('리뷰', rv, [['review', '1회차'], ['rereview', '2회차부터']]));
       const extras = [];
       if (arbiterOn && arbiterRole && gatesOn) extras.push(node('중재', arbiterRole, [['arbitrate', '']], { small: true, note: '수렴 실패·상한일 때 한 번' }));
@@ -2562,7 +2539,7 @@ function renderWorkflowDiagram() {
       const guards = [gatesOn ? '판정 관문' : null, gatesOn && dlgOption('spec_gate') !== false ? '요구 근거' : null,
         dlgOption('test_guard') !== false ? '테스트 변조 감지' : null, dlgOption('wait_on_limit') ? '한도 대기 후 재개' : null,
         dlgOption('claude_sandbox') ? 'Claude 샌드박스' : null].filter(Boolean);
-      stage(st.manager ? '테스트 · 리뷰' : '구현 · 리뷰', [`최대 ${maxR}회`, reviewers.length > 1 ? `리뷰어 ${reviewers.length}명 모두 승인해야 통과` : null],
+      stage('구현 · 리뷰', [`최대 ${maxR}회`, reviewers.length > 1 ? `리뷰어 ${reviewers.length}명 모두 승인해야 통과` : null],
         h('div', { class: 'wf-row wf-flow' },
           implNode,
           h('div', { class: 'wf-link' }, '→'),

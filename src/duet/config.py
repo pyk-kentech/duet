@@ -51,7 +51,6 @@ EFFORT_SUGGESTIONS = {
 }
 # step_effort 의 키. "rereview" 는 2라운드부터의 리뷰 (DESIGN.md 18.1)
 EFFORT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "rereview", "arbitrate",
-                "plan", "part", "integrate",   # plan·part·integrate: 관리자·작업자 분업 (DESIGN.md 29장)
                 "explore", "audit")            # 사전 조사·승인 뒤 감사 (DESIGN.md 30.1)
 STEP_OVERRIDE_KEYS = ("model", "effort")       # 칸 단위 지정 (DESIGN.md 30.3)
 _ROLE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,39}$")

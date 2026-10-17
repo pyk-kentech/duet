@@ -45,35 +45,58 @@ def test_layer_rule_model_clears_step_model(tmp_path: Path):
         load_config(None, {"claude.step_model": {"implement": "a b"}})
 
 
+FAST_WF = """name = "fast"
+description = "작은 모델 구현자"
+
+[roles.fast]
+agent = "claude"
+model = "claude-sonnet-5-5"
+
+[roles.codex]
+agent = "codex"
+
+[[steps]]
+kind = "build"
+implementer = "fast"
+reviewers = ["codex"]
+"""
+
+
+def fast_workflow(tmp_path: Path, cfg):
+    p = tmp_path / "fast.toml"
+    p.write_text(FAST_WF, encoding="utf-8")
+    return load_workflow(f"@{p}", None, cfg)
+
+
 def test_role_rules_and_explore_audit_keys(tmp_path: Path):
-    cfg = load_config(None, {"claude.step_model": {"part": "claude-opus-5-5"}, "claude.step_effort": {"audit": "low"}})
-    wf = load_workflow("extended", None, cfg)
-    worker = wf.roles["worker"].agent_config(cfg)
-    # 모델을 정한 역할(작업자 Sonnet)은 에이전트의 단계별 모델을 물려받지 않는다
-    assert worker.model_for("part") == "claude-sonnet-5-5"
-    assert wf.roles["claude"].agent_config(cfg).model_for("part") == "claude-opus-5-5"
+    cfg = load_config(None, {"claude.step_model": {"implement": "claude-opus-5-5"}, "claude.step_effort": {"audit": "low"}})
+    wf = fast_workflow(tmp_path, cfg)
+    # 모델을 정한 역할은 에이전트의 단계별 모델을 물려받지 않는다
+    assert wf.roles["fast"].agent_config(cfg).model_for("implement") == "claude-sonnet-5-5"
+    assert load_workflow("classic", None, cfg).roles["claude"].agent_config(cfg).model_for("implement") == "claude-opus-5-5"
+    assert cfg.claude.effort_for("audit") == "low"
 
 
 # ====================================================================== 30.3 칸 단위 지정
 def test_parse_set_step_and_validate():
-    ov = parse_set_step(["worker.part.model=claude-haiku-5-5", "worker.part.effort=low", "codex.review.effort=xhigh"])
-    assert ov == {"worker": {"part": {"model": "claude-haiku-5-5", "effort": "low"}}, "codex": {"review": {"effort": "xhigh"}}}
-    for bad in ("worker.part=claude", "worker.part.model=", "a.b.c.d=x"):
+    ov = parse_set_step(["fast.implement.model=claude-haiku-5-5", "fast.implement.effort=low", "codex.review.effort=xhigh"])
+    assert ov == {"fast": {"implement": {"model": "claude-haiku-5-5", "effort": "low"}}, "codex": {"review": {"effort": "xhigh"}}}
+    for bad in ("fast.implement=claude", "fast.implement.model=", "a.b.c.d=x"):
         with pytest.raises(ConfigError, match="--set-step"):
             parse_set_step([bad])
-    for ov, msg in (({"w": {"nope": {"model": "x"}}}, "단계"), ({"w": {"part": {"temp": "1"}}}, "알 수 없는 키"),
-                    ({"w": {"part": {"model": "a b"}}}, "값이 잘못"), ({"1x": {"part": {"model": "x"}}}, "역할 이름")):
+    for ov, msg in (({"w": {"nope": {"model": "x"}}}, "단계"), ({"w": {"part": {"model": "x"}}}, "단계"),
+                    ({"w": {"fix": {"temp": "1"}}}, "알 수 없는 키"), ({"w": {"fix": {"model": "a b"}}}, "값이 잘못"),
+                    ({"1x": {"fix": {"model": "x"}}}, "역할 이름")):
         with pytest.raises(ConfigError, match=msg):
             load_config(None, {"step_overrides": ov})
 
 
-def test_overrides_win_last_for_roles_and_classic():
-    cfg = load_config(None, {"step_overrides": {"worker": {"part": {"model": "claude-haiku-5-5", "effort": "low"}},
+def test_overrides_win_last_for_roles_and_classic(tmp_path: Path):
+    cfg = load_config(None, {"step_overrides": {"fast": {"implement": {"model": "claude-haiku-5-5", "effort": "low"}},
                                                 "codex": {"review": {"model": "gpt-6-astra", "effort": "xhigh"}}}})
-    wf = load_workflow("extended", None, cfg)
-    worker = wf.roles["worker"].agent_config(cfg)
-    assert (worker.model_for("part"), worker.effort_for("part")) == ("claude-haiku-5-5", "low")
-    assert worker.model_for("fix") == "claude-sonnet-5-5"                     # 다른 단계는 역할 설정 그대로
+    fast = fast_workflow(tmp_path, cfg).roles["fast"].agent_config(cfg)
+    assert (fast.model_for("implement"), fast.effort_for("implement")) == ("claude-haiku-5-5", "low")
+    assert fast.model_for("fix") == "claude-sonnet-5-5"                       # 다른 단계는 역할 설정 그대로
     # classic: 역할 이름 = 에이전트 이름. 실제 어댑터(make_agents)에도 들어간다
     codex = make_agents(cfg)["codex"].agent_cfg
     assert (codex.model_for("review", 1), codex.effort_for("review", 1)) == ("gpt-6-astra", "xhigh")
@@ -128,7 +151,7 @@ def test_run_records_step_overrides_and_logs(tmp_path: Path, monkeypatch):
 
 def test_unknown_role_in_overrides_is_error(tmp_path: Path, monkeypatch, capsys):
     wd = tmp_path / "w"
-    rc = main(["run", "t", "--workdir", str(wd), "--mock", "--set-step", "worker.part.model=claude-haiku-5-5"])
+    rc = main(["run", "t", "--workdir", str(wd), "--mock", "--set-step", "worker.implement.model=claude-haiku-5-5"])
     assert rc != 0 and "worker" in capsys.readouterr().err
     assert not list_run_dirs(wd) if wd.exists() else True
 
@@ -150,15 +173,29 @@ def test_review_session_not_reused_when_model_changes(tmp_path: Path, monkeypatc
 def test_ui_start_run_passes_step_overrides(tmp_path: Path, monkeypatch):
     seen = {}
     monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv: seen.update(argv=argv) or {"id": "j"})
-    Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True, "workflow": "extended",
-                           "step_overrides": {"worker": {"part": {"model": "claude-haiku-5-5", "effort": ""}},
+    Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True, "workflow": "secure",
+                           "step_overrides": {"security": {"review": {"model": "gpt-6-luna", "effort": ""}},
                                               "codex": {"review": {"effort": "xhigh"}}}})
     argv = seen["argv"]
     pairs = [argv[i + 1] for i, a in enumerate(argv) if a == "--set-step"]
-    assert pairs == ["worker.part.model=claude-haiku-5-5", "codex.review.effort=xhigh"]
+    assert pairs == ["security.review.model=gpt-6-luna", "codex.review.effort=xhigh"]
     with pytest.raises(ApiError, match="manager2"):
-        Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True, "workflow": "extended",
-                               "step_overrides": {"manager2": {"plan": {"model": "x"}}}})
+        Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True, "workflow": "secure",
+                               "step_overrides": {"manager2": {"review": {"model": "x"}}}})
     with pytest.raises(ApiError, match="단계"):
         Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True,
                                "step_overrides": {"claude": {"nope": {"model": "x"}}}})
+
+
+# ====================================================================== 29장: 분업은 없앴다
+def test_extended_removed(tmp_path: Path):
+    from duet.workflow import WorkflowError, list_workflows
+
+    with pytest.raises(WorkflowError):
+        load_workflow("extended", None, Config())
+    assert "extended" not in [w["id"] for w in list_workflows(None, Config())]
+    p = tmp_path / "team.toml"
+    p.write_text('name = "team"\n[roles.m]\nagent = "codex"\n[roles.w]\nagent = "claude"\n[roles.r]\nagent = "codex"\n'
+                 '[[steps]]\nkind = "build"\nmanager = "m"\nworkers = ["w"]\nreviewers = ["r"]\n', encoding="utf-8")
+    with pytest.raises(WorkflowError, match="없앤 기능"):
+        load_workflow(f"@{p}", None, Config())
