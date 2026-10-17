@@ -22,6 +22,7 @@ from duet.agents.base import (
     compile_rate_limit_patterns,
     fresh_request,
     parse_structured,
+    prompt_via_stdin,
     should_fall_back,
 )
 from duet.config import AgentConfig, Config
@@ -68,7 +69,7 @@ class ClaudeCodeAdapter:
             cmd += ["--json-schema", json.dumps(req.output_schema, ensure_ascii=False)]
         if req.resume_session:
             cmd += ["--resume", req.resume_session]
-        if len(req.prompt.encode("utf-8")) > self.cfg.prompt_arg_max_bytes:
+        if prompt_via_stdin(req.prompt, self.cfg.prompt_arg_max_bytes, self.agent_cfg.bin):
             return cmd, req.prompt
         # `--allowedTools <tools...>` 같은 가변 인자 옵션이 프롬프트를 삼키지 않도록 옵션 종료자를 넣는다
         return [*cmd, "--", req.prompt], None

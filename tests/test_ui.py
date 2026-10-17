@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -363,7 +364,7 @@ def test_server_info_and_restart(server):
 
 def test_restart_refused_while_terminal_job_runs(server):
     from duet.ui.terminal import TermJob
-    job = TermJob(id="t", title="Claude 로그인", argv=["sh", "-c", "sleep 30"]).start()
+    job = TermJob(id="t", title="Claude 로그인", argv=[sys.executable, "-c", "import time; time.sleep(30)"]).start()
     server.terms["t"] = job
     server.restart_fn = lambda srv: (_ for _ in ()).throw(AssertionError("다시 시작하면 안 됨"))
     s, r, _ = call(server, "POST", "/api/server/restart", body={})

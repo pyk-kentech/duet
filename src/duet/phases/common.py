@@ -17,7 +17,7 @@ from duet.agents.base import AgentAdapter, AgentRequest, AgentResult, Mode
 from duet.config import Config, dedup_agent_config
 from duet.prompts import render
 from duet.runner import RunnerError
-from duet import limits
+from duet import limits, stopflag
 from duet.dedup import DEDUP_ROLE
 from duet.state import FAILED, STOPPED_RATE_LIMIT, RunState
 from duet.transcript import Transcript
@@ -187,6 +187,7 @@ class PhaseContext:
         attempt = 0
         limit_hits = 0
         while True:
+            stopflag.check()                      # 단계 사이의 중지 요청 (DESIGN.md 27.3)
             attempt += 1
             started = time.monotonic()
             self.log(f"{agent_name} ← {step}" + (f" (재시도 {attempt - 1})" if attempt > 1 else "") + " 실행 중...")

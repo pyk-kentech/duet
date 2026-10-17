@@ -120,7 +120,7 @@ function oneLine(s, n = 120) {
   s = String(s || '').replace(/\s+/g, ' ').trim();
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
-function baseName(p) { return String(p).split('/').filter(Boolean).pop() || p; }
+function baseName(p) { return String(p).split(/[\\/]/).filter(Boolean).pop() || p; }  // Windows 경로도 (DESIGN.md 27)
 function joinPath(root, name) { return String(root).replace(/\/+$/, '') + '/' + String(name).replace(/^\/+/, ''); }
 
 // =================================================================== api
@@ -1287,10 +1287,15 @@ class SetupView {
         h('thead', null, h('tr', null, ['도구', '상태', '버전·내용', ''].map(t => h('th', null, t)))),
         h('tbody', null, rows))));
   }
+  actCommand(a) {
+    // 이 머신이면 이 OS 의 명령(Windows 는 PowerShell), 원격이면 POSIX 셸 명령 (DESIGN.md 27.5)
+    const local = !this.r.machine || this.r.machine === LOCAL;
+    return local ? (a.local_available === false ? '(이 OS 에서는 직접 설치)' : a.local_command) : a.command;
+  }
   actBtn(id, cls = '') {
     const a = (app.actions || {})[id];
     const label = a ? a.title : id;
-    const tip = a ? [a.note, `실행 명령: ${a.command}`].filter(Boolean).join(' · ') : null;
+    const tip = a ? [a.note, `실행 명령: ${this.actCommand(a)}`].filter(Boolean).join(' · ') : null;
     return h('button', { class: `btn btn-sm ${cls}`, type: 'button', 'data-tip': tip, onclick: () => this.runAction(id) }, label);
   }
   async deploy(ev) {
@@ -1303,7 +1308,7 @@ class SetupView {
   }
   async runAction(id) {
     const a = (app.actions || {})[id] || {};
-    if (id.startsWith('install') && !confirm(`${a.title || id}\n\n다음 명령을 실행합니다:\n${a.command || ''}`)) return;
+    if (id.startsWith('install') && !confirm(`${a.title || id}\n\n다음 명령을 실행합니다:\n${this.actCommand(a) || ''}`)) return;
     try {
       const job = await api('/api/setup/action', { method: 'POST', body: { action: id }, machine: this.r.machine });
       this.openTerm(job);

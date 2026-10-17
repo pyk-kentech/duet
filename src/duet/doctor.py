@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from duet import __version__
-from duet.runner import ExecutableNotFound, env_drops, run_process
+from duet import procs
+from duet.procs import IS_WINDOWS
+from duet.runner import ExecutableNotFound, augmented_path, env_drops, run_process
 
 PATH_PREFIX = 'export PATH="$PATH:$HOME/.local/bin:$HOME/.duet/bin"; '  # 사용자 PATH 를 우선
 
@@ -45,6 +47,16 @@ INSTALL_SYSTEM = (
 )
 
 
+# Windows(PowerShell) 동작 (DESIGN.md 27.5). None 이면 이 OS 에서 지원하지 않음
+WIN_INSTALL_UV = "irm https://astral.sh/uv/install.ps1 | iex"
+WIN_INSTALL_CLAUDE = "irm https://claude.ai/install.ps1 | iex"
+WIN_INSTALL_CODEX = ("if (-not (Get-Command npm -ErrorAction SilentlyContinue)) "
+                     "{ Write-Output 'Node.js(npm) 가 필요합니다: https://nodejs.org'; exit 1 }; "
+                     "npm install -g @openai/codex")
+WIN_INSTALL_GIT = "winget install --id Git.Git -e"
+WIN_INSTALL_PYTHON = "uv python install 3.12; uv python find 3.12"
+
+
 @dataclass(frozen=True)
 class Action:
     id: str
@@ -52,17 +64,37 @@ class Action:
     shell: str
     interactive: bool = False   # 로그인처럼 사용자 입력이 필요할 수 있음
     note: str = ""
+    windows: str | None = "="   # Windows 명령. "=" 는 shell 과 같음, None 은 지원 안 함
+    win_interactive: bool | None = None
+
+    def local_command(self) -> str | None:
+        if not IS_WINDOWS:
+            return self.shell
+        return self.shell if self.windows == "=" else self.windows
+
+    def available_locally(self) -> bool:
+        return self.local_command() is not None
+
+    @property
+    def interactive_here(self) -> bool:
+        if IS_WINDOWS and self.win_interactive is not None:
+            return self.win_interactive
+        return self.interactive
 
 
 ACTIONS: dict[str, Action] = {a.id: a for a in [
     Action("install_git", "git 설치", INSTALL_SYSTEM.format(pkgs="git"), True,
-           "시스템 패키지라 sudo 비밀번호를 물을 수 있습니다."),
+           "시스템 패키지라 sudo 비밀번호를 물을 수 있습니다.", windows=WIN_INSTALL_GIT),
     Action("install_curl", "curl 설치", INSTALL_SYSTEM.format(pkgs="curl"), True,
-           "시스템 패키지라 sudo 비밀번호를 물을 수 있습니다."),
-    Action("install_uv", "uv 설치", INSTALL_UV, False, "공식 스크립트: astral.sh/uv/install.sh"),
-    Action("install_python", "Python 3.12 설치", INSTALL_PYTHON, False, "uv 로 사용자 폴더에 설치합니다."),
-    Action("install_claude", "Claude Code 설치", INSTALL_CLAUDE, False, "공식 스크립트: claude.ai/install.sh"),
-    Action("install_codex", "Codex CLI 설치", INSTALL_CODEX, False, "공식 스크립트: chatgpt.com/codex/install.sh"),
+           "시스템 패키지라 sudo 비밀번호를 물을 수 있습니다.", windows=None),
+    Action("install_uv", "uv 설치", INSTALL_UV, False, "공식 스크립트: astral.sh/uv/install.sh",
+           windows=WIN_INSTALL_UV),
+    Action("install_python", "Python 3.12 설치", INSTALL_PYTHON, False, "uv 로 사용자 폴더에 설치합니다.",
+           windows=WIN_INSTALL_PYTHON),
+    Action("install_claude", "Claude Code 설치", INSTALL_CLAUDE, False, "공식 스크립트: claude.ai/install.sh",
+           windows=WIN_INSTALL_CLAUDE),
+    Action("install_codex", "Codex CLI 설치", INSTALL_CODEX, False, "공식 스크립트: chatgpt.com/codex/install.sh",
+           windows=WIN_INSTALL_CODEX),
     Action("login_claude", "Claude 로그인", "claude auth login", True,
            "표시되는 링크를 브라우저에서 열고, 코드를 요구하면 아래 입력칸에 붙여 넣으세요."),
     Action("logout_claude", "Claude 로그아웃", "claude auth logout"),
@@ -101,8 +133,8 @@ def _run(cmd: list[str], timeout: int = 20) -> tuple[int | None, str, str]:
 
 
 def _which(name: str) -> str:
-    code, out, _ = _run(["sh", "-c", PATH_PREFIX + f"command -v {name}"])
-    return out if code == 0 else ""
+    """PATH(+ 설치 스크립트·npm 이 쓰는 폴더)에서 찾는다. Windows 는 PATHEXT(.exe·.cmd) 를 따른다 (DESIGN.md 27.4)."""
+    return procs.which(name, augmented_path(os.environ.get("PATH"))) or ""
 
 
 def _first_line(s: str) -> str:
@@ -246,5 +278,9 @@ def format_checks(checks: list[dict[str, Any]]) -> str:
         for a in c["actions"]:
             if c["status"] != "ok" or a.startswith("login"):
                 act = ACTIONS[a]
-                lines.append(f"    → {act.title}: {act.shell if len(act.shell) < 90 else act.shell[:87] + '...'}")
+                cmd = act.local_command()        # 이 OS 의 명령 (DESIGN.md 27.5)
+                if cmd is None:
+                    lines.append(f"    → {act.title}: 이 OS 에서는 직접 설치하세요.")
+                else:
+                    lines.append(f"    → {act.title}: {cmd if len(cmd) < 90 else cmd[:87] + '...'}")
     return "\n".join(lines)

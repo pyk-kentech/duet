@@ -31,6 +31,18 @@ duet --help
 pytest -q                                          # 실제 CLI를 호출하지 않는 테스트
 ```
 
+**Windows** (10/11, 네이티브)에서도 같습니다. PowerShell 에서:
+
+```powershell
+git clone <이 저장소> duet; cd duet
+python -m venv .venv; .venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+duet doctor                                        # git·Claude Code·Codex CLI 설치·로그인 확인
+duet ui                                            # 관리자 UI (브라우저가 열립니다)
+```
+
+Windows 판 Claude Code(`irm https://claude.ai/install.ps1 | iex`)와 Codex CLI(`npm install -g @openai/codex`, 또는 설치 프로그램)를 쓰고, 둘 다 로그인돼 있어야 합니다. UI 의 '환경·로그인' 화면에서 버튼으로도 설치·로그인할 수 있습니다(로그인은 새 콘솔 창에서). Windows 에서도 SSH 로 Linux·macOS 서버를 원격 머신으로 붙일 수 있습니다(원격 쪽이 Windows 인 것은 아직 지원하지 않습니다, DESIGN.md 27장).
+
 venv를 활성화하지 않고도 어디서나 `duet`을 쓰려면 [uv](https://docs.astral.sh/uv/)로 설치합니다
 (`~/.local/bin/duet`에 링크되며, `--editable`이라 저장소를 고치면 바로 반영됩니다):
 

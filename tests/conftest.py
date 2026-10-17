@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -15,12 +18,24 @@ def isolated_duet_home(tmp_path_factory, monkeypatch) -> Path:
     """테스트가 사용자의 ~/.duet/projects.json 을 건드리지 않게 한다."""
     home = tmp_path_factory.mktemp("duet-home")
     monkeypatch.setenv("DUET_HOME", str(home))
+    if os.name == "nt":
+        monkeypatch.setenv("PYTHONUTF8", "1")      # 테스트가 직접 띄우는 자식 파이썬도 UTF-8 (DESIGN.md 27.7)
     return home
 
 
-@pytest.fixture
-def fake_bin() -> Path:
-    return FAKE_BIN
+@pytest.fixture(scope="session")
+def fake_bin(tmp_path_factory) -> Path:
+    """가짜 CLI 폴더. Windows 는 shebang 을 몰라 PATH 로 찾을 수 있게 .cmd 감싸개를 둔 복사본 (DESIGN.md 27.7)."""
+    if os.name != "nt":
+        return FAKE_BIN
+    d = tmp_path_factory.mktemp("fake_bin")
+    for f in FAKE_BIN.iterdir():
+        if f.is_file():
+            shutil.copy2(f, d / f.name)
+            if not f.suffix:
+                shim = f'@"{sys.executable}" "%~dp0{f.name}" %*\r\n'
+                (d / f"{f.name}.cmd").write_bytes(shim.encode("utf-8"))
+    return d
 
 
 @pytest.fixture

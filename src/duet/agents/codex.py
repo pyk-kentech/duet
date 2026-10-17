@@ -25,6 +25,7 @@ from duet.agents.base import (
     fresh_request,
     parse_structured,
     should_fall_back,
+    prompt_via_stdin,
 )
 from duet.config import AgentConfig, Config
 from duet.runner import ExecutableNotFound, env_drops, run_process
@@ -69,7 +70,7 @@ class CodexAdapter:
             if schema_path is not None:
                 cmd += ["--output-schema", str(schema_path)]
             cmd += ["--output-last-message", str(last_message_path), "--", req.resume_session]  # type: ignore[list-item]
-            if len(req.prompt.encode("utf-8")) > self.cfg.prompt_arg_max_bytes:
+            if prompt_via_stdin(req.prompt, self.cfg.prompt_arg_max_bytes, self.agent_cfg.bin):
                 return [*cmd, STDIN_MARKER], req.prompt
             return [*cmd, req.prompt], None
         mode_args = self.agent_cfg.read_args if req.mode is Mode.READ else self.agent_cfg.write_args
@@ -82,7 +83,7 @@ class CodexAdapter:
             *(["--output-schema", str(schema_path)] if schema_path is not None else []),
             "--output-last-message", str(last_message_path),
         ]
-        if len(req.prompt.encode("utf-8")) > self.cfg.prompt_arg_max_bytes:
+        if prompt_via_stdin(req.prompt, self.cfg.prompt_arg_max_bytes, self.agent_cfg.bin):
             return [*cmd, STDIN_MARKER], req.prompt
         # '-' 로 시작하는 프롬프트가 옵션으로 읽히지 않게 (codex-cli 0.162.1 에서 `--` 동작 확인)
         return [*cmd, "--", req.prompt], None

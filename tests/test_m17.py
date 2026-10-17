@@ -14,7 +14,7 @@ from duet.cli import main
 from duet.config import Config
 from duet.state import RunState, list_run_dirs
 from duet.workflow import WorkflowError, parse_workflow
-from tests.helpers import file_names
+from tests.helpers import FAIL_CMD, file_names
 
 
 def item(i, sev="P2", status="open", role="codex"):
@@ -186,7 +186,7 @@ def test_max_review_arbiter_can_approve(tmp_path, monkeypatch):
 def test_failing_tests_block_arbiter_approval(tmp_path, monkeypatch):
     rc, _, st, _ = run(tmp_path, monkeypatch, scripted(
         STUCK, {"decisions": [{"id": "I1", "decision": "downgrade", "reason": "밖"}], "summary": ""}),
-        "--max-review", "1", toml='test_command = "false"\n')
+        "--max-review", "1", toml=f"test_command = '{FAIL_CMD}'\n")
     assert rc == 1 and st.stop_reason == "arbiter_upheld" and st.arbiter["upheld"] == []
     assert st.tests["1"]["status"] == "failed"
 

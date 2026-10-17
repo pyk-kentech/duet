@@ -375,7 +375,7 @@ class Orchestrator:
 
     # ---------------------------------------------------------------- helpers
     def _locked(self, workdir: Path, verb: str) -> RunLock:
-        lock = RunLock(workdir, command=f"duet {verb} " + " ".join(sys.argv[1:]))
+        lock = RunLock(workdir, command=" ".join(["duet", *sys.argv[1:]]) if sys.argv[1:] else f"duet {verb}")
         try:
             return lock.acquire()
         except LockBusy as e:

@@ -123,12 +123,15 @@ def plan_wait(texts: Iterable[str], usage: dict[str, Any] | None, hits: int, now
 
 def sleep(seconds: float) -> None:
     """테스트에서 바꿔 끼운다. 짧게 나눠 자서 Ctrl-C·SIGTERM 에 바로 반응한다."""
+    from duet import stopflag
+
     end = time.monotonic() + seconds
     while True:
+        stopflag.check()                          # UI 의 중지 요청 (DESIGN.md 27.3)
         left = end - time.monotonic()
         if left <= 0:
             return
-        time.sleep(min(left, 30.0))
+        time.sleep(min(left, stopflag.POLL_SEC if stopflag.active() else 30.0))
 
 
 def now() -> float:

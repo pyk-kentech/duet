@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import json
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from duet.state import latest_run_dir
 from duet.testing import run_tests
 from tests.conftest import read_dump
 from tests.test_ui import server  # noqa: F401 - pytest 픽스처
+from tests.helpers import py_cmd
 
 
 def req(tmp_path: Path, step: str, round_: int = 0, mode=Mode.READ) -> AgentRequest:
@@ -197,7 +199,8 @@ def test_env_config_validation():
 
 def test_run_process_drop_env(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("DUET_T_SECRET", "s")
-    r = run_process(["sh", "-c", 'echo "${DUET_T_SECRET-unset} ${DUET_T_GIVEN-unset}"'], tmp_path,
+    r = run_process([sys.executable, "-c", "import os; print(os.environ.get('DUET_T_SECRET', 'unset'), "
+                     "os.environ.get('DUET_T_GIVEN', 'unset'))"], tmp_path,
                     env={"DUET_T_GIVEN": "g"}, drop_env=["DUET_T_SECRET", "DUET_T_GIVEN"])
     assert r.stdout.strip() == "unset g"  # 직접 준 값은 남는다
 
@@ -226,10 +229,10 @@ def test_adapter_env_strip_empty_inherits(fake_cfg: Config, tmp_path: Path, dump
 def test_run_tests_drop_env(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("GH_TOKEN", "ghp-test")
     cfg = Config()
-    r = run_tests(tmp_path, 'test -z "${GH_TOKEN-}" && test "$CI" = 1', "test", 30,
-                  drop_env=env_drops(cfg.env_strip, cfg.env_keep))
+    no_token = "import os, sys; sys.exit(0 if not os.environ.get('GH_TOKEN') and os.environ.get('CI') == '1' else 1)"
+    r = run_tests(tmp_path, py_cmd(no_token), "test", 30, drop_env=env_drops(cfg.env_strip, cfg.env_keep))
     assert r.status == "passed"
-    assert run_tests(tmp_path, 'test -z "${GH_TOKEN-}"', "test", 30).status == "failed"
+    assert run_tests(tmp_path, py_cmd(no_token), "test", 30).status == "failed"
 
 
 def test_doctor_api_key_check(monkeypatch):

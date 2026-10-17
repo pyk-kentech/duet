@@ -19,6 +19,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from duet import procs
 from duet.config import CLASSIC_WORKFLOW, Config
 from duet.runner import augmented_path, env_drops, run_process
 from duet.state import (
@@ -136,7 +137,7 @@ def default_pytest_cmd() -> list[str]:
     uvx = shutil.which("uvx", path=augmented_path(None))
     if uvx:
         return [uvx, "pytest"]
-    return ["python3", "-m", "pytest"]
+    return [procs.PYTHON_CMD, "-m", "pytest"]
 
 
 _SUMMARY_RE = re.compile(r"(\d+) (passed|failed|errors?)\b")

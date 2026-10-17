@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -129,7 +130,7 @@ def test_usage_recorded_in_transcript_and_state(fake_bin, tmp_path: Path, monkey
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     monkeypatch.setenv("DUET_FAKE_TEXT", "## 결정 사항\n내용")
     (tmp_path / "duet.toml").write_text(
-        f'[claude]\nbin = "{fake_bin / "claude"}"\n[codex]\nbin = "{fake_bin / "codex"}"\n', encoding="utf-8")
+        f"[claude]\nbin = '{fake_bin / 'claude'}'\n[codex]\nbin = '{fake_bin / 'codex'}'\n", encoding="utf-8")
     assert main(["run", "t", "--workdir", str(tmp_path), "--design-only", "--debate-rounds", "0", "--force"]) == 0
     st = RunState.load(list_run_dirs(tmp_path)[-1])
     totals = st.usage_totals()
@@ -190,7 +191,10 @@ def test_actions_are_fixed_official_commands():
 
 # ====================================================================== 터미널 작업
 def test_term_job_interactive_input():
-    job = TermJob(id="t1", title="test", argv=["sh", "-c", "printf 'code? '; read x; echo \"got:$x\"; printf '\\033[31mred\\033[0m https://example.com/auth?x=1\\n'"]).start()
+    # pty(POSIX)·파이프(Windows) 어느 쪽이든 같은 결과 (DESIGN.md 27.5)
+    script = ("import sys; sys.stdout.write('code? '); sys.stdout.flush(); x = sys.stdin.readline().strip(); "
+              "print('got:' + x, flush=True); print('\\033[31mred\\033[0m https://example.com/auth?x=1', flush=True)")
+    job = TermJob(id="t1", title="test", argv=[sys.executable, "-c", script]).start()
     deadline = time.monotonic() + 5
     while "code?" not in job.snapshot()["text"] and time.monotonic() < deadline:
         time.sleep(0.05)
@@ -208,7 +212,7 @@ def test_term_job_interactive_input():
 
 
 def test_term_job_kill():
-    job = TermJob(id="t2", title="sleep", argv=["sh", "-c", "sleep 30"]).start()
+    job = TermJob(id="t2", title="sleep", argv=[sys.executable, "-c", "import time; time.sleep(30)"]).start()
     time.sleep(0.2)
     job.kill()
     deadline = time.monotonic() + 8

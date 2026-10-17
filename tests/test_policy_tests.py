@@ -15,6 +15,8 @@ from duet.state import DONE_APPROVED, DONE_UNAPPROVED, RunState, list_run_dirs
 from duet.testing import detect_command, resolve_command, run_tests
 from duet.verdict import Status, parse_verdict
 from duet.workspace import Workspace
+from duet.procs import PYTHON_CMD
+from tests.helpers import echo_exit, py_cmd
 from tests.helpers import file_names, make_ctx
 
 import duet.orchestrator as orch_mod
@@ -87,7 +89,7 @@ def test_detect_command(tmp_path: Path):
     (tmp_path / "pyproject.toml").write_text("[project]\nname='x'\n")
     assert detect_command(tmp_path) is None            # 테스트가 없으면 안 돌린다
     (tmp_path / "tests").mkdir()
-    assert detect_command(tmp_path) in ("python3 -m pytest -q", "uv run pytest -q")
+    assert detect_command(tmp_path) in (f"{PYTHON_CMD} -m pytest -q", "uv run pytest -q")
     node = tmp_path / "n"; node.mkdir()
     (node / "package.json").write_text(json.dumps({"scripts": {"test": 'echo "Error: no test specified" && exit 1'}}))
     assert detect_command(node) is None
@@ -111,10 +113,10 @@ def test_resolve_command_precedence(tmp_path: Path):
 
 
 @pytest.mark.parametrize("cmd,status", [
-    ("echo '3 passed in 0.1s'", "passed"),
-    ("echo 'FAILED x'; exit 1", "failed"),
+    (echo_exit("3 passed in 0.1s", 0), "passed"),
+    (echo_exit("FAILED x", 1), "failed"),
     ("no-such-test-runner-xyz", "error"),
-    ("echo 'no tests ran'; exit 5  # pytest", "error"),
+    (echo_exit("no tests ran", 5) + " pytest", "error"),
 ])
 def test_run_tests_status(tmp_path: Path, cmd, status):
     r = run_tests(tmp_path, cmd, "설정", 30)
@@ -145,7 +147,7 @@ def prep(tmp_path, agents, **overrides):
 def test_tests_run_and_reach_reviewer(tmp_path: Path):
     prompts = []
     ctx = prep(tmp_path, {"claude": MockAdapter(label="claude"), "codex": approve_reviewer(prompts)},
-               test_command="echo '7 passed in 0.2s'")
+               test_command=echo_exit("7 passed in 0.2s", 0))
     assert BuildPhase(ctx).run()
     assert file_names(ctx.run_dir) == ["01_impl1_claude.md", "02_test1.md", "03_review1_codex.md"]
     t = ctx.state.tests["1"]
@@ -167,7 +169,7 @@ def test_failing_tests_block_approval_and_reach_fixer(tmp_path: Path):
         return "done"
 
     ctx = prep(tmp_path, {"claude": MockAdapter(label="claude", responder=impl), "codex": approve_reviewer()},
-               test_command="echo 'AssertionError: boom'; exit 1", max_review=2, stall_rounds=0)
+               test_command=echo_exit("AssertionError: boom", 1), max_review=2, stall_rounds=0)
     assert BuildPhase(ctx).run() is False
     st = ctx.state
     assert st.status == DONE_UNAPPROVED and st.stop_reason == "max_review"
@@ -289,7 +291,8 @@ def test_resume_old_run_does_not_retest_reviewed_rounds(tmp_path: Path):
 
 
 def test_test_summary_prefers_stdout(tmp_path: Path):
-    r = run_tests(tmp_path, "echo '95 passed in 5.9s'; echo 'Installed 1 package in 2ms' >&2", "설정", 30)
+    r = run_tests(tmp_path, py_cmd("import sys; print('95 passed in 5.9s'); "
+                                   "print('Installed 1 package in 2ms', file=sys.stderr)"), "설정", 30)
     assert r.summary == "95 passed in 5.9s" and r.output_tail.endswith("95 passed in 5.9s")
-    r = run_tests(tmp_path, "echo 'only stderr' >&2; exit 1", "설정", 30)
+    r = run_tests(tmp_path, echo_exit("only stderr", 1, stderr=True), "설정", 30)
     assert r.summary == "only stderr"

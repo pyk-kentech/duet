@@ -152,3 +152,16 @@ def classify_rate_limit(
             return True
     stripped = text.strip()
     return 0 < len(stripped) <= SHORT_TEXT_LIMIT and detect_rate_limit([stripped], patterns)
+
+
+def prompt_via_stdin(prompt: str, max_bytes: int, executable: str) -> bool:
+    """프롬프트를 인자 대신 stdin 으로 넘길지 (DESIGN.md 27.4).
+
+    길면(설정 prompt_arg_max_bytes, Windows 는 명령줄 한도 때문에 더 작게), 또는 Windows 의 배치 파일(.cmd·.bat)이면
+    cmd.exe 가 인자의 %·^·& 를 다시 해석하므로 항상 stdin.
+    """
+    from duet import procs
+
+    limit = min(max_bytes, procs.WINDOWS_ARG_MAX_BYTES) if procs.IS_WINDOWS else max_bytes
+    return len(prompt.encode("utf-8")) > limit or procs.is_batch(executable)
+

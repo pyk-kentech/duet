@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from duet import stopflag
 from duet.agents.base import Mode, AgentRequest, classify_rate_limit, compile_rate_limit_patterns
 from duet.agents.claude_code import ClaudeCodeAdapter
 from duet.agents.codex import CodexAdapter
@@ -181,13 +182,17 @@ def test_lock_released_and_console_log_written(tmp_path: Path):
     assert console.splitlines()[0].startswith("[")
 
 
-# ====================================================================== 중지(SIGTERM) → stopped_user → resume
-def test_sigterm_stops_run_and_resume_finishes(tmp_path: Path):
+# ====================================================================== 중지(SIGTERM·중지 요청 파일) → stopped_user → resume
+@pytest.mark.parametrize("how", [
+    pytest.param("sigterm", marks=pytest.mark.skipif(os.name == "nt", reason="Windows 에는 SIGTERM 이 없다")),
+    "stopfile",
+])
+def test_sigterm_stops_run_and_resume_finishes(tmp_path: Path, how):
     wd = tmp_path / "x"
     env = {**os.environ, "DUET_MOCK_DELAY": "0.5"}
     proc = subprocess.Popen([sys.executable, "-m", "duet", "run", "t", "--workdir", str(wd), "--mock",
                              "--debate-rounds", "1"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            text=True)
+                            text=True, encoding="utf-8")
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         info = read_lock(wd)
@@ -195,7 +200,10 @@ def test_sigterm_stops_run_and_resume_finishes(tmp_path: Path):
             break
         time.sleep(0.05)
     time.sleep(1.2)  # 몇 개의 호출이 진행되게
-    proc.send_signal(signal.SIGTERM)
+    if how == "sigterm":
+        proc.send_signal(signal.SIGTERM)
+    else:
+        stopflag.request(wd)                       # UI 의 중지 (DESIGN.md 27.3)
     out, _ = proc.communicate(timeout=15)
     assert proc.returncode == 130, out
     assert "사용자 중단" in out

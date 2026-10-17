@@ -432,12 +432,25 @@ def _sigterm_as_interrupt(signum: int, frame: object) -> None:
     raise KeyboardInterrupt
 
 
+def _utf8_output() -> None:
+    """표준 출력이 파일·파이프면 UTF-8 로 쓴다 (Windows 의 cp949 에서 이모지로 죽지 않게, UI 는 로그를 UTF-8 로 읽는다)."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if not stream.isatty() and (stream.encoding or "").lower().replace("-", "") != "utf8":
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _utf8_output()
     parser = build_parser()
     args = parser.parse_args(argv)
     previous = None
     try:
         previous = signal.signal(signal.SIGTERM, _sigterm_as_interrupt)
+        if hasattr(signal, "SIGBREAK"):           # Windows 콘솔의 Ctrl-Break
+            signal.signal(signal.SIGBREAK, _sigterm_as_interrupt)
     except ValueError:  # 메인 스레드가 아님
         previous = None
     try:

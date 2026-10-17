@@ -450,6 +450,10 @@ env_keep = ["CLAUDE_CODE_OAUTH_TOKEN"]
 - 닫힌 지적을 리뷰·수정 프롬프트에 보여 주기, 작은 모델의 재제기 확인(`dedup`, 기본 Claude Haiku), git 으로 되돌림 감지 (26장)
 - ✅ 닫힌 지적 목록, 재제기 판정 적용(기각·완화 → P3, 해결됨 → 재발 표시), 확인자 실패 시 건너뜀, 되돌림 감지(해결된 지적을 가로지를 때만), 끄기, resume, 기록·UI
 
+### M21. 어디서나 실행: Windows·Linux·SSH (2026-10-17 사용자 요청으로 추가)
+- OS별 프로세스 제어(`procs.py`: 생존 확인·트리 종료·분리 실행), 중지 요청 파일, 실행 파일 찾기(PATHEXT·배치 파일·파이썬 스크립트), OS별 셸·설치 명령, Windows UI 터미널, Windows 에서의 SSH (27장)
+- ✅ Windows(이 노트북)와 Linux(css53) 양쪽에서 전체 테스트 통과, Windows 에서 `duet doctor`·`duet ui`·mock 실행·중지 확인
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -946,3 +950,62 @@ Codex 구현자는 `--sandbox workspace-write` 로 작업 폴더 밖에 쓰지 �
 ### 26.4 하지 않은 것
 - 토론 단계의 "예전에 버린 설계안 재제안" 확인: 토론은 1라운드가 기본이라 이득이 작다.
 - 실제 Haiku 로의 검증: 개발 중에는 실제 모델을 부르지 않는다. 다음 실측 때 함께 본다.
+
+---
+
+## 27. 어디서나 실행 (Windows·Linux·macOS, SSH)
+
+지금까지 duet 는 Linux 에서만 만들고 시험했다. Windows 에서는 `duet ui` 가 시작하자마자 죽고(pty 모듈), `duet doctor` 가 설치된 CLI 를 못 찾으며(`sh -c command -v`), 무엇보다 실행 생존 확인의 `os.kill(pid, 0)` 이 Windows 에서는 **그 프로세스를 강제 종료**한다.
+
+### 27.1 지원 범위
+| 어디서 | 지원 |
+|---|---|
+| 로컬: Linux, macOS | 지금처럼 |
+| 로컬: Windows 10/11 (네이티브) | M21 에서 추가. Python 3.11+, git, Claude Code·Codex CLI 의 Windows 판 |
+| 원격(SSH): Linux, macOS | 15장 그대로. UI·CLI 가 Windows 에 있어도 된다 |
+| 원격(SSH): Windows | 하지 않음(원격 스크립트가 POSIX 셸). WSL 에 duet 를 두고 그 안으로 SSH 하면 된다 |
+
+### 27.2 프로세스 제어 (`procs.py`)
+OS 마다 다른 부분을 한곳에 모은다. 나머지 코드는 이 함수만 쓴다.
+- **자식 실행 옵션**: POSIX 는 새 세션(`start_new_session`), Windows 는 새 프로세스 그룹 + 콘솔 창 없음(`CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`).
+- **트리 종료**: POSIX 는 프로세스 그룹에 SIGTERM → 유예 → SIGKILL. Windows 는 `taskkill /PID <pid> /T /F`(부모-자식 관계로 손자까지).
+- **생존 확인**: POSIX 는 `os.kill(pid, 0)` + 좀비 제외. Windows 는 `OpenProcess` + `GetExitCodeProcess`(ctypes, 표준 라이브러리). **Windows 에서 `os.kill` 은 쓰지 않는다.**
+- **분리 실행**(UI 가 띄우는 duet): Windows 는 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`. UI 를 꺼도 실행은 계속된다.
+- **duet 프로세스인지**: Linux 는 `/proc/<pid>/cmdline`, 그 밖에는 잠금 파일을 믿는다(지금처럼).
+
+### 27.3 중지 요청 파일 (모든 OS)
+UI 의 중지는 POSIX 에서 SIGTERM 을 보냈다. Windows 에는 다른 프로세스에 보낼 SIGTERM 이 없고(`TerminateProcess` 는 상태 저장 없이 죽인다), 분리 실행한 프로세스에는 Ctrl-Break 도 닿지 않는다.
+- UI 는 `<workdir>/.duet/stop` 파일을 만든다(POSIX 에서는 SIGTERM 도 함께 보낸다 — 지금처럼 빠르게).
+- 실행 중인 duet 는 잠금을 잡을 때 이 파일을 감시 대상으로 등록하고, 지우고 시작한다. 에이전트 호출을 기다리는 동안(0.5초마다), 한도 대기 중, 단계 사이에 파일을 보고, 있으면 Ctrl-C 와 같은 경로(KeyboardInterrupt)로 멈춘다: 진행 중인 호출의 프로세스 트리를 정리하고 `stopped_user` 로 저장한다.
+- 그래도 20초 안에 멈추지 않으면 UI 가 "강제 종료"를 제안한다(트리 종료, 상태는 `running` 으로 남아 UI 가 '멈춤'으로 보이고 resume 할 수 있다).
+- 콘솔에서 돌릴 때 Windows 의 Ctrl-C·Ctrl-Break 도 같은 경로.
+
+### 27.4 실행 파일 찾기와 실행
+- `shutil.which` + 보강한 PATH 로 찾는다. 보강 경로: POSIX `~/.local/bin`, `~/.duet/bin`. Windows 는 여기에 `%APPDATA%\npm`(npm 전역 설치), `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin`. Windows 는 PATHEXT(`.exe`, `.cmd`, `.bat`)를 따른다.
+- **배치 파일**(npm 이 만드는 `codex.cmd` 등): 인자의 `%`·`^`·`&` 가 cmd.exe 에서 망가지므로 어댑터가 프롬프트를 항상 stdin 으로 넘긴다.
+- **파이썬 스크립트**(확장자 없이 `#!...python` 으로 시작): Windows 는 shebang 을 모르므로 지금 인터프리터로 실행한다(테스트의 가짜 CLI, 사용자가 감싼 스크립트).
+- 셸 명령(테스트 명령 등): POSIX `sh -c`, Windows `%COMSPEC% /d /s /c`. 자동 감지한 파이썬 테스트 명령은 Windows 에서 `python -m pytest -q`(`python3` 은 Microsoft Store 바로가기일 수 있다).
+- 출력·파일은 UTF-8. Windows 에서 `duet` 의 표준 출력이 파일·파이프로 갈 때(UI 가 띄운 실행의 로그) UTF-8 로 쓴다(이모지가 cp949 에서 깨지며 죽지 않게).
+- Windows 에서 자식 프로세스 환경에 `PYTHONUTF8=1` 을 넣는다(사용자가 정했으면 그대로). 자식 파이썬(테스트, 채점, 가짜 CLI)의 표준 입출력 기본값이 cp949 라, duet 가 UTF-8 로 넘긴 프롬프트·출력이 깨진다.
+- 셸 명령은 Windows 에서 명령줄 문자열로 넘긴다(`subprocess` 의 `shell=True` 와 같은 형태). 목록으로 주면 안쪽 따옴표가 `\"` 로 바뀌는데 cmd.exe 는 그 규칙을 모른다. cmd.exe 는 명령을 못 찾아도 종료 코드 1 이라, 첫 단어를 찾을 수 없으면 테스트 결과를 '실행 불가'로 본다.
+- UI 서버는 거절할 요청이라도 본문을 먼저 읽는다(안 읽고 닫으면 Windows 에서 연결이 끊긴다).
+- duet 가 새로 만드는 저장소는 `core.autocrlf=false`(에이전트가 쓴 바이트를 그대로 커밋·복원). 기존 저장소의 설정은 건드리지 않는다.
+
+### 27.5 설치·로그인 동작과 UI 터미널
+- 동작은 OS 별 명령을 둔다. Windows(PowerShell):
+  - Claude Code: `irm https://claude.ai/install.ps1 | iex` (공식)
+  - Codex CLI: `npm install -g @openai/codex` (Node.js 필요)
+  - uv: `irm https://astral.sh/uv/install.ps1 | iex` (공식)
+  - git: `winget install --id Git.Git -e`
+  - curl: Windows 10 이상에 들어 있다(설치 동작 없음)
+  - 로그인·로그아웃 명령은 같다(`claude auth login`, `codex login --device-auth`).
+- UI 터미널: Windows 에는 pty 가 없다. 설치처럼 입력이 필요 없는 동작은 파이프로 돌려 출력을 보여 준다. 로그인처럼 터미널 입력이 필요한 동작은 **새 콘솔 창**을 띄워 거기서 하게 한다(UI 가 같은 PC 에서 돌 때). 원격 머신의 동작은 지금처럼 `ssh -tt`.
+
+### 27.6 Windows 에서의 SSH
+- Windows 의 OpenSSH 는 연결 재사용(ControlMaster)을 지원하지 않는다 → Windows 에서는 `ControlMaster`·`ControlPath`·`ControlPersist` 옵션을 빼고 매번 연결한다.
+- 원격 쪽은 15장 그대로(POSIX). 배포(duet.pyz)·조회·동작 모두 같은 명령.
+
+### 27.7 시험
+- 가짜 CLI 는 지금처럼 파이썬 스크립트. Windows 에서는 27.4 의 규칙으로 실행되고, PATH 로 찾는 시험을 위해 conftest 가 임시 폴더에 `.cmd` 감싸개를 만든다.
+- 시험 안의 셸 명령(`false`, `sh -c ...`)은 `sys.executable -c ...` 로 바꾼다. pty 처럼 POSIX 에만 있는 기능의 시험은 Windows 에서 건너뛴다(이유 표시).
+- 완료 기준: Windows(개발 노트북)와 Linux(css53) 양쪽에서 전체 시험 통과, Windows 에서 `duet doctor`·`duet ui`·mock 실행·UI 중지를 직접 확인.

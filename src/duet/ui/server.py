@@ -15,6 +15,7 @@ import ipaddress
 import json
 import os
 import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -25,6 +26,7 @@ from importlib import resources
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlsplit
 
+from duet import procs
 from duet.config import CLAUDE_MODEL_SUGGESTIONS, EFFORT_SUGGESTIONS
 from duet.doctor import ACTIONS, PATH_PREFIX, action_shell
 from duet import __version__
@@ -235,7 +237,8 @@ class DuetServer(ThreadingHTTPServer):
 
     # ================================================================ setup / terminal jobs
     def actions_view(self) -> dict[str, Any]:
-        return {"actions": {a.id: {"title": a.title, "interactive": a.interactive, "note": a.note, "command": a.shell}
+        return {"actions": {a.id: {"title": a.title, "interactive": a.interactive, "note": a.note, "command": a.shell,
+                                   "local_command": a.local_command(), "local_available": a.available_locally()}
                             for a in ACTIONS.values()}}
 
     def start_action(self, machine: str, action_id: Any) -> dict[str, Any]:
@@ -243,8 +246,11 @@ class DuetServer(ThreadingHTTPServer):
             action = action_shell(str(action_id))
         except KeyError:
             raise ApiError(400, "알 수 없는 동작입니다.") from None
+        if machine == LOCAL_MACHINE and not action.available_locally():
+            raise ApiError(400, f"'{action.title}' 는 이 OS 에서 지원하지 않습니다. 직접 설치하세요.")
+        mode = "pty"
         if machine == LOCAL_MACHINE:
-            argv = ["sh", "-c", PATH_PREFIX + action.shell]
+            argv, mode = local_action_argv(action)
         else:
             argv = Remote(self.machine(machine)).term_argv(action.shell)
         with self._terms_lock:
@@ -252,7 +258,7 @@ class DuetServer(ThreadingHTTPServer):
                 if t.running and t.machine == machine and t.title == action.title:
                     raise ApiError(409, f"'{action.title}' 가 이미 실행 중입니다.")
             tid = secrets.token_hex(6)
-            job = TermJob(id=tid, title=action.title, argv=argv, machine=machine, note=action.note)
+            job = TermJob(id=tid, title=action.title, argv=argv, machine=machine, note=action.note, mode=mode)
             self.terms[tid] = job
         job.start()
         self._remote_cache.pop(machine, None)
@@ -392,9 +398,10 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(413, "요청이 너무 큽니다.")
         if length == 0:
             return {}
+        # 거절하더라도 본문은 먼저 읽는다. 안 읽고 응답·종료하면 Windows 에서는 연결이 끊긴다(ConnectionAborted)
+        raw = self.rfile.read(length)
         if "application/json" not in (self.headers.get("Content-Type") or ""):
             raise ApiError(415, "JSON 요청만 받습니다.")
-        raw = self.rfile.read(length) if length else b"{}"
         try:
             data = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
@@ -472,6 +479,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 REMOTE_CACHE_SEC = 8.0
+
+
+def local_action_argv(action) -> tuple[list[str], str]:
+    """이 머신에서 동작을 돌리는 argv 와 터미널 방식 (DESIGN.md 27.5)."""
+    if procs.IS_WINDOWS:
+        argv = procs.powershell_argv(action.local_command())
+        if action.interactive_here:
+            return [*argv[:-2], "-NoExit", *argv[-2:]], "console"
+        return argv, "pipe"
+    return ["sh", "-c", PATH_PREFIX + action.shell], "pty"
 
 
 def model_suggestions() -> dict[str, Any]:
@@ -574,6 +591,10 @@ def exec_restart(server: "DuetServer") -> None:
     sys.stdout.flush()
     print("\nUI 를 다시 시작합니다 (같은 주소)...", flush=True)
     server.server_close()
+    if procs.IS_WINDOWS:
+        # Windows 의 exec 는 새 프로세스를 띄우고 지금 것을 끝내는 흉내라, 직접 그렇게 한다
+        subprocess.Popen(argv, env=env)
+        os._exit(0)
     os.execve(sys.executable, argv, env)
 
 

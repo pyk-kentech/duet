@@ -29,7 +29,7 @@ class TestClaude:
         a = ClaudeCodeAdapter(fake_cfg)
         cmd, stdin = a.build_command(req(tmp_path, mode=Mode.READ))
         assert stdin is None
-        assert cmd[0].endswith("fake_bin/claude")
+        assert Path(cmd[0]).name == "claude"
         assert cmd[1:] == ["-p", "--output-format", "json", "--allowedTools", "Read,Glob,Grep", "--", "안녕"]
 
     def test_write_command(self, fake_cfg: Config, tmp_path: Path):
@@ -147,13 +147,13 @@ class TestCodex:
         a = CodexAdapter(fake_cfg)
         cmd, stdin = a.build_command(req(tmp_path, mode=Mode.READ), Path("/tmp/last.md"))
         assert stdin is None
-        assert cmd[0].endswith("fake_bin/codex")
+        assert Path(cmd[0]).name == "codex"
         assert cmd[1:] == [
             "exec", "--skip-git-repo-check",
             "-c", 'model_reasoning_effort="medium"',  # Codex 기본 강도 (DESIGN.md 18.1)
             "-C", str(tmp_path),
             "--sandbox", "read-only",
-            "--output-last-message", "/tmp/last.md",
+            "--output-last-message", str(Path("/tmp/last.md")),
             "--", "안녕",
         ]
 

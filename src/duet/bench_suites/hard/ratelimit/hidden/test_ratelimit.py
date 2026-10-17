@@ -117,7 +117,7 @@ def test_bucket_concurrent_exact_n3(busy_switching):
 def test_bucket_default_clock_is_monotonic():
     b = TokenBucket(rate=1000, capacity=1)
     assert b.try_acquire()
-    time.sleep(0.01)
+    time.sleep(0.05)   # Windows 의 monotonic 은 약 15.6ms 단위로 바뀐다
     assert b.try_acquire()
 
 

@@ -12,7 +12,6 @@ import datetime as dt
 import json
 import os
 import re
-import signal
 import sys
 import threading
 from dataclasses import dataclass, field
@@ -20,6 +19,7 @@ from pathlib import Path
 from subprocess import Popen
 from typing import Any
 
+from duet import procs, stopflag
 from duet.activity import agent_activity, call_start_epoch
 from duet.workflow import WorkflowError, list_workflows, load_workflow, role_agent_map
 from duet.config import AGENT_NAMES, CLASSIC_WORKFLOW, WORKFLOW_NAME_RE, ConfigError, MAX_DEBATE_ROUNDS, MAX_REVIEW_ROUNDS, describe_effort, load_config
@@ -410,11 +410,13 @@ class Dashboard:
             raise ApiError(409, "실행 중인 duet 가 없습니다.")
         if not _looks_like_duet(info.pid):
             raise ApiError(409, f"pid {info.pid} 가 duet 프로세스가 아닌 것 같아 중지하지 않았습니다.")
-        try:
-            os.kill(info.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            raise ApiError(409, "이미 끝난 실행입니다.") from None
-        return {"stopped": info.pid, "run_id": info.run_id}
+        if payload.get("force"):
+            # 정상 중지가 듣지 않을 때. 상태는 running 으로 남아 UI 가 '멈춤'으로 보이고 resume 할 수 있다
+            procs.kill_pid_tree(info.pid)
+            return {"stopped": info.pid, "run_id": info.run_id, "method": "force"}
+        stopflag.request(wd)                      # 모든 OS (DESIGN.md 27.3)
+        signaled = procs.terminate_pid(info.pid)  # POSIX 는 SIGTERM 도 (더 빠르다)
+        return {"stopped": info.pid, "run_id": info.run_id, "method": "signal" if signaled else "request"}
 
     def jobs_list(self, limit: int = 20) -> list[dict[str, Any]]:
         self.reap()
@@ -565,15 +567,7 @@ class Dashboard:
 
 
 def _looks_like_duet(pid: int) -> bool:
-    if not pid_alive(pid):
-        return False
-    cmdline = Path(f"/proc/{pid}/cmdline")
-    if not cmdline.exists():
-        return True  # /proc 가 없는 OS: 잠금 파일을 믿는다
-    try:
-        return b"duet" in cmdline.read_bytes()
-    except OSError:
-        return False
+    return procs.looks_like_duet(pid)
 
 
 _CALL_START_RE = re.compile(r"^\[(\d{2}):(\d{2}):(\d{2})\] (\w+) ← (\w+)(?: \(재시도 (\d+)\))? 실행 중")

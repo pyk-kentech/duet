@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import duet
+from duet import procs
 from duet.doctor import PATH_PREFIX
 from duet.registry import duet_home
 from duet.runner import ExecutableNotFound, ProcessResult, run_process
@@ -106,12 +107,14 @@ class Remote:
         return os.environ.get("DUET_SSH") or "ssh"
 
     def ssh_argv(self, *, tty: bool = False) -> list[str]:
-        ctl = duet_home() / "ssh"
-        ctl.mkdir(parents=True, exist_ok=True)
         argv = [self.ssh_bin(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=8",
-                "-o", "ServerAliveInterval=15", "-o", "StrictHostKeyChecking=accept-new",
-                "-o", "ControlMaster=auto", "-o", f"ControlPath={ctl}/cm-%C", "-o", "ControlPersist=600",
-                "-p", str(self.port)]
+                "-o", "ServerAliveInterval=15", "-o", "StrictHostKeyChecking=accept-new"]
+        if not procs.IS_WINDOWS:
+            # Windows 의 OpenSSH 는 연결 재사용을 지원하지 않는다 (DESIGN.md 27.6)
+            ctl = duet_home() / "ssh"
+            ctl.mkdir(parents=True, exist_ok=True)
+            argv += ["-o", "ControlMaster=auto", "-o", f"ControlPath={ctl}/cm-%C", "-o", "ControlPersist=600"]
+        argv += ["-p", str(self.port)]
         if tty:
             argv.append("-tt")
         return [*argv, "--", self.target]

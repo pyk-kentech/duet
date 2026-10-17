@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from duet.agents.mock import MockAdapter
@@ -32,3 +33,23 @@ def make_ctx(workdir: Path, agents: dict[str, MockAdapter] | None = None,
 
 def file_names(run_dir: Path) -> list[str]:
     return sorted(p.name for p in run_dir.iterdir() if p.suffix == ".md")
+
+
+def py_cmd(code: str) -> str:
+    """OS 셸(sh·cmd.exe)에서 똑같이 도는 파이썬 한 줄 명령 (DESIGN.md 27.7).
+
+    code 에는 큰따옴표·$·% 를 쓰지 마라(셸이 해석한다).
+    """
+    assert '"' not in code and "$" not in code and "%" not in code, code
+    return f'"{sys.executable}" -c "{code}"'
+
+
+PASS_CMD = py_cmd("pass")
+FAIL_CMD = py_cmd("import sys; sys.exit(1)")
+
+
+def echo_exit(text: str, code: int = 1, stderr: bool = False) -> str:
+    """text 를 출력하고 code 로 끝나는 셸 명령."""
+    stream = "sys.stderr" if stderr else "sys.stdout"
+    return py_cmd(f"import sys; print({text!r}, file={stream}); sys.exit({code})")
+

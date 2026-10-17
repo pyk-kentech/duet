@@ -53,17 +53,18 @@ def test_pyz_is_deterministic_and_complete(tmp_path: Path):
     assert "duet/templates/review.md" in names and "duet/ui/static/app.js" in names
     assert not any("__pycache__" in n for n in names)
     import subprocess
-    r = subprocess.run([sys.executable, str(path), "--version"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(path), "--version"], capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0 and "duet" in r.stdout
     # zip 안에서도 템플릿을 읽을 수 있어야 한다(원격 실행)
     r = subprocess.run([sys.executable, "-c",
                         f"import sys; sys.path.insert(0, {str(path)!r}); from duet.prompts import render; "
-                        "print(render('propose', task='T')[:80])"], capture_output=True, text=True)
+                        "print(render('propose', task='T')[:80])"], capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, r.stderr
     assert "시니어 엔지니어" in r.stdout
 
 
 # ====================================================================== Remote 클래스
+@pytest.mark.skipif(os.name == "nt", reason="가짜 원격이 POSIX 셸(sh)로 명령을 돌린다. 원격은 Linux·macOS (DESIGN.md 27.1)")
 def test_remote_probe_deploy_api(remote_env, tmp_path: Path):
     r = Remote({"id": "lab", "ssh": "me@lab"})
     info = r.probe()
@@ -92,6 +93,7 @@ def test_remote_unreachable(remote_env):
 
 
 # ====================================================================== 서버: 머신 등록 → 배포 → 원격 실행
+@pytest.mark.skipif(os.name == "nt", reason="가짜 원격이 POSIX 셸(sh)로 명령을 돌린다. 원격은 Linux·macOS (DESIGN.md 27.1)")
 def test_server_remote_machine_end_to_end(server, remote_env, tmp_path: Path):
     s, body, _ = call(server, "POST", "/api/machines", body={"id": "Bad Id", "ssh": "me@lab"})
     assert s == 400
@@ -177,7 +179,10 @@ def test_setup_action_terminal_flow(server, monkeypatch):
     import duet.ui.server as srv_mod
     from duet.doctor import Action
 
-    test_action = Action("t", "테스트 로그인", "printf 'code? '; read x; echo \"ok:$x\"", True)
+    # Windows 는 PowerShell 파이프 방식으로 같은 흐름을 본다 (DESIGN.md 27.5)
+    test_action = Action("t", "테스트 로그인", "printf 'code? '; read x; echo \"ok:$x\"", True,
+                         windows="Write-Host -NoNewline 'code? '; $x = [Console]::In.ReadLine(); Write-Output ('ok:' + $x)",
+                         win_interactive=False)
     monkeypatch.setattr(srv_mod, "action_shell", lambda aid: test_action if aid == "t" else (_ for _ in ()).throw(KeyError(aid)))
     assert call(server, "POST", "/api/setup/action", body={"action": "rm -rf /"})[0] == 400
     s, job, _ = call(server, "POST", "/api/setup/action", body={"action": "t"})

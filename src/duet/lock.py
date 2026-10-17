@@ -13,6 +13,7 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from duet import stopflag
 from duet.runner import pid_alive
 from duet.state import DUET_DIR
 
@@ -77,6 +78,7 @@ class RunLock:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(asdict(self.info), f, ensure_ascii=False)
             self.held = True
+            stopflag.watch(self.path.parent.parent)      # 중지 요청 파일 (DESIGN.md 27.3)
             return self
         live = read_lock(self.path.parent.parent)
         raise LockBusy(live or self.info)
@@ -91,6 +93,7 @@ class RunLock:
     def release(self) -> None:
         if not self.held:
             return
+        stopflag.unwatch()
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             if data.get("pid") == os.getpid():

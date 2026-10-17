@@ -14,6 +14,7 @@ from duet.testing import resolve_command
 from duet.workflow import WorkflowError, load_workflow, parse_workflow
 from duet.config import Config
 from duet.workspace import Workspace
+from tests.helpers import PASS_CMD
 from tests.test_ui import call, server  # noqa: F401 - pytest 픽스처
 
 ORIGINAL_DESIGN = "# 프로젝트 전체 설계\n- 모듈 A, B\n"
@@ -121,7 +122,7 @@ class TestChangeDesign:
         assert f"{wd / st.design_doc} 를 확인하세요" in capsys.readouterr().out
         server.dashboard.registry.add(wd)
         s, d, _ = call(server, "GET", f"/api/design?project={wd}&run={rd.name}")
-        assert s == 200 and d["path"].endswith(st.design_doc) and "최종 설계" in d["text"]
+        assert s == 200 and Path(d["path"]).as_posix().endswith(st.design_doc) and "최종 설계" in d["text"]
         s, d, _ = call(server, "GET", f"/api/design?project={wd}")
         assert d["text"] == ORIGINAL_DESIGN
 
@@ -185,7 +186,7 @@ def test_codex_reviewer_and_claude_with_bash(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(orch_mod, "make_agents", factory)
     wd = tmp_path / "w"
     wd.mkdir()
-    (wd / "duet.toml").write_text('test_command = "true"\n', encoding="utf-8")
+    (wd / "duet.toml").write_text(f"test_command = '{PASS_CMD}'\n", encoding="utf-8")
     assert main(["run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0"]) == 0
     review = next(c for c in seen["codex"].calls if c.step == "review").prompt
     assert "좁게 실행해라" in review and "명령을 실행할 수 없다" not in review

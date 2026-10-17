@@ -3,8 +3,9 @@
 duet 안의 모든 외부 프로세스 실행(claude, codex, git, UI가 띄우는 duet)은 이 모듈을 지난다.
 타임아웃, 중단 처리, 실행 파일 부재를 여기서 한 번에 해결한다.
 
-- 자식은 새 세션(프로세스 그룹)으로 띄운다. 타임아웃이나 중단(Ctrl-C, SIGTERM) 때
-  그룹 전체를 종료해서 claude/codex가 띄운 손자 프로세스(테스트, 셸 명령 등)가 남지 않게 한다.
+- 자식은 새 세션(프로세스 그룹)으로 띄운다. 타임아웃이나 중단(Ctrl-C, SIGTERM, 중지 요청 파일) 때
+  트리 전체를 종료해서 claude/codex가 띄운 손자 프로세스(테스트, 셸 명령 등)가 남지 않게 한다.
+- OS 별 차이는 procs.py 에 있다 (DESIGN.md 27장).
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ from __future__ import annotations
 import fnmatch
 import logging
 import os
-import signal
 import subprocess
 import threading
 import time
@@ -20,12 +20,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Collection, Iterable, Mapping, Sequence
 
+from duet import procs, stopflag
+
 log = logging.getLogger("duet.runner")
 
 # 타임아웃으로 강제 종료된 경우의 exit_code 표기값
 TIMEOUT_EXIT_CODE = -1
 # SIGTERM 후 SIGKILL 까지 기다리는 시간
-KILL_GRACE_SEC = 3.0
+KILL_GRACE_SEC = procs.KILL_GRACE_SEC
 # 그룹을 죽인 뒤 남은 출력을 모으는 최대 시간
 DRAIN_SEC = 5.0
 # 프로세스가 정상 종료한 뒤 출력 파이프가 닫히기를 기다리는 시간
@@ -46,7 +48,7 @@ class ExecutableNotFound(RunnerError):
 
 @dataclass
 class ProcessResult:
-    cmd: list[str]
+    cmd: list[str] | str
     stdout: str
     stderr: str
     exit_code: int
@@ -59,14 +61,10 @@ class ProcessResult:
         return self.exit_code == 0 and not self.timed_out
 
 
-# 공식 설치 스크립트(claude, codex, uv)가 실행 파일을 두는 곳. 셸 설정을 안 읽는 환경(UI, ssh)에서도 찾게 한다.
-EXTRA_BIN_DIRS = ("~/.local/bin", "~/.duet/bin")
-
-
 def augmented_path(path: str | None) -> str:
+    """공식 설치 스크립트·npm 이 실행 파일을 두는 곳을 PATH 뒤에 붙인다 (procs.extra_bin_dirs)."""
     parts = [p for p in (path or "").split(os.pathsep) if p]
-    for d in EXTRA_BIN_DIRS:
-        full = os.path.expanduser(d)
+    for full in procs.extra_bin_dirs():
         if full not in parts:
             parts.append(full)
     return os.pathsep.join(parts)
@@ -88,11 +86,14 @@ def _merged_env(env: Mapping[str, str] | None, drop: Collection[str] = ()) -> di
     if env:
         full.update(env)
     full["PATH"] = augmented_path(full.get("PATH"))
+    if procs.IS_WINDOWS:
+        # 자식 파이썬(테스트, 가짜 CLI, 채점)의 표준 입출력을 UTF-8 로. 기본은 cp949 라 한글·이모지가 깨진다 (DESIGN.md 27.4)
+        full.setdefault("PYTHONUTF8", "1")
     return full
 
 
 def run_process(
-    cmd: Sequence[str],
+    cmd: Sequence[str] | str,
     cwd: Path | str,
     *,
     timeout_sec: int | float | None = None,
@@ -107,13 +108,15 @@ def run_process(
     - KeyboardInterrupt 등 예외가 나면 프로세스 그룹을 죽이고 예외를 다시 던진다.
     - 실행 파일이 없으면 ExecutableNotFound 를 던진다.
     - drop_env 의 이름은 상속 환경에서 뺀다(env 로 직접 준 값은 남김). 비밀 변수 정리용 (env_drops).
+    - cmd 가 문자열이면 Windows 셸 명령줄이다 (procs.shell_argv).
     """
-    cmd = [str(c) for c in cmd]
+    cmd = cmd if isinstance(cmd, str) else [str(c) for c in cmd]
     log.debug("run: %s (cwd=%s, timeout=%s)", _fmt_cmd(cmd), cwd, timeout_sec)
     started = time.monotonic()
+    full_env = _merged_env(env, set(drop_env))
     try:
         proc = subprocess.Popen(
-            cmd,
+            procs.resolve_argv(cmd, full_env.get("PATH")),
             cwd=str(cwd),
             stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -121,17 +124,17 @@ def run_process(
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=_merged_env(env, set(drop_env)),
-            start_new_session=True,
+            env=full_env,
+            **procs.child_kwargs(),
         )
     except FileNotFoundError as e:
-        raise ExecutableNotFound(cmd[0]) from e
+        raise ExecutableNotFound(cmd if isinstance(cmd, str) else cmd[0]) from e
 
     io = _PipeIO(proc, stdin_text)
     try:
         # communicate() 는 '파이프가 닫힐 때'까지 기다린다. 에이전트가 띄운 백그라운드 프로세스가
         # 출력 파이프를 물고 있으면 정상 종료한 호출도 타임아웃이 된다. 그래서 '프로세스 종료'를 기다린다.
-        proc.wait(timeout=timeout_sec)
+        _wait(proc, timeout_sec)
     except subprocess.TimeoutExpired:
         log.warning("시간 초과(%ss): %s", timeout_sec, _fmt_cmd(cmd))
         kill_process_group(proc)
@@ -158,6 +161,26 @@ def run_process(
         cmd=cmd, stdout=stdout, stderr=stderr, exit_code=proc.returncode,
         duration_sec=duration, stdin_text=stdin_text,
     )
+
+
+def _wait(proc: subprocess.Popen, timeout_sec: int | float | None) -> None:
+    """프로세스 종료를 기다린다. 중지 요청 파일을 감시 중이면 짧게 나눠 기다리며 확인한다 (DESIGN.md 27.3).
+
+    시간이 다 되면 TimeoutExpired, 중지 요청이면 KeyboardInterrupt.
+    """
+    if not stopflag.active():
+        proc.wait(timeout=timeout_sec)
+        return
+    deadline = None if timeout_sec is None else time.monotonic() + timeout_sec
+    while True:
+        step = stopflag.POLL_SEC if deadline is None else max(0.0, min(stopflag.POLL_SEC, deadline - time.monotonic()))
+        try:
+            proc.wait(timeout=step)
+            return
+        except subprocess.TimeoutExpired:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise
+            stopflag.check()
 
 
 class _PipeIO:
@@ -215,24 +238,8 @@ class _PipeIO:
 
 
 def kill_process_group(proc: subprocess.Popen) -> None:
-    """proc 이 이끄는 프로세스 그룹 전체를 SIGTERM → (유예) → SIGKILL 로 종료한다."""
-    pgid = proc.pid
-    if not hasattr(os, "killpg"):  # pragma: no cover - Windows
-        proc.kill()
-        return
-    try:
-        os.killpg(pgid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        pass
-    try:
-        proc.wait(timeout=KILL_GRACE_SEC)
-    except subprocess.TimeoutExpired:
-        pass
-    # 리더가 먼저 끝났어도 그룹에 남은 손자 프로세스가 있을 수 있다
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+    """proc 과 그 자손을 모두 종료한다 (POSIX: 그룹 SIGTERM → SIGKILL, Windows: taskkill /T /F)."""
+    procs.kill_tree(proc, KILL_GRACE_SEC)
 
 
 def spawn_detached(
@@ -248,31 +255,18 @@ def spawn_detached(
     """
     cmd = [str(c) for c in cmd]
     log.debug("spawn: %s (cwd=%s)", _fmt_cmd(cmd), cwd)
+    full_env = _merged_env(env)
     try:
         return subprocess.Popen(
-            cmd, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
-            env=_merged_env(env), start_new_session=True,
+            procs.resolve_argv(cmd, full_env.get("PATH")), cwd=str(cwd), stdin=subprocess.DEVNULL,
+            stdout=log_file, stderr=subprocess.STDOUT, env=full_env, **procs.detached_kwargs(),
         )
     except FileNotFoundError as e:
         raise ExecutableNotFound(cmd[0]) from e
 
 
 def pid_alive(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    # 좀비는 살아 있는 것으로 치지 않는다 (Linux)
-    stat = Path(f"/proc/{pid}/stat")
-    try:
-        state = stat.read_text().rsplit(")", 1)[1].split()[0]
-        return state != "Z"
-    except (OSError, IndexError):
-        return True
+    return procs.pid_alive(pid)
 
 
 def _as_text(data: bytes | str | None) -> str:
@@ -283,6 +277,6 @@ def _as_text(data: bytes | str | None) -> str:
     return data
 
 
-def _fmt_cmd(cmd: Sequence[str], limit: int = 200) -> str:
-    s = " ".join(cmd)
+def _fmt_cmd(cmd: Sequence[str] | str, limit: int = 200) -> str:
+    s = cmd if isinstance(cmd, str) else " ".join(cmd)
     return s if len(s) <= limit else s[:limit] + "…"

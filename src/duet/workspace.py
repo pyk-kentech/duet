@@ -59,6 +59,8 @@ class Workspace:
         self.workdir.mkdir(parents=True, exist_ok=True)
         if not self.is_repo():
             self.git("init", "-q")
+            # 에이전트가 쓴 바이트를 그대로 커밋·복원한다 (Windows 의 전역 autocrlf=true 대비, DESIGN.md 27.4)
+            self.git("config", "core.autocrlf", "false")
         self.ensure_gitignore()
 
     def ensure_gitignore(self) -> None:

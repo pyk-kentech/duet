@@ -14,9 +14,12 @@ from duet.agents.mock import MockAdapter
 from duet.phases.build import BuildPhase
 from duet.repro import parse_repros
 from duet.workspace import Workspace
-from tests.helpers import file_names, make_ctx
+from tests.helpers import file_names, make_ctx, py_cmd
 
-REPRO_TEST_CMD = ("sh -c 'for f in tests/test_repro_*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done; echo all-ok'")
+# 재현 테스트(파이썬 스크립트)를 모두 돌리는 테스트 명령. sh·cmd.exe 어디서나 돈다 (DESIGN.md 27.7)
+REPRO_TEST_CMD = py_cmd("import glob, subprocess, sys; "
+                        "rc = max([subprocess.call([sys.executable, f]) for f in sorted(glob.glob('tests/test_repro_*.py'))] or [0]); "
+                        "print('all-ok' if rc == 0 else 'fail'); sys.exit(rc)")
 
 
 # ====================================================================== 재현 테스트 파싱
@@ -59,7 +62,7 @@ def test_repro_flow_end_to_end(tmp_path: Path):
     def impl(req, n):
         if req.step == "fix":
             prompts["fix"].append(req.prompt)
-            (req.cwd / "tests" / "test_repro_empty.sh").write_text("exit 0\n", encoding="utf-8")   # 고쳤다고 치고
+            (req.cwd / "tests" / "test_repro_empty.py").write_text("import sys\nsys.exit(0)\n", encoding="utf-8")   # 고쳤다고 치고
         (req.cwd / "tests").mkdir(exist_ok=True)
         (req.cwd / "main.py").write_text(f"v{n}\n", encoding="utf-8")
         return "done"
@@ -68,7 +71,7 @@ def test_repro_flow_end_to_end(tmp_path: Path):
         prompts["review"].append(req.prompt)
         if n == 1:
             return ("## 반드시 고칠 것\n- [P2] 빈 입력에서 실패\n\n"
-                    '<repro path="tests/test_repro_empty.sh">\necho "빈 입력 실패"; exit 1\n</repro>\n'
+                    '<repro path="tests/test_repro_empty.py">\necho "빈 입력 실패"; exit 1\n</repro>\n'
                     "<verdict>\nstatus: CHANGES_REQUESTED\nmust_fix: 1\np1: 0\np2: 1\np3: 0\n</verdict>")
         return "<verdict>\nstatus: APPROVED\nmust_fix: 0\np1: 0\np2: 0\np3: 0\n</verdict>"
 
@@ -79,17 +82,17 @@ def test_repro_flow_end_to_end(tmp_path: Path):
     assert BuildPhase(ctx).run() is True
     st = ctx.state
     r = st.repros["1"]
-    assert r["files"] == ["tests/test_repro_empty.sh"] and r["status"] == "failed" and r["commit"]
+    assert r["files"] == ["tests/test_repro_empty.py"] and r["status"] == "failed" and r["commit"]
     assert file_names(ctx.run_dir) == ["01_impl1_claude.md", "02_test1.md", "03_review1_codex.md", "04_repro1.md",
                                        "05_impl2_claude.md", "06_test2.md", "07_testguard2.md", "08_review2_codex.md"]
     # 구현자가 재현 테스트를 'exit 0' 으로 바꿨다 → 테스트 변경 경고 (DESIGN.md 24.1)
     assert [s["kind"] for s in st.test_guard["2"]["signals"]] == ["repro_changed"]
-    assert "리뷰어 재현 테스트 변경: `tests/test_repro_empty.sh`" in prompts["review"][1]
+    assert "리뷰어 재현 테스트 변경: `tests/test_repro_empty.py`" in prompts["review"][1]
     assert "재현됨" in (ctx.run_dir / "04_repro1.md").read_text(encoding="utf-8")
     # 리뷰 프롬프트: 재현 테스트 안내, 테스트 재실행 하지 말라는 안내
     assert "tests/test_repro_" in prompts["review"][0] and "다시 돌리지 마라" in prompts["review"][0]
     # 수정 프롬프트에 재현 테스트가 들어감
-    assert "tests/test_repro_empty.sh" in prompts["fix"][0] and "재현됨" in prompts["fix"][0]
+    assert "tests/test_repro_empty.py" in prompts["fix"][0] and "재현됨" in prompts["fix"][0]
     # 다음 라운드 테스트는 재현 테스트까지 돌려 통과
     assert st.tests["2"]["status"] == "passed"
     log = Workspace(tmp_path).git("log", "--format=%s")

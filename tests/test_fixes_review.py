@@ -153,6 +153,7 @@ def test_is_success_legacy_meta(tmp_path: Path):
 
 
 # ---------------------------------------------------------------- 5. 백그라운드 프로세스가 파이프를 잡아도
+@pytest.mark.skipif(os.name == "nt", reason="sh 의 백그라운드 실행(&) 시험이라 POSIX 전용")
 def test_finished_call_not_reported_as_timeout_when_background_holds_pipe(tmp_path: Path):
     r = run_process(["bash", "-c", "sleep 30 & echo '{\"result\": \"ok\"}'; exit 0"], cwd=tmp_path, timeout_sec=15)
     assert not r.timed_out and r.exit_code == 0

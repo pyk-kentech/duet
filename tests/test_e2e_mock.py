@@ -189,7 +189,7 @@ def test_log_command(tmp_path: Path, capsys):
 def test_console_entrypoint_subprocess(tmp_path: Path):
     wd = tmp_path / "x"
     r = subprocess.run([sys.executable, "-m", "duet", "run", "t", "--workdir", str(wd), "--mock",
-                        "--design-only", "--debate-rounds", "0"], capture_output=True, text=True)
+                        "--design-only", "--debate-rounds", "0"], capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, r.stderr
     assert "설계만 완료" in r.stdout
 
