@@ -461,6 +461,12 @@ class Handler(BaseHTTPRequestHandler):
         """?t= 가 맞으면 쿠키를 심고, 다음부터는 쿠키로 연다 (DESIGN.md 28.1). API 는 쿠키로 열지 않는다."""
         via_query = self._token_ok(query.get("t"))
         if not via_query and not self._token_ok(self._cookie_token()):
+            # 쿠키는 주소(호스트)마다 따로라 localhost 로 열면 127.0.0.1 에서 심은 쿠키가 없다 → 같은 서버의 127.0.0.1 로
+            host = self.headers.get("Host", "")
+            if self.server.loopback and host.startswith("localhost:"):
+                self._send(HTTPStatus.FOUND, b"", "text/plain; charset=utf-8",
+                           {"Location": f"http://127.0.0.1:{self.server.port}{self.path}"})
+                return
             self._send(HTTPStatus.FORBIDDEN, _forbidden_page().encode("utf-8"), "text/html; charset=utf-8")
             return
         extra = None
@@ -613,8 +619,9 @@ def _forbidden_page() -> str:
             "<link rel='stylesheet' href='/static/style.css'>"
             "<body><main class='main'>"
             "<h1>접속 주소가 맞지 않습니다</h1>"
-            "<p><code>duet ui</code> 를 실행한 터미널에 출력된 주소(<code>?t=</code> 포함)로 접속하세요. "
-            "서버를 다시 시작하면 주소가 바뀝니다.</p></main></body>")
+            "<p><code>duet ui</code> 를 실행한 터미널에 출력된 주소(<code>?t=</code> 포함)로 한 번 접속하세요. "
+            "그다음부터는 이 브라우저가 기억해서 주소만으로 열립니다(<code>duet ui --new-token</code> 으로 "
+            "토큰을 바꾸면 다시 처음 주소가 필요합니다).</p></main></body>")
 
 
 def make_server(host: str = "127.0.0.1", port: int = 8787, *, dashboard: Dashboard | None = None,

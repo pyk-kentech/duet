@@ -247,3 +247,15 @@ def test_workflow_api_has_step_effort_for_diagram(tmp_path: Path):
     d = Dashboard()._defaults(None)
     assert d["codex"]["effort_base"] == "medium" and d["codex"]["step_effort"]["review"] == "high"
     assert d["codex"]["effort"] == ""          # 화면의 강도 칸은 비워 둔다(단계별 설정을 지우지 않게)
+
+
+def test_localhost_redirects_to_cookie_host(server):
+    """쿠키는 127.0.0.1 에 있으니, 쿠키 없는 localhost 접속은 같은 서버의 127.0.0.1 로 보낸다."""
+    import http.client
+    conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=10)
+    conn.request("GET", "/#/bench", headers={"Host": f"localhost:{server.port}"})
+    r = conn.getresponse()
+    assert r.status == 302 and r.getheader("Location") == f"http://127.0.0.1:{server.port}/#/bench"
+    conn.close()
+    assert req(server, "/", headers={"Host": f"127.0.0.1:{server.port}"})[0] == 403      # 127.0.0.1 은 그대로 안내
+
