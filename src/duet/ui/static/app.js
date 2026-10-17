@@ -24,6 +24,33 @@ function h(tag, attrs, ...children) {
   append(el, children);
   return el;
 }
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svg(tag, attrs, ...children) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) el.setAttribute(k, String(v));
+  for (const c of children.flat(Infinity)) if (c) el.append(c);
+  return el;
+}
+// Claude·Codex 표시. 각 회사의 공식 로고 파일을 옮긴 것이 아니라, 알아볼 수 있게 단순화해 그린 아이콘이다.
+function agentLogo(agent, size = 16) {
+  const base = String(agent || '').replace(/^mock-/, '');
+  const box = { viewBox: '0 0 24 24', width: size, height: size, 'aria-hidden': 'true' };
+  if (base === 'claude') {        // 주황색 햇살: 길이가 번갈아 다른 12갈래
+    const rays = [];
+    for (let i = 0; i < 12; i++) {
+      const a = i * Math.PI / 6 + 0.12, r1 = 2.4, r2 = i % 2 ? 7.4 : 10;
+      rays.push(svg('line', { x1: (12 + r1 * Math.cos(a)).toFixed(2), y1: (12 + r1 * Math.sin(a)).toFixed(2),
+        x2: (12 + r2 * Math.cos(a)).toFixed(2), y2: (12 + r2 * Math.sin(a)).toFixed(2) }));
+    }
+    return svg('svg', { ...box, class: 'logo logo-claude' }, svg('g', { stroke: 'currentColor', 'stroke-width': 2.5, 'stroke-linecap': 'round' }, rays));
+  }
+  if (base === 'codex') {         // 여섯 겹 고리
+    const petals = [];
+    for (let i = 0; i < 6; i++) petals.push(svg('ellipse', { cx: 12, cy: 7.7, rx: 3.3, ry: 5.3, transform: `rotate(${i * 60} 12 12)` }));
+    return svg('svg', { ...box, class: 'logo logo-codex' }, svg('g', { fill: 'none', stroke: 'currentColor', 'stroke-width': 1.7 }, petals));
+  }
+  return svg('svg', { ...box, class: 'logo' }, svg('circle', { cx: 12, cy: 12, r: 6, fill: 'currentColor', opacity: .4 }));
+}
 function append(el, children) {
   for (const c of [children].flat(Infinity)) {
     if (c === null || c === undefined || c === false) continue;
@@ -54,7 +81,8 @@ function agentTag(name, role) {
   if (!name) return null;
   const base = String(name).replace(/^mock-/, '');
   // 워크플로 역할이 있으면 역할 이름을 보이고, 색은 CLI 기준 (DESIGN.md 19.1)
-  return h('span', { class: `agent agent-${base === 'claude' ? 'claude' : base === 'codex' ? 'codex' : 'x'}`, title: role ? `${role} (${name})` : null }, role || name);
+  return h('span', { class: `agent agent-${base === 'claude' ? 'claude' : base === 'codex' ? 'codex' : 'x'}`, title: role ? `${role} (${name})` : null },
+    agentLogo(base, 12), role || name);
 }
 function verdictTag(v) {
   if (!v) return null;
@@ -208,7 +236,7 @@ const TIPS = {
   synth: '두 AI 의 설계안을 하나의 최종 설계(DESIGN.md)로 합치는 AI 입니다. 기본은 리뷰 담당이 합칩니다.',
   claude_model: 'Claude 의 어떤 모델을 쓸지 정합니다. 비워 두면 Claude 가 평소 쓰는 기본 모델입니다.',
   codex_model: 'Codex(ChatGPT)의 어떤 모델을 쓸지 정합니다. 비워 두면 기본 모델입니다.',
-  effort: 'AI 가 얼마나 깊게 생각할지입니다. 높을수록 꼼꼼하지만 느리고 사용량을 더 씁니다. 기본값(단계별)은 단계마다 정해진 강도를 씁니다(Codex: 설계 종합·첫 리뷰 high, 나머지 medium). 값을 고르면 모든 단계에 그 값을 씁니다.',
+  effort: 'AI 가 얼마나 깊게 생각할지입니다. 높을수록 꼼꼼하지만 느리고 사용량을 더 씁니다. 단계별 기본은 단계마다 정해진 강도를 씁니다(Codex: 설계 종합·첫 리뷰 high, 나머지 medium). 값을 고르면 모든 단계에 그 값을 씁니다.',
   debate_rounds: '두 AI 가 서로의 설계안을 비판하고 고치는 횟수입니다. 0 이면 비판 없이 바로 합칩니다. 1 늘릴 때마다 AI 호출이 2번 늘어납니다.',
   max_review: '"구현 → 리뷰"를 최대 몇 번 반복할지입니다. 그 전에 승인되면 바로 끝납니다.',
   stall_rounds: '리뷰에서 고칠 것이 이 횟수만큼 연속으로 줄지 않으면 멈추고 사람에게 넘깁니다. 끝없이 반려만 반복되는 걸 막습니다. 0 이면 이 기능을 끕니다.',
@@ -1662,7 +1690,7 @@ function effortSelect(name, agent, value, sugg, model) {
     const m = sugg.codex.models.find(x => x.id === model);
     if (m && m.efforts && m.efforts.length) levels = m.efforts;
   }
-  const sel = h('select', { name }, h('option', { value: '' }, '기본값(단계별)'), levels.map(l => h('option', { value: l }, l)));
+  const sel = h('select', { name }, h('option', { value: '' }, '단계별 기본'), levels.map(l => h('option', { value: l }, l)));
   if (value && !levels.includes(value)) sel.append(h('option', { value }, value));
   sel.value = value || '';
   return sel;
@@ -1974,10 +2002,33 @@ function workflowModel() {
   }
   return { roles: Object.fromEntries((w.roles || []).map(r => [r.name, r])), steps: w.steps || [], classic: false };
 }
+const EFFORT_LEVEL = { minimal: 'low', low: 'low', medium: 'med', high: 'high', xhigh: 'max', max: 'max' };
+function effortPill(v, label) {
+  return h('span', { class: `wf-eff e-${EFFORT_LEVEL[v] || 'def'}`, title: '추론 강도' }, label ? h('small', null, label) : null, v || '기본');
+}
+function wfEffort(pairs) {
+  // 단계별로 같으면 한 개, 다르면(예: 리뷰 1회차 high · 2회차부터 medium) 단계 이름을 붙여 여러 개
+  const vals = pairs.map(([, v]) => v || '');
+  if (vals.every(v => v === vals[0])) return [effortPill(vals[0])];
+  return pairs.map(([label, v], i) => effortPill(v || '', i === 0 ? null : label));
+}
 function wfEffortText(pairs) {
   const vals = pairs.map(([, v]) => v || '기본');
-  if (vals.every(v => v === vals[0])) return `추론 ${vals[0]}`;
-  return pairs.map(([label, v], i) => i === 0 ? `추론 ${v || '기본'}` : `${label} ${v || '기본'}`).join(' · ');
+  return vals.every(v => v === vals[0]) ? vals[0] : pairs.map(([label, v]) => `${label} ${v || '기본'}`).join(' · ');
+}
+function wfCard(label, agent, roleName, model, pairs, opts = {}) {
+  const base = agent === 'claude' || agent === 'codex' ? agent : 'x';
+  const effs = wfEffort(pairs);
+  const many = effs.length > 1;          // 단계별로 다르면 칸이 좁아지지 않게 아래 줄에
+  return h('div', { class: `wf-node wf-${base}${opts.small ? ' small' : ''}`, 'data-key': opts.key || `${label}:${roleName}` },
+    h('div', { class: 'wf-node-head' },
+      h('span', { class: `wf-avatar wf-avatar-${base}` }, agentLogo(agent, 18)),
+      h('div', { class: 'wf-who' }, h('span', { class: 'wf-step' }, label),
+        h('span', { class: 'wf-name' }, roleName && roleName !== agent ? `${roleName} · ${agent}` : agent)),
+      many ? null : h('div', { class: 'wf-effs' }, effs)),
+    h('div', { class: 'wf-model' }, model || '기본 모델'),
+    many ? h('div', { class: 'wf-effs wide' }, effs) : null,
+    opts.note ? h('div', { class: 'wf-note' }, opts.note) : null);
 }
 function renderWorkflowDiagram() {
   const box = $('#workflow-diagram');
@@ -1988,21 +2039,19 @@ function renderWorkflowDiagram() {
   const f = form.elements;
   const R = name => m.roles[name] || { name, agent: name };
   const sig = {};
+  const uses = { claude: [], codex: [] };                 // 에이전트 카드에 '이 워크플로에서 하는 일'
   const node = (label, roleName, keys, opts = {}) => {
     const r = R(roleName);
     const rs = roleSetting(r);
-    const effort = wfEffortText(keys.map(([k, lbl]) => [lbl, rs.step[k] || rs.effort || '']));
+    const pairs = keys.map(([k, lbl]) => [lbl, rs.step[k] || rs.effort || '']);
     const key = `${label}:${roleName}`;
-    sig[key] = `${r.agent}|${rs.model}|${effort}`;
-    return h('div', { class: `wf-node wf-${r.agent === 'claude' || r.agent === 'codex' ? r.agent : 'x'}${opts.small ? ' small' : ''}`, 'data-key': key },
-      h('div', { class: 'wf-node-head' }, h('span', { class: 'wf-step' }, label), agentTag(r.agent, r.name !== r.agent ? r.name : null)),
-      h('div', { class: 'wf-model' }, rs.model || '기본 모델'),
-      h('div', { class: 'wf-effort' }, effort),
-      opts.note ? h('div', { class: 'wf-note' }, opts.note) : null);
+    sig[key] = `${r.agent}|${rs.model}|${wfEffortText(pairs)}`;
+    if (uses[r.agent] && !uses[r.agent].includes(label)) uses[r.agent].push(label);
+    return wfCard(label, r.agent, r.name, rs.model, pairs, { ...opts, key });
   };
   const arrow = (text) => h('div', { class: 'wf-arrow' }, text ? h('span', null, text) : null);
   const stages = [];
-  const stage = (title, chips, ...body) => stages.push(h('section', { class: 'wf-stage' },
+  const stage = (title, chips, ...body) => stages.push(h('section', { class: 'wf-stage', 'data-stage': title },
     h('span', { class: 'wf-num' }, String(stages.length + 1)),
     h('div', { class: 'wf-title' }, title, ...(chips || []).filter(Boolean).map(c => h('span', { class: 'wf-chip' }, c))),
     ...body));
@@ -2033,6 +2082,8 @@ function renderWorkflowDiagram() {
       const gatesOn = dlgOption('review_gates') !== false && dlgOption('review_json') !== false;
       const dedupOn = dlgOption('dedup') !== false && gatesOn;
       const arbiterRole = st.arbiter || (m.classic ? synthOfDebate : (synthOfDebate && synthOfDebate !== st.implementer ? synthOfDebate : reviewers[0]));
+      const implNode = node('구현', st.implementer, [['implement', '처음'], ['fix', '수정']]);
+      const reviewNodes = reviewers.map(rv => node('리뷰', rv, [['review', '1회차'], ['rereview', '2회차부터']]));
       const extras = [];
       if (arbiterOn && arbiterRole && gatesOn) extras.push(node('중재', arbiterRole, [['arbitrate', '']], { small: true, note: '수렴 실패·상한일 때 한 번' }));
       if (dedupOn) {
@@ -2040,29 +2091,30 @@ function renderWorkflowDiagram() {
         const model = dlgOption('dedup_model') || '';
         const effort = dlgOption('dedup_effort') || '';
         sig['중복 확인'] = `${agent}|${model}|${effort}`;
-        extras.push(h('div', { class: `wf-node wf-${agent} small`, 'data-key': '중복 확인' },
-          h('div', { class: 'wf-node-head' }, h('span', { class: 'wf-step' }, '중복 확인'), agentTag(agent)),
-          h('div', { class: 'wf-model' }, model || '기본 모델'),
-          h('div', { class: 'wf-effort' }, `추론 ${effort || '기본'}`),
-          h('div', { class: 'wf-note' }, '해결·기각된 지적의 반복 확인')));
+        extras.push(wfCard('중복 확인', agent, agent, model, [['', effort]],
+          { small: true, key: '중복 확인', note: '해결·기각된 지적의 반복 확인 (작은 모델)' }));
       }
       const guards = [gatesOn ? '판정 관문' : null, gatesOn && dlgOption('spec_gate') !== false ? '요구 근거' : null,
         dlgOption('test_guard') !== false ? '테스트 변조 감지' : null, dlgOption('wait_on_limit') ? '한도 대기 후 재개' : null,
         dlgOption('claude_sandbox') ? 'Claude 샌드박스' : null].filter(Boolean);
       stage('구현 · 리뷰', [`최대 ${maxR}회`, reviewers.length > 1 ? `리뷰어 ${reviewers.length}명 모두 승인해야 통과` : null],
         h('div', { class: 'wf-row wf-flow' },
-          node('구현', st.implementer, [['implement', '처음'], ['fix', '수정']]),
+          implNode,
           h('div', { class: 'wf-link' }, '→'),
           h('div', { class: 'wf-pill', title: 'duet 가 직접 테스트를 돌린다' }, '테스트', h('small', null, 'duet')),
           h('div', { class: 'wf-link' }, '→'),
           // 리뷰어가 여럿이면 세로로 쌓아 '같은 diff 를 함께 본다'가 보이게
-          h('div', { class: 'wf-col' }, reviewers.map(rv => node('리뷰', rv, [['review', '1회차'], ['rereview', '2회차부터']])))),
+          h('div', { class: 'wf-col' }, reviewNodes)),
         h('div', { class: 'wf-loop' }, `반려되면 지적을 고쳐 다시 테스트·리뷰 (최대 ${maxR}회)`),
         extras.length ? h('div', { class: 'wf-row wf-extra' }, extras) : null,
         guards.length ? h('div', { class: 'wf-guards' }, guards.map(g => h('span', { class: 'wf-guard' }, g))) : null);
     } else if (st.kind === 'audit') {
       stage('감사', ['승인된 뒤, 참고용'], h('div', { class: 'wf-row' }, (st.roles || []).map(r => node('감사', r, [['audit', '']]))));
     }
+  }
+  for (const a of ['claude', 'codex']) {
+    const el = document.getElementById(`ac-sub-${a}`);
+    if (el) el.textContent = uses[a].length ? uses[a].join(' · ') : '이 워크플로에서는 쓰지 않음';
   }
   const prev = box._sig || {};
   box.replaceChildren(...stages, h('div', { class: 'wf-end' }, '✓ 승인'));
@@ -2236,6 +2288,7 @@ async function restartServer() {
 $('#restart-btn').addEventListener('click', restartServer);
 
 // =================================================================== boot
+document.querySelectorAll('[data-logo]').forEach(el => el.replaceChildren(agentLogo(el.getAttribute('data-logo'), 22)));
 decorateHelp();
 window.addEventListener('hashchange', route);
 checkServer();

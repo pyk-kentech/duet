@@ -72,7 +72,6 @@
           <select name="workflow"></select>
         </label>
         <p class="hint" id="workflow-preview"></p>
-        <div class="wf-diagram" id="workflow-diagram" aria-live="polite"></div>
         <div class="field-row" id="classic-roles">
           <label class="field">
             <span class="field-label" data-help="implementer">구현</span>
@@ -87,26 +86,38 @@
             <select name="synth"><option value="">리뷰 담당</option><option value="claude">claude</option><option value="codex">codex</option></select>
           </label>
         </div>
-        <div class="field-row">
-          <label class="field">
-            <span class="field-label" data-help="claude_model">Claude 모델</span>
-            <input name="claude_model" type="text" list="claude-models" placeholder="기본값" autocomplete="off" spellcheck="false">
-          </label>
-          <label class="field">
-            <span class="field-label" data-help="effort">Claude 추론</span>
-            <select name="claude_effort"></select>
-          </label>
-          <label class="field">
-            <span class="field-label" data-help="codex_model">Codex 모델</span>
-            <input name="codex_model" type="text" list="codex-models" placeholder="기본값" autocomplete="off" spellcheck="false">
-          </label>
-          <label class="field">
-            <span class="field-label" data-help="effort">Codex 추론</span>
-            <select name="codex_effort"></select>
-          </label>
+        <!-- 모델·추론 강도: 바로 아래 순서도에 즉시 반영된다 -->
+        <div class="agent-cards">
+          <div class="agent-card ac-claude">
+            <div class="ac-head"><span class="ac-logo" data-logo="claude"></span><b>Claude</b><span class="ac-sub" id="ac-sub-claude"></span></div>
+            <div class="ac-fields">
+              <label class="field">
+                <span class="field-label" data-help="claude_model">모델</span>
+                <input name="claude_model" type="text" list="claude-models" placeholder="기본값" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="field">
+                <span class="field-label" data-help="effort">추론 강도</span>
+                <select name="claude_effort"></select>
+              </label>
+            </div>
+          </div>
+          <div class="agent-card ac-codex">
+            <div class="ac-head"><span class="ac-logo" data-logo="codex"></span><b>Codex</b><span class="ac-sub" id="ac-sub-codex"></span></div>
+            <div class="ac-fields">
+              <label class="field">
+                <span class="field-label" data-help="codex_model">모델</span>
+                <input name="codex_model" type="text" list="codex-models" placeholder="기본값" autocomplete="off" spellcheck="false">
+              </label>
+              <label class="field">
+                <span class="field-label" data-help="effort">추론 강도</span>
+                <select name="codex_effort"></select>
+              </label>
+            </div>
+          </div>
         </div>
         <datalist id="claude-models"></datalist>
         <datalist id="codex-models"></datalist>
+        <div class="wf-diagram" id="workflow-diagram" aria-live="polite"></div>
         <div class="field-row">
           <label class="field">
             <span class="field-label" data-help="debate_rounds">토론 라운드 <em>0–5</em></span>
