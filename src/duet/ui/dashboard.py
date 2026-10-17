@@ -579,7 +579,10 @@ class Dashboard:
                 # 단계별 강도가 있으면 effort 를 비워 둔다: 화면이 그 값을 다시 넘기면 단계별 설정이 지워진다
                 **{n: {"model": getattr(cfg, n).model,
                        "effort": "" if getattr(cfg, n).step_effort else getattr(cfg, n).effort,
-                       "effort_label": describe_effort(getattr(cfg, n))} for n in ("claude", "codex")},
+                       "effort_label": describe_effort(getattr(cfg, n)),
+                       # 순서도용 실제 값 (effort 칸은 위처럼 비워 두지만 그림에는 단계별 강도를 보인다)
+                       "effort_base": getattr(cfg, n).effort, "step_effort": dict(getattr(cfg, n).step_effort)}
+                   for n in ("claude", "codex")},
                 "test_command": cfg.test_command, "block_severity": cfg.block_severity,
                 "stall_rounds": cfg.stall_rounds, "require_tests_pass": cfg.require_tests_pass,
                 "review_diff": cfg.review_diff, "repro_tests": cfg.repro_tests,

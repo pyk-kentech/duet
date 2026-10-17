@@ -1910,10 +1910,10 @@ function workflowPreview() {
   const classic = !w || w.id === 'classic';
   $('#classic-roles').hidden = !classic;
   const el = $('#workflow-preview');
-  if (!w) { el.textContent = ''; return; }
-  if (w.source === 'error') { el.textContent = `오류: ${w.error}`; return; }
-  const roles = classic ? '' : ' · 역할: ' + w.roles.map(r => `${r.name}=${r.agent}${r.model ? `(${r.model})` : ''}`).join(', ');
-  el.textContent = `${w.description || ''} — ${w.summary}${roles}`;
+  if (!w) { el.textContent = ''; scheduleWorkflowDiagram(); return; }
+  if (w.source === 'error') { el.textContent = `오류: ${w.error}`; scheduleWorkflowDiagram(); return; }
+  el.textContent = w.description || '';
+  scheduleWorkflowDiagram();
 }
 async function fillWorkflows(machine, project, value) {
   const f = form.elements;
@@ -1926,6 +1926,159 @@ async function fillWorkflows(machine, project, value) {
   f.workflow.value = dlgWorkflows.some(w => w.id === want && w.source !== 'error') ? want : 'classic';
   workflowPreview();
 }
+// =================================================================== 워크플로 순서도 (새 실행 창)
+// 고른 워크플로의 단계를 순서대로 그리고, 단계마다 누가(CLI·역할) 어떤 모델·추론 강도로 하는지 보인다.
+// 창에서 역할·모델·강도·고급 설정을 바꾸면 바로 다시 그린다. 강도 계산은 config.effort_for·Role.agent_config 와 같은
+// 규칙이다: 설정(+duet.toml) → 이 창에서 고른 값(강도만 고르면 단계별 강도는 비움, 18.1) → 워크플로 역할.
+function dlgOption(key) {
+  const o = ((app.settings && app.settings.options) || []).find(x => x.key === key);
+  const el = document.querySelector(`#run-advanced-body [data-option="${key}"]`);
+  const raw = el ? el.value.trim() : '';
+  if (!raw) return o ? o.effective : undefined;
+  if (o && o.kind === 'bool') return raw === 'true';
+  if (o && o.kind === 'int') return Number(raw);
+  return raw;
+}
+function agentSetting(agent) {
+  const f = form.elements;
+  const base = ((dlgState.eff || {})[agent]) || {};
+  let model = base.model || '';
+  let effort = base.effort_base ?? base.effort ?? '';
+  let step = { ...(base.step_effort || {}) };
+  const m = f[`${agent}_model`] ? f[`${agent}_model`].value.trim() : '';
+  const e = f[`${agent}_effort`] ? f[`${agent}_effort`].value : '';
+  if (m) model = m;
+  if (e) { effort = e; step = {}; }
+  return { model, effort, step };
+}
+function roleSetting(role) {
+  const s = agentSetting(role.agent);
+  let { model, effort, step } = s;
+  if (role.model) model = role.model;
+  if (role.effort) { effort = role.effort; step = { ...(role.step_effort || {}) }; }
+  else if (role.step_effort) step = { ...role.step_effort };
+  return { agent: role.agent, model, effort, step };
+}
+function workflowModel() {
+  const f = form.elements;
+  const w = dlgWorkflows.find(x => x.id === f.workflow.value);
+  if (!w || w.source === 'error') return null;
+  if (w.id === 'classic' || w.source === 'config') {
+    const rev = f.reviewer.value;
+    return {
+      roles: { claude: { name: 'claude', agent: 'claude' }, codex: { name: 'codex', agent: 'codex' } },
+      steps: [{ kind: 'debate', proposers: ['claude', 'codex'], synth: f.synth.value || rev },
+        { kind: 'build', implementer: f.implementer.value, reviewers: [rev] }],
+      classic: true,
+    };
+  }
+  return { roles: Object.fromEntries((w.roles || []).map(r => [r.name, r])), steps: w.steps || [], classic: false };
+}
+function wfEffortText(pairs) {
+  const vals = pairs.map(([, v]) => v || '기본');
+  if (vals.every(v => v === vals[0])) return `추론 ${vals[0]}`;
+  return pairs.map(([label, v], i) => i === 0 ? `추론 ${v || '기본'}` : `${label} ${v || '기본'}`).join(' · ');
+}
+function renderWorkflowDiagram() {
+  const box = $('#workflow-diagram');
+  if (!box) return;
+  const m = workflowModel();
+  if (!m) { box.replaceChildren(); box.hidden = true; return; }
+  box.hidden = false;
+  const f = form.elements;
+  const R = name => m.roles[name] || { name, agent: name };
+  const sig = {};
+  const node = (label, roleName, keys, opts = {}) => {
+    const r = R(roleName);
+    const rs = roleSetting(r);
+    const effort = wfEffortText(keys.map(([k, lbl]) => [lbl, rs.step[k] || rs.effort || '']));
+    const key = `${label}:${roleName}`;
+    sig[key] = `${r.agent}|${rs.model}|${effort}`;
+    return h('div', { class: `wf-node wf-${r.agent === 'claude' || r.agent === 'codex' ? r.agent : 'x'}${opts.small ? ' small' : ''}`, 'data-key': key },
+      h('div', { class: 'wf-node-head' }, h('span', { class: 'wf-step' }, label), agentTag(r.agent, r.name !== r.agent ? r.name : null)),
+      h('div', { class: 'wf-model' }, rs.model || '기본 모델'),
+      h('div', { class: 'wf-effort' }, effort),
+      opts.note ? h('div', { class: 'wf-note' }, opts.note) : null);
+  };
+  const arrow = (text) => h('div', { class: 'wf-arrow' }, text ? h('span', null, text) : null);
+  const stages = [];
+  const stage = (title, chips, ...body) => stages.push(h('section', { class: 'wf-stage' },
+    h('span', { class: 'wf-num' }, String(stages.length + 1)),
+    h('div', { class: 'wf-title' }, title, ...(chips || []).filter(Boolean).map(c => h('span', { class: 'wf-chip' }, c))),
+    ...body));
+  const rounds = n => (n === undefined || n === null || n === '') ? Number(f.debate_rounds.value || 0) : Number(n);
+  let synthOfDebate = null;
+  for (const st of m.steps) {
+    if (st.kind === 'explore') {
+      stage('사전 조사', ['기존 코드를 먼저 읽음'], h('div', { class: 'wf-row' }, node('조사', st.role, [['explore', '']])));
+    } else if (st.kind === 'debate') {
+      const props = st.proposers || [];
+      const out = st.output === 'change' ? 'docs/changes/<실행>.md' : 'DESIGN.md';
+      if (props.length <= 1) {
+        stage('설계', ['혼자 설계, 토론 없음'],
+          h('div', { class: 'wf-row' }, node('설계안', props[0], [['propose', '']])), arrow(), h('div', { class: 'wf-out' }, out));
+      } else {
+        const n = rounds(st.rounds);
+        synthOfDebate = st.synth || null;
+        stage('설계 토론', [n ? `비판 ${n}라운드` : '비판 없음'],
+          h('div', { class: 'wf-row' }, props.map(p => node('설계안', p, n ? [['propose', '설계안'], ['critique', '비판']] : [['propose', '']]))),
+          arrow(n ? `서로의 안을 비판하고 고침 ×${n}` : '바로 종합'),
+          h('div', { class: 'wf-row' }, node('종합', st.synth, [['synthesize', '']], { note: '쟁점마다 결정' })),
+          arrow(), h('div', { class: 'wf-out' }, out));
+      }
+    } else if (st.kind === 'build') {
+      const maxR = st.max_review || Number(f.max_review.value || 3);
+      const reviewers = st.reviewers || [];
+      const arbiterOn = dlgOption('arbiter') !== false;
+      const gatesOn = dlgOption('review_gates') !== false && dlgOption('review_json') !== false;
+      const dedupOn = dlgOption('dedup') !== false && gatesOn;
+      const arbiterRole = st.arbiter || (m.classic ? synthOfDebate : (synthOfDebate && synthOfDebate !== st.implementer ? synthOfDebate : reviewers[0]));
+      const extras = [];
+      if (arbiterOn && arbiterRole && gatesOn) extras.push(node('중재', arbiterRole, [['arbitrate', '']], { small: true, note: '수렴 실패·상한일 때 한 번' }));
+      if (dedupOn) {
+        const agent = dlgOption('dedup_agent') || 'claude';
+        const model = dlgOption('dedup_model') || '';
+        const effort = dlgOption('dedup_effort') || '';
+        sig['중복 확인'] = `${agent}|${model}|${effort}`;
+        extras.push(h('div', { class: `wf-node wf-${agent} small`, 'data-key': '중복 확인' },
+          h('div', { class: 'wf-node-head' }, h('span', { class: 'wf-step' }, '중복 확인'), agentTag(agent)),
+          h('div', { class: 'wf-model' }, model || '기본 모델'),
+          h('div', { class: 'wf-effort' }, `추론 ${effort || '기본'}`),
+          h('div', { class: 'wf-note' }, '해결·기각된 지적의 반복 확인')));
+      }
+      const guards = [gatesOn ? '판정 관문' : null, gatesOn && dlgOption('spec_gate') !== false ? '요구 근거' : null,
+        dlgOption('test_guard') !== false ? '테스트 변조 감지' : null, dlgOption('wait_on_limit') ? '한도 대기 후 재개' : null,
+        dlgOption('claude_sandbox') ? 'Claude 샌드박스' : null].filter(Boolean);
+      stage('구현 · 리뷰', [`최대 ${maxR}회`, reviewers.length > 1 ? `리뷰어 ${reviewers.length}명 모두 승인해야 통과` : null],
+        h('div', { class: 'wf-row wf-flow' },
+          node('구현', st.implementer, [['implement', '처음'], ['fix', '수정']]),
+          h('div', { class: 'wf-link' }, '→'),
+          h('div', { class: 'wf-pill', title: 'duet 가 직접 테스트를 돌린다' }, '테스트', h('small', null, 'duet')),
+          h('div', { class: 'wf-link' }, '→'),
+          // 리뷰어가 여럿이면 세로로 쌓아 '같은 diff 를 함께 본다'가 보이게
+          h('div', { class: 'wf-col' }, reviewers.map(rv => node('리뷰', rv, [['review', '1회차'], ['rereview', '2회차부터']])))),
+        h('div', { class: 'wf-loop' }, `반려되면 지적을 고쳐 다시 테스트·리뷰 (최대 ${maxR}회)`),
+        extras.length ? h('div', { class: 'wf-row wf-extra' }, extras) : null,
+        guards.length ? h('div', { class: 'wf-guards' }, guards.map(g => h('span', { class: 'wf-guard' }, g))) : null);
+    } else if (st.kind === 'audit') {
+      stage('감사', ['승인된 뒤, 참고용'], h('div', { class: 'wf-row' }, (st.roles || []).map(r => node('감사', r, [['audit', '']]))));
+    }
+  }
+  const prev = box._sig || {};
+  box.replaceChildren(...stages, h('div', { class: 'wf-end' }, '✓ 승인'));
+  // 바뀐 칸만 잠깐 빛나게 (창을 처음 열 때는 안 함)
+  if (box._sig) for (const el of box.querySelectorAll('.wf-node[data-key]')) {
+    const k = el.getAttribute('data-key');
+    if (prev[k] !== undefined && prev[k] !== sig[k]) el.classList.add('wf-changed');
+  }
+  box._sig = sig;
+}
+let wfFrame = 0;
+function scheduleWorkflowDiagram() {
+  cancelAnimationFrame(wfFrame);
+  wfFrame = requestAnimationFrame(renderWorkflowDiagram);
+}
+
 function setEffortOptions(agent, value) {
   const f = form.elements;
   const sugg = app.settings.suggestions;
@@ -1950,6 +2103,8 @@ async function openRunDialog({ machine = LOCAL, project = '', defaults = null, h
   f.project.readOnly = !!project;
   f.root.disabled = !!project;
   const eff = defaults && !defaults.error ? defaults : app.settings.effective;
+  dlgState.eff = eff;
+  $('#workflow-diagram')._sig = null;
   f.implementer.value = eff.implementer;
   f.reviewer.value = eff.reviewer;
   f.synth.value = '';
@@ -1966,6 +2121,7 @@ async function openRunDialog({ machine = LOCAL, project = '', defaults = null, h
   await fillWorkflows(machine, project, eff.workflow);
   $('#run-advanced-body').replaceChildren(...optionFields(app.settings.options || [], {}, o => o.run_dialog));
   $('#run-advanced').open = false;
+  renderWorkflowDiagram();
   f.skip_design.disabled = project ? !hasDesign : false;
   f.skip_design.parentElement.title = project && !hasDesign ? 'DESIGN.md 가 없어서 고를 수 없습니다' : '';
   $('#run-cost-note').hidden = false;
@@ -1985,6 +2141,8 @@ $('#sidebar-new-run').addEventListener('click', () => {
 dlg.addEventListener('click', ev => { if (ev.target.closest('[data-close]')) dlg.close(); });
 form.elements.machine.addEventListener('change', () => { fillRoots(); fillWorkflows(form.elements.machine.value, '', form.elements.workflow.value); });
 form.elements.workflow.addEventListener('change', workflowPreview);
+form.addEventListener('input', scheduleWorkflowDiagram);
+form.addEventListener('change', scheduleWorkflowDiagram);
 form.elements.root.addEventListener('change', updatePath);
 form.elements.name.addEventListener('input', updatePath);
 form.elements.codex_model.addEventListener('change', () => setEffortOptions('codex', form.elements.codex_effort.value));

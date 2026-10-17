@@ -234,3 +234,16 @@ def test_limit_wait_uses_claude_reset():
 
 def test_default_claude_args_stream():
     assert load_config(None, global_defaults={}).claude.base_args == ["-p", "--output-format", "stream-json", "--verbose"]
+
+
+# ====================================================================== 새 실행 창의 워크플로 순서도
+def test_workflow_api_has_step_effort_for_diagram(tmp_path: Path):
+    from duet.workflow import describe, load_workflow
+    cfg = Config()
+    wf = describe(load_workflow("existing", None, cfg))
+    roles = {r["name"]: r for r in wf["roles"]}
+    assert roles["scout"]["effort"] == "low" and roles["scout"]["step_effort"] is None   # None: 설정을 따름
+    assert [s["kind"] for s in wf["steps"]] == ["explore", "debate", "build"]
+    d = Dashboard()._defaults(None)
+    assert d["codex"]["effort_base"] == "medium" and d["codex"]["step_effort"]["review"] == "high"
+    assert d["codex"]["effort"] == ""          # 화면의 강도 칸은 비워 둔다(단계별 설정을 지우지 않게)

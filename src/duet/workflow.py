@@ -453,6 +453,8 @@ def describe(wf: Workflow, wid: str | None = None) -> dict[str, Any]:
         "source_label": SOURCE_LABELS.get(wf.source, wf.source), "path": wf.path,
         "summary": wf.summary(),
         "roles": [{"name": r.name, "agent": r.agent, "model": r.model or "", "effort": r.effort or "",
+                   # None(설정을 따름)과 {}(단계별 없음)를 구별한다: 새 실행 창의 순서도가 강도를 계산한다
+                   "step_effort": dict(r.step_effort) if r.step_effort is not None else None,
                    "templates": dict(r.templates), "has_instructions": bool(r.instructions)}
                   for r in wf.roles.values() if r.name in wf.used_roles()],
         "steps": [s.to_dict() for s in wf.steps],
