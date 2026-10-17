@@ -675,16 +675,15 @@ table, .num, .dur, .chip { font-variant-numeric: tabular-nums; }
 /* ---- 제목 뒤 은은한 빛 (화면 전체에 한 번만) */
 .main { position: relative; isolation: isolate; }
 .main::before {
-  /* 오른쪽 위 모서리에서 번지는 빛 한 번. 글자 뒤로는 오지 않는다 */
-  content: ""; position: absolute; top: 0; right: 0; width: min(620px, 70%); height: 340px; z-index: -1; pointer-events: none;
+  /* 오른쪽 위 모서리에서 번지는 작은 빛 한 번. 모든 내용 뒤에 깔린다 */
+  content: ""; position: absolute; top: 0; right: 0; width: min(380px, 50%); height: 230px; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(260px 200px at 100% 0%, color-mix(in srgb, var(--purple) 30%, transparent), transparent 70%),
-    radial-gradient(340px 240px at 78% -12%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 72%),
-    radial-gradient(300px 220px at 100% 38%, color-mix(in srgb, var(--codex) 16%, transparent), transparent 70%),
-    radial-gradient(240px 180px at 58% -18%, color-mix(in srgb, var(--claude) 10%, transparent), transparent 70%);
-  filter: blur(18px); opacity: .95;
-  -webkit-mask-image: linear-gradient(to left, #000 35%, transparent), linear-gradient(to bottom, #000 40%, transparent);
-  -webkit-mask-composite: source-in; mask-image: linear-gradient(to left, #000 35%, transparent), linear-gradient(to bottom, #000 40%, transparent);
+    radial-gradient(200px 150px at 100% 0%, color-mix(in srgb, var(--purple) 24%, transparent), transparent 70%),
+    radial-gradient(220px 160px at 72% -10%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 72%),
+    radial-gradient(180px 140px at 100% 45%, color-mix(in srgb, var(--codex) 10%, transparent), transparent 70%);
+  filter: blur(16px);
+  -webkit-mask-image: linear-gradient(to left, #000 40%, transparent), linear-gradient(to bottom, #000 35%, transparent);
+  -webkit-mask-composite: source-in; mask-image: linear-gradient(to left, #000 40%, transparent), linear-gradient(to bottom, #000 35%, transparent);
   mask-composite: intersect;
 }
 .main { overflow-x: clip; }

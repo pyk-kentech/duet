@@ -53,7 +53,7 @@ function svg(tag, attrs, ...children) {
 function agentLogo(agent, size = 16) {
   const base = String(agent || '').replace(/^mock-/, '');
   const sz = [12, 16, 18, 22].includes(size) ? size : 16;
-  const logos = (typeof app !== 'undefined' && app.server && app.server.logos) || {};
+  const logos = (typeof app !== 'undefined' && app.server && app.server.logos) || { claude: true, codex: true };
   if (logos[base]) return h('img', { src: `/logos/${base}.svg`, alt: '', class: `logo logo-img logo-${base} s${sz}` });
   const kind = base === 'claude' || base === 'codex' ? base : 'x';
   return h('span', { class: `logo logo-badge logo-${kind} s${sz}`, 'aria-hidden': 'true' },
@@ -372,7 +372,7 @@ function buildModelPicker(box) {
   const paint = () => {
     const m = input.value ? modelInfo(agent, input.value) : null;
     const label = !input.value ? '기본 모델' : m ? m.label : input.value;
-    const note = !input.value ? 'CLI 기본값' : m ? (m.note || '') : '직접 입력한 모델';
+    const note = !input.value ? 'CLI 기본값' : m ? (m.note || '') : '목록에 없음';
     btn.title = input.value || 'CLI 기본값';
     btn.replaceChildren(agentLogo(agent, 18), h('span', { class: `mp-label${input.value ? '' : ' def'}` }, label),
       note ? h('span', { class: 'mp-note' }, note) : null, chevron());
@@ -387,16 +387,11 @@ function buildModelPicker(box) {
     if (openFloat && openFloat.anchor === btn) { closeFloat(); return; }
     const sugg = ((((app.settings || {}).suggestions || {})[agent]) || {}).models || [];
     const known = sugg.some(m => m.id === input.value);
-    const custom = h('input', { type: 'text', class: 'mp-custom', placeholder: '목록에 없는 모델 이름을 직접 입력', spellcheck: 'false',
-      value: input.value && !known ? input.value : '' });
-    custom.addEventListener('keydown', ev => {
-      if (ev.key === 'Enter') { ev.preventDefault(); setVal(custom.value.trim()); closeFloat(); btn.focus(); }
-    });
     const menu = h('div', { class: 'fm', role: 'listbox' },
-      fmItem({ label: '기본 모델', note: 'CLI 에 설정된 기본값을 씁니다', on: !input.value, icon: agentLogo(agent, 18), onPick: () => { setVal(''); btn.focus(); } }),
-      sugg.length ? h('div', { class: 'fm-group' }, '추천 모델') : null,
+      fmItem({ label: '기본 모델', note: 'CLI 에 설정된 기본값 · 새 모델이 나오면 CLI 를 따라감', on: !input.value, icon: agentLogo(agent, 18), onPick: () => { setVal(''); btn.focus(); } }),
+      sugg.length ? h('div', { class: 'fm-group' }, '모델') : null,
       sugg.map(m => fmItem({ label: m.label || m.id, note: m.note, on: m.id === input.value, onPick: () => { setVal(m.id); btn.focus(); } })),
-      h('div', { class: 'fm-sep' }), h('div', { class: 'fm-custom' }, custom, h('div', { class: 'fm-hint' }, 'Enter 로 적용')));
+      input.value && !known ? fmItem({ label: input.value, note: '지금 설정값 · 목록에 없음', on: true, onPick: () => btn.focus() }) : null);
     floatMenu(btn, menu);
   });
   box._set = v => { input.value = v || ''; paint(); };
@@ -2188,18 +2183,10 @@ class SettingsView {
         onclick: () => { applyTheme(t.id); drawThemes(); } }, sw, h('div', { class: 'theme-name' }, t.label, h('small', null, t.note)));
     }));
     drawThemes();
-    const sv0 = app.server || {};
-    const logoInfo = ['claude', 'codex'].map(a => h('span', null, agentLogo(a, 16), ' ',
-      `${a === 'claude' ? 'Claude' : 'Codex'}: ${(sv0.logos || {})[a] ? '공식 로고 파일 사용 중' : '이니셜 배지'}`));
     const screenCard = h('div', { class: 'card section-card' },
       h('h2', null, '화면'),
       h('p', { class: 'desc' }, '색 테마는 이 브라우저에만 저장됩니다. 배경·글자색만 바뀌고 배치는 같습니다.'),
-      themeGrid,
-      h('h3', null, '로고'),
-      h('div', { class: 'logo-status' }, logoInfo),
-      h('div', { class: 'muted small' }, '공식 로고를 쓰려면 SVG 파일을 ',
-        h('code', null, `${sv0.logo_dir || '~/.duet/logos'}${/\\/.test(sv0.logo_dir || '') ? '\\' : '/'}claude.svg`), ', ',
-        h('code', null, 'codex.svg'), ' 로 넣고 새로고침하세요. duet 는 회사 로고를 함께 배포하지 않습니다.'));
+      themeGrid);
 
     // ---------------- 고급 설정 (설정 항목 정의에서 만든다)
     const advBody = h('div', null, optionFields(v.options || [], d, () => true));
@@ -2263,8 +2250,10 @@ function rootsFor(machine) {
 function fillRoots() {
   const f = form.elements;
   const roots = rootsFor(f.machine.value);
-  f.root.replaceChildren(...roots.map(r => h('option', { value: r }, r)), h('option', { value: CUSTOM }, '직접 입력'));
+  f.root.replaceChildren(...roots.map(r => h('option', { value: r, 'data-note': '이 안에 새 폴더를 만듭니다' }, r)),
+    h('option', { value: CUSTOM, 'data-note': '작업 폴더의 전체 경로를 직접 씁니다' }, '다른 곳 (전체 경로 입력)'));
   f.root.value = roots.length && !dlgState.fixedProject ? roots[0] : CUSTOM;
+  $('#root-field').hidden = !roots.length || !!dlgState.fixedProject;   // 고를 것이 없으면 숨김
   updatePath();
 }
 function computedPath() {
@@ -2297,7 +2286,7 @@ async function fillWorkflows(machine, project, value) {
   try { data = await api('/api/workflows', { query: { project }, machine }); } catch (e) { /* 예전 원격 duet: classic 만 */ }
   dlgWorkflows = data.workflows && data.workflows.length ? data.workflows : [{ id: 'classic', name: 'classic', summary: '', roles: [], source: 'config', source_label: '기본' }];
   f.workflow.replaceChildren(...dlgWorkflows.map(w => h('option', { value: w.id, disabled: w.source === 'error', 'data-note': w.source === 'error' ? w.error : (w.description || w.summary || null) },
-    `${w.id}${w.source_label ? ` · ${w.source_label}` : ''}${w.source === 'error' ? ' (오류)' : ''}`)));
+    `${w.id}${['user', 'project', 'file'].includes(w.source) && w.source_label ? ` · ${w.source_label}` : ''}${w.source === 'error' ? ' (오류)' : ''}`)));
   const want = value || data.default || 'classic';
   f.workflow.value = dlgWorkflows.some(w => w.id === want && w.source !== 'error') ? want : 'classic';
   workflowPreview();

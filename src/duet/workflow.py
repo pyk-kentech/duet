@@ -198,7 +198,7 @@ def classic(cfg: Config) -> Workflow:
         Step(kind="debate", id="debate", proposers=list(AGENT_NAMES), synth=cfg.synth_name),
         Step(kind="build", id="build", implementer=cfg.implementer, reviewers=[cfg.reviewer]),
     ]
-    return Workflow(CLASSIC_WORKFLOW, "Claude·Codex 설계 토론 → 구현 → 교차 리뷰 (설정의 역할 그대로)",
+    return Workflow(CLASSIC_WORKFLOW, "설계 토론 → 구현 → 교차 리뷰 · 기본",
                     roles, steps, source="config")
 
 

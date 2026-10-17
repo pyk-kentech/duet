@@ -1,5 +1,5 @@
 name = "lean"
-description = "가장 싼 구성: Claude 혼자 설계(토론 없음) → Claude 구현 → Codex 리뷰"
+description = "혼자 설계(토론 없음) → 구현 → 리뷰 · 가장 저렴"
 
 [roles.claude]
 agent = "claude"

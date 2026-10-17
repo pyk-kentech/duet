@@ -41,7 +41,7 @@ from duet.usage import codex_home
 STATIC_FILES = {"app.js": "text/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}
 # 함께 배포하는 글꼴 (Pretendard, SIL OFL 1.1 — static/fonts/Pretendard-LICENSE.txt)
 STATIC_BINARY = {"fonts/PretendardVariable.woff2": "font/woff2"}
-# 사용자가 넣는 공식 로고 ($DUET_HOME/logos/<이름>.svg). duet 는 회사 로고를 직접 그리지 않는다
+# Claude·Codex 로고: static/logos/ 에 함께 배포한다. $DUET_HOME/logos/<이름>.svg 가 있으면 그것을 쓴다
 LOGO_NAMES = ("claude", "codex")
 LOGO_MAX_BYTES = 300_000
 MAX_BODY = 1_000_000
@@ -92,8 +92,7 @@ class DuetServer(ThreadingHTTPServer):
         return {"version": __version__, "loaded": self.loaded_hash[:12], "current": cur[:12],
                 "stale": bool(cur and self.loaded_hash and cur != self.loaded_hash),
                 "uptime_sec": int(time.time() - self.started_at), "running_terms": running,
-                "logos": {n: logo_path(n) is not None for n in LOGO_NAMES},
-                "logo_dir": str(duet_home_dir() / "logos")}
+                "logos": {n: True for n in LOGO_NAMES}}
 
     def restart(self) -> dict[str, Any]:
         running = [t.title for t in self.terms.values() if t.running]
@@ -501,11 +500,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _logo(self, name: str) -> None:
         """사용자가 넣은 로고 SVG. <img> 로만 쓰므로 안의 스크립트는 돌지 않고, 직접 열어도 CSP 로 막는다."""
-        path = logo_path(name)
-        if path is None:
+        if name not in LOGO_NAMES:
             self._text(HTTPStatus.NOT_FOUND, "로고 파일이 없습니다.")
             return
-        self._send(HTTPStatus.OK, path.read_bytes(), "image/svg+xml",
+        path = logo_path(name)
+        data = path.read_bytes() if path else resources.files("duet.ui").joinpath("static", "logos", f"{name}.svg").read_bytes()
+        self._send(HTTPStatus.OK, data, "image/svg+xml",
                    {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"})
 
     # ---------------------------------------------------------------- api
@@ -577,16 +577,23 @@ def local_action_argv(action) -> tuple[list[str], str]:
     return ["sh", "-c", PATH_PREFIX + action.shell], "pty"
 
 
-# 모델 고르기 목록의 이름·한 줄 설명 (Codex 는 ~/.codex/models_cache.json 의 설명을 그대로 쓴다)
+# 모델 고르기 목록의 이름·한 줄 설명
 CLAUDE_MODEL_INFO = {
-    "fable": {"label": "Fable", "note": "가장 강력한 최신 모델 · 어려운 설계·대형 작업 (별칭)"},
-    "opus": {"label": "Opus", "note": "높은 품질 · 복잡한 구현·리뷰 (별칭)"},
-    "sonnet": {"label": "Sonnet", "note": "속도와 품질의 균형 · 분업 작업자에 알맞음 (별칭)"},
-    "haiku": {"label": "Haiku", "note": "가장 빠르고 가벼움 · 중복 확인 같은 작은 일 (별칭)"},
-    "claude-fable-5-1": {"label": "Fable 5.1", "note": "버전 고정 · 별칭이 바뀌어도 이 모델"},
-    "claude-opus-5-5": {"label": "Opus 5.5", "note": "버전 고정 · 별칭이 바뀌어도 이 모델"},
-    "claude-sonnet-5-5": {"label": "Sonnet 5.5", "note": "버전 고정 · 별칭이 바뀌어도 이 모델"},
-    "claude-haiku-5-5": {"label": "Haiku 5.5", "note": "버전 고정 · 별칭이 바뀌어도 이 모델"},
+    "claude-fable-5-1": {"label": "Fable 5.1", "note": "가장 강력함 · 어려운 설계·대형 작업"},
+    "claude-opus-5-5": {"label": "Opus 5.5", "note": "높은 품질 · 복잡한 구현·리뷰"},
+    "claude-sonnet-5-5": {"label": "Sonnet 5.5", "note": "속도와 품질의 균형 · 분업 작업자"},
+    "claude-haiku-5-5": {"label": "Haiku 5.5", "note": "가장 빠르고 가벼움 · 중복 확인 같은 작은 일"},
+}
+# Codex 는 ~/.codex/models_cache.json 의 영어 설명을 옮긴다. 모르는 설명은 그대로 둔다
+CODEX_NOTE_KO = {
+    "Latest workhorse model for coding and everyday work.": "최신 주력 모델 · 코딩과 일반 작업",
+    "Frontier intelligence for the most demanding work.": "최상위 성능 · 가장 어려운 작업",
+    "Previous generation workhorse model.": "이전 세대 주력 모델",
+    "Fast and affordable model for easier tasks.": "빠르고 저렴함 · 쉬운 작업",
+    "Older generation workhorse model.": "구세대 주력 모델",
+    "Older balanced model for straightforward work.": "구세대 균형형 · 단순한 작업",
+    "Older fast and efficient model.": "구세대 · 빠르고 효율적",
+    "Latest frontier agentic coding model for broad defensive cybersecurity work.": "최신 에이전트 코딩 모델 · 방어적 보안 작업용",
 }
 
 
@@ -597,7 +604,7 @@ def model_suggestions() -> dict[str, Any]:
         cache = json.loads((codex_home() / "models_cache.json").read_text(encoding="utf-8"))
         for m in cache.get("models", []):
             if isinstance(m, dict) and m.get("slug") and m.get("visibility") == "list":
-                codex.append({"id": m["slug"], "label": m.get("display_name") or m["slug"], "note": m.get("description") or "",
+                codex.append({"id": m["slug"], "label": m.get("display_name") or m["slug"], "note": CODEX_NOTE_KO.get(m.get("description") or "", m.get("description") or ""),
                               "efforts": [e.get("effort") for e in m.get("supported_reasoning_levels") or [] if isinstance(e, dict)],
                               "default_effort": m.get("default_reasoning_level")})
     except (OSError, ValueError, AttributeError):
@@ -655,6 +662,7 @@ def duet_home_dir() -> Path:
 
 
 def logo_path(name: str) -> Path | None:
+    """사용자가 바꿔 넣은 로고. 없으면(또는 너무 크면) None → 함께 배포한 로고."""
     if name not in LOGO_NAMES:
         return None
     p = duet_home_dir() / "logos" / f"{name}.svg"

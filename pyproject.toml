@@ -25,7 +25,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 duet = ["templates/*.md", "workflows/*.toml", "bench_suites/**/*"]
-"duet.ui" = ["static/*", "static/fonts/*"]
+"duet.ui" = ["static/*", "static/fonts/*", "static/logos/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

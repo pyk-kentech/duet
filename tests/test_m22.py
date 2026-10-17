@@ -269,20 +269,20 @@ def test_bundled_font_served_with_cache(server):
     assert req(server, "/static/fonts/../app.js")[0] == 404          # 정해진 파일만
 
 
-def test_user_logo_served_only_when_present(server, isolated_duet_home):
-    assert req(server, "/logos/claude.svg")[0] == 404
-    assert api(server, "/api/server")[1]["logos"] == {"claude": False, "codex": False}
+def test_logos_bundled_and_user_override(server, isolated_duet_home):
+    s, h, raw = req(server, "/logos/claude.svg")
+    assert s == 200 and h["Content-Type"] == "image/svg+xml" and b"<svg" in raw           # 함께 배포한 로고
+    assert "sandbox" in h["Content-Security-Policy"] and "script" not in h["Content-Security-Policy"]
+    assert api(server, "/api/server")[1]["logos"] == {"claude": True, "codex": True}
     d = isolated_duet_home / "logos"
     d.mkdir()
-    (d / "claude.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8")
+    (d / "claude.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" id="mine"/>', encoding="utf-8")
     (d / "evil.svg").write_text("<svg/>", encoding="utf-8")
-    s, h, raw = req(server, "/logos/claude.svg")
-    assert s == 200 and h["Content-Type"] == "image/svg+xml" and raw.startswith(b"<svg")
-    assert "sandbox" in h["Content-Security-Policy"] and "script" not in h["Content-Security-Policy"]
-    assert req(server, "/logos/evil.svg")[0] == 404                  # 정해진 이름만
-    assert api(server, "/api/server")[1]["logos"] == {"claude": True, "codex": False}
+    assert b'id="mine"' in req(server, "/logos/claude.svg")[2]                               # 사용자 파일이 우선
+    assert req(server, "/logos/evil.svg")[0] == 404                                           # 정해진 이름만
     (d / "codex.svg").write_bytes(b"<svg>" + b" " * 400_000 + b"</svg>")
-    assert req(server, "/logos/codex.svg")[0] == 404                  # 너무 큰 파일은 무시
+    s, _, raw = req(server, "/logos/codex.svg")
+    assert s == 200 and len(raw) < 400_000                                                    # 너무 큰 파일은 무시
 
 
 def test_settings_api_has_builtin_default_and_model_notes(server):
@@ -294,4 +294,5 @@ def test_settings_api_has_builtin_default_and_model_notes(server):
     from duet.config import Config
     assert opts["timeout_sec"]["default"] == Config().timeout_sec
     claude = {m["id"]: m for m in data["suggestions"]["claude"]["models"]}
-    assert claude["sonnet"]["label"] == "Sonnet" and claude["sonnet"]["note"]
+    assert claude["claude-sonnet-5-5"]["label"] == "Sonnet 5.5" and claude["claude-sonnet-5-5"]["note"]
+    assert all("-" in k and k[-1].isdigit() for k in claude)                                 # 버전 있는 이름만

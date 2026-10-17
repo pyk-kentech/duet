@@ -63,8 +63,7 @@ DEFAULT_ENV_STRIP = [
 # 패턴에 걸려도 남길 이름. Claude 구독 인증 토큰이라 빼면 로그인이 풀린다.
 DEFAULT_ENV_KEEP = ["CLAUDE_CODE_OAUTH_TOKEN"]
 
-CLAUDE_MODEL_SUGGESTIONS = ["fable", "opus", "sonnet", "haiku",
-                            "claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+CLAUDE_MODEL_SUGGESTIONS = ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
 
 
 class ConfigError(Exception):

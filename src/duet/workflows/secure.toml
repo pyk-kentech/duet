@@ -1,5 +1,5 @@
 name = "secure"
-description = "classic 에 보안 리뷰어를 더하고, 승인 뒤 Claude 가 전체를 한 번 감사합니다"
+description = "설계 토론 → 구현 → 리뷰 + 보안 리뷰 → 승인 뒤 보안 감사"
 
 [roles.claude]
 agent = "claude"
