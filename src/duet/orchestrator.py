@@ -17,8 +17,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Any, Callable, Mapping
 
-from duet.agents import AgentAdapter, AgentNotAvailable, make_agents, make_role_agents
-from duet.config import Config, ConfigError, describe_effort, load_config
+from duet.agents import (AgentAdapter, AgentNotAvailable, ClaudeCodeAdapter, CodexAdapter, MockAdapter,
+                         make_agents, make_role_agents)
+from duet.config import Config, ConfigError, dedup_agent_config, describe_effort, load_config
+from duet.dedup import DEDUP_ROLE
 from duet.lock import LockBusy, RunLock
 from duet.phases.build import BuildPhase
 from duet.phases.common import PhaseContext, PhaseStop
@@ -52,7 +54,7 @@ CONFIG_KEYS = ("workflow", "implementer", "reviewer", "synth", "debate_rounds", 
                "test_command", "block_severity", "stall_rounds", "require_tests_pass",
                "review_diff", "repro_tests", "review_packet", "review_json", "review_session",
                "review_session_rounds", "review_gates", "arbiter", "test_guard", "claude_sandbox", "spec_gate",
-               "wait_on_limit", "limit_wait_max_min")
+               "wait_on_limit", "limit_wait_max_min", "dedup", "dedup_agent", "dedup_model", "dedup_effort")
 CONSOLE_LOG = "console.log"
 CHANGES_DIR = "docs/changes"   # 기존 프로젝트의 변경 설계를 두는 곳 (DESIGN.md 19.5)
 
@@ -400,7 +402,25 @@ class Orchestrator:
                 agents[name].check()
             except AgentNotAvailable as e:
                 raise OrchestratorError(str(e)) from e
-        return agents
+        return self._add_dedup(cfg, mock, agents)
+
+    def _add_dedup(self, cfg: Config, mock: bool, agents: Mapping[str, AgentAdapter]) -> Mapping[str, AgentAdapter]:
+        """재제기 확인자(DESIGN.md 26.2). 워크플로에 dedup 역할이 있으면 그것, 없으면 설정의 작은 모델."""
+        if not cfg.dedup or DEDUP_ROLE in agents:
+            return agents
+        out = dict(agents)
+        if mock:
+            out[DEDUP_ROLE] = MockAdapter(label=DEDUP_ROLE)
+            return out
+        ac = dedup_agent_config(cfg)
+        adapter = ClaudeCodeAdapter(cfg, ac) if cfg.dedup_agent == "claude" else CodexAdapter(cfg, ac)
+        try:
+            adapter.check()
+        except AgentNotAvailable:
+            self.log(f"재제기 확인자({cfg.dedup_agent})를 쓸 수 없어 건너뜁니다.")
+            return agents
+        out[DEDUP_ROLE] = adapter
+        return out
 
     def _log_env_drops(self, cfg: Config, mock: bool) -> None:
         dropped = [] if mock else env_drops(cfg.env_strip, cfg.env_keep)
@@ -424,6 +444,8 @@ class Orchestrator:
             "review_gates": cfg.review_gates, "arbiter": cfg.arbiter,
             "test_guard": cfg.test_guard, "claude_sandbox": cfg.claude_sandbox, "spec_gate": cfg.spec_gate,
             "wait_on_limit": cfg.wait_on_limit, "limit_wait_max_min": cfg.limit_wait_max_min,
+            "dedup": cfg.dedup, "dedup_agent": cfg.dedup_agent, "dedup_model": cfg.dedup_model,
+            "dedup_effort": cfg.dedup_effort,
             "design_only": opts.design_only, "skip_design": opts.skip_design, "mock": opts.mock,
         }
 

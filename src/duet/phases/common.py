@@ -14,10 +14,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping
 
 from duet.agents.base import AgentAdapter, AgentRequest, AgentResult, Mode
-from duet.config import Config
+from duet.config import Config, dedup_agent_config
 from duet.prompts import render
 from duet.runner import RunnerError
 from duet import limits
+from duet.dedup import DEDUP_ROLE
 from duet.state import FAILED, STOPPED_RATE_LIMIT, RunState
 from duet.transcript import Transcript
 
@@ -75,6 +76,8 @@ class PhaseContext:
         """역할 → CLI 이름(claude/codex). 기록·사용량 합계는 CLI 기준."""
         if self.workflow is not None and role in self.workflow.roles:
             return self.workflow.roles[role].agent
+        if role == DEDUP_ROLE:                    # 재제기 확인자 (DESIGN.md 26.2)
+            return self.cfg.dedup_agent
         return role
 
     @property
@@ -97,6 +100,8 @@ class PhaseContext:
         """역할이 쓰는 CLI 설정(모델·강도 포함)."""
         if self.workflow is not None and role in self.workflow.roles:
             return self.workflow.roles[role].agent_config(self.cfg)
+        if role == DEDUP_ROLE:
+            return dedup_agent_config(self.cfg)
         return self.cfg.agent(self.cli_of(role))
 
     def can_run_commands(self, role: str) -> bool:
@@ -167,10 +172,12 @@ class PhaseContext:
         fallback_prompt: str | None = None,
         transform: Callable[[AgentResult], str] | None = None,
         effort: str | None = None,
-    ) -> CallOutcome:
+        optional: bool = False,
+    ) -> CallOutcome | None:
         """에이전트를 호출하고 기록·상태를 갱신한다. 실패 정책을 적용한다.
 
         transform: 성공한 결과를 기록·반환할 본문으로 바꾼다(예: JSON 판정 → 마크다운 리뷰, DESIGN.md 21.2).
+        optional: 보조 호출(재제기 확인 등). 한도가 아닌 실패면 실행을 실패로 만들지 않고 None 을 돌려준다.
         """
         agent = self.agents[agent_name]
         req = AgentRequest(prompt=prompt, cwd=self.workdir, mode=mode,
@@ -232,6 +239,9 @@ class PhaseContext:
                 self.save()
                 raise RateLimitStop(agent_name, step)
             if attempt > self.retries:
+                if optional:
+                    self.log(f"{agent_name} ← {step} 실패라 건너뜁니다 (보조 호출)")
+                    return None
                 self.state.status = FAILED
                 self.state.error = f"{agent_name} {step} 실패: {reason}"
                 self.save()

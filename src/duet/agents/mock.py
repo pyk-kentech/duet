@@ -85,6 +85,8 @@ class MockAdapter:
             ids = re.findall(r"^- (I\d+) ", req.prompt, re.MULTILINE)
             return json.dumps({"decisions": [{"id": i, "decision": "uphold", "reason": "요구사항에 해당"} for i in ids],
                                "summary": "지적이 타당하다"}, ensure_ascii=False)
+        if step == "dedup":       # 기본: 중복 없음 (DESIGN.md 26.2)
+            return json.dumps({"matches": []})
         if step == "explore":
             return f"# {self.name} 사전 조사\n- 기존 코드 없음\n"
         if step == "audit":

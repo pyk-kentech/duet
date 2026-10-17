@@ -51,6 +51,17 @@ class Transcript:
         path.write_text(render_header(full_meta) + (text or "").rstrip("\n") + "\n", encoding="utf-8")
         return path
 
+    def rewrite(self, name: str, text: str, extra_meta: Mapping[str, Any] | None = None) -> None:
+        """기록의 본문을 바꾼다. 헤더(메타)는 유지하고 extra_meta 를 더한다 (재제기 확인 뒤 리뷰, DESIGN.md 26.2)."""
+        path = self.dir / name
+        content = path.read_text(encoding="utf-8")
+        meta, _ = split_header(content)
+        if not meta:
+            path.write_text((text or "").rstrip("\n") + "\n", encoding="utf-8")
+            return
+        path.write_text(render_header({**meta, **(extra_meta or {})}) + (text or "").rstrip("\n") + "\n",
+                        encoding="utf-8")
+
     # ---------------------------------------------------------------- read
     def entries(self) -> list[Entry]:
         out: list[Entry] = []

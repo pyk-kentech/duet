@@ -161,6 +161,11 @@ class Config:
     spec_gate: bool = True              # 지적의 근거 종류·요구 인용 관문 (DESIGN.md 25.2)
     wait_on_limit: bool = False         # 한도에 걸리면 재개 시각까지 기다렸다가 같은 호출을 다시 (DESIGN.md 25.1)
     limit_wait_max_min: int = 360       # 한 실행에서 한도 대기에 쓸 수 있는 최대 시간(분)
+    # 재제기·되돌림 방지 (DESIGN.md 26장). 확인자는 코드를 읽지 않는 짧은 분류라 작은 모델로 충분하다
+    dedup: bool = True
+    dedup_agent: str = "claude"
+    dedup_model: str = "claude-haiku-5-5"
+    dedup_effort: str = ""              # 비우면 CLI 기본
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
     env_strip: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_STRIP))
     env_keep: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_KEEP))
@@ -213,12 +218,18 @@ class Config:
         if not isinstance(self.repro_tests, bool):
             raise ConfigError("repro_tests 는 true/false 여야 합니다")
         for key in ("review_packet", "review_json", "review_gates", "arbiter", "test_guard", "claude_sandbox",
-                    "spec_gate", "wait_on_limit"):
+                    "spec_gate", "wait_on_limit", "dedup"):
             if not isinstance(getattr(self, key), bool):
                 raise ConfigError(f"{key} 는 true/false 여야 합니다")
         if (not isinstance(self.limit_wait_max_min, int) or isinstance(self.limit_wait_max_min, bool)
                 or not 1 <= self.limit_wait_max_min <= 7 * 24 * 60):
             raise ConfigError(f"limit_wait_max_min 은 1~10080(분) 사이여야 합니다: {self.limit_wait_max_min}")
+        if self.dedup_agent not in AGENT_NAMES:
+            raise ConfigError(f"dedup_agent 값이 잘못됨: {self.dedup_agent!r} (가능: {', '.join(AGENT_NAMES)})")
+        for key in ("dedup_model", "dedup_effort"):
+            v = getattr(self, key)
+            if not isinstance(v, str) or not _TOKEN_RE.match(v):
+                raise ConfigError(f"{key} 값이 잘못되었습니다: {v!r}")
         if self.review_session not in ("reuse", "fresh"):
             raise ConfigError(f"review_session 은 reuse 또는 fresh 여야 합니다: {self.review_session!r}")
         if (isinstance(self.review_session_rounds, bool) or not isinstance(self.review_session_rounds, int)
@@ -257,6 +268,11 @@ class Config:
                                       f"(가능: {', '.join(EFFORT_STEPS)})")
                 if not isinstance(v, str) or not v or not _TOKEN_RE.match(v):
                     raise ConfigError(f"[{name}] step_effort.{step} 값이 잘못되었습니다: {v!r}")
+
+
+def dedup_agent_config(cfg: "Config") -> AgentConfig:
+    """재제기 확인자가 쓰는 CLI 설정: dedup_agent 의 설정에 dedup_model·dedup_effort 를 덮어씀 (DESIGN.md 26.2)."""
+    return replace(cfg.agent(cfg.dedup_agent), model=cfg.dedup_model, effort=cfg.dedup_effort, step_effort={})
 
 
 CONFIG_FILENAME = "duet.toml"

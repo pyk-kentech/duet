@@ -16,6 +16,7 @@ resume 키:
   impl:i            커밋까지 완료
   test:i            duet 가 테스트 실행 (결과는 state.tests[i], 기록 NN_test{i}.md)
   guard:i           테스트 변조 감지 (DESIGN.md 24.1, 결과는 state.test_guard[i])
+  revert:i          되돌림 감지 (DESIGN.md 26.3, 결과는 state.reverts[i])
   review:i          리뷰 + 판정 완료 (판정은 policy.decide: 심각도 기준·테스트 결과 반영)
   review:i:<역할>   리뷰어가 여럿일 때 그 리뷰어의 리뷰 완료 (판정은 state.round_reviews[i][역할])
 
@@ -27,14 +28,15 @@ resume 키:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from duet.agents.base import Mode
 from duet.phases.common import PhaseContext
 from duet.phases.debate import DESIGN_FILENAME
 from duet import arbiter as arb
-from duet import gates
-from duet import testguard
+from duet import dedup, gates, revert, testguard
+from duet.dedup import DEDUP_ROLE
 from duet.packet import READ_INSTRUCTION_PACKET, READ_INSTRUCTION_PLAIN, call_sites, changed_symbols
 from duet.policy import Decision, decide, stalled
 from duet.prompts import TemplateError, load_template
@@ -161,6 +163,7 @@ class BuildPhase:
                 ctx.save()
                 self._preserve_pending_changes(i)
                 self._guard_tests(i, base)
+                self._detect_reverts(i)
                 diff_title, diff = self._review_diff(i, base)
                 decision, files = self._review_round(i, diff_title, diff)
                 test = st.tests.get(str(i))
@@ -339,14 +342,17 @@ class BuildPhase:
             focus = self._focus_ids(i) if use_gates else None
             if sites_full is None:
                 sites_full = self._call_sites(diff)
+            open_text = (gates.format_open(open_now) if focus is None else
+                         "(중재 결과: 아래 중 " + (", ".join(sorted(focus)) or "없음")
+                         + " 만 막는 기준이다. 그 밖의 지적은 P3 로 처리된다)\n" + gates.format_open(open_now))
+            closed_text = dedup.closed_block(st) if use_gates and self.cfg.dedup else ""
+            if closed_text:
+                open_text += "\n\n" + closed_text
             common = dict(task=ctx.task, implementer_name=self.implementer, tests=self._tests_for_review(i),
                           test_instruction=self._test_instruction(i, role),
                           read_instruction=READ_INSTRUCTION_PACKET if self.cfg.review_packet else READ_INSTRUCTION_PLAIN,
                           repro_instruction=repro_text,
-                          open_issues=(gates.format_open(open_now) if focus is None else
-                                       "(중재 결과: 아래 중 " + (", ".join(sorted(focus)) or "없음")
-                                       + " 만 막는 기준이다. 그 밖의 지적은 P3 로 처리된다)\n"
-                                       + gates.format_open(open_now)),
+                          open_issues=open_text,
                           output_instruction=output_instruction(json_mode, self.cfg.repro_tests, repro_text,
                                                                 gates=use_gates, spec=spec_text is not None))
             full_prompt = ctx.prompt(role, "review", diff=diff, diff_title=diff_title, call_sites=sites_full,
@@ -389,6 +395,7 @@ class BuildPhase:
             self._remember_session(role, i, out.result,
                                    session_effort if out.result.resumed else ctx.agent_config(role).effort_for("review", i))
             if "res" in gated:
+                out = self._check_repeats(i, role, gated["res"], out)
                 gates.update_ledger(st, role, i, gated["res"].data["findings"])
                 self._downgraded[role] = gated["res"].downgraded
             self._undo_reviewer_changes()
@@ -508,6 +515,65 @@ class BuildPhase:
                 "parse_failed": any(row.get("parse_failed") for row in rows), "reasons": decision.reasons,
                 "tests": test.get("status") if test else None, "reviewers": rows}
 
+    # ---------------------------------------------------------------- repeats (DESIGN.md 26장)
+    def _check_repeats(self, i: int, role: str, res, out):
+        """새 막는 지적이 닫힌 지적의 반복인지 작은 모델에게 묻고 판정에 적용한다 (26.2). 바뀌면 리뷰 기록을 다시 쓴다."""
+        ctx, st = self.ctx, self.state
+        if not self.cfg.dedup or DEDUP_ROLE not in ctx.agents:
+            return out
+        findings = res.data["findings"]
+        new = dedup.new_blocking(findings)
+        pending = dedup.pending_issues(st, role, findings)
+        closed = pending + [x for x in dedup.closed_issues(st) if x["id"] not in {p["id"] for p in pending}]
+        if not new or not closed:
+            return out
+        ctx.log(f"[{i}/{self.max_review}] 중복 확인: 새 막는 지적 {len(new)}개 × 닫힌 지적 {len(closed)}개")
+        prompt = ctx.prompt(DEDUP_ROLE, "dedup", new=dedup.format_new(new), closed=dedup.format_closed(closed),
+                            output_instruction=dedup.OUTPUT_INSTRUCTION)
+        call = ctx.call(DEDUP_ROLE, "dedup", prompt, Mode.READ, label=f"dedup{i}_{role}", round_=i,
+                        output_schema=dedup.DEDUP_SCHEMA, optional=True)
+        self._undo_reviewer_changes()
+        key = f"{i}:{role}"
+        if call is None:
+            st.dedup[key] = {"result": "failed"}
+            return out
+        matches = dedup.normalize(call.result.structured, {f["id"] for f in new}, {x["id"] for x in closed})
+        if matches is None:
+            st.dedup[key] = {"file": call.file, "result": "unreadable"}
+            ctx.log(f"[{i}/{self.max_review}] 중복 확인 결과를 읽지 못해 리뷰를 그대로 씁니다 → {call.file}")
+            return out
+        counts = dedup.apply(findings, matches, {x["id"]: x for x in closed})
+        st.dedup[key] = {"file": call.file, "matches": matches, **counts}
+        if not matches:
+            ctx.log(f"[{i}/{self.max_review}] 중복 확인: 반복 없음")
+            return out
+        if counts["repeat"]:
+            res.downgraded["repeat"] = res.downgraded.get("repeat", 0) + counts["repeat"]
+        text = render_review(res.data) or out.text
+        ctx.transcript.rewrite(out.file, text, {"dedup": f"재제기 {counts['repeat']} 재발 {counts['recurred']} "
+                                                         f"합침 {counts['same']}"})
+        ctx.log(f"[{i}/{self.max_review}] 중복 확인: "
+                + ", ".join(f"{n}→{m['old_id']}" for n, m in matches.items())
+                + f" (재제기 P3 강등 {counts['repeat']}, 재발 표시 {counts['recurred']}, 같은 지적 합침 {counts['same']})")
+        return replace(out, text=text)
+
+    def _detect_reverts(self, i: int) -> None:
+        """지난 리뷰 이후 변경이 해결된 지적을 가로질러 예전 코드를 되살렸는지 (26.3)."""
+        ctx, st = self.ctx, self.state
+        key = f"revert:{i}"
+        if not self.cfg.dedup or i < 2 or st.is_done(key):
+            return
+        prev = self._reviewed_commit(i - 1)
+        if prev and st.base_commit and st.issues:
+            points = [(0, st.base_commit)] + [(k, c) for k in range(1, i - 1) if (c := self._reviewed_commit(k))]
+            found = revert.find_reverts(self.ws, prev, points, st.issues, exclude=(ctx.design_doc,))
+            if found:
+                st.reverts[str(i)] = {"since": prev, "reverts": [r.to_dict() for r in found]}
+                ctx.log(f"[{i}/{self.max_review}] ⚠️ 되돌림 감지: "
+                        + ", ".join(f"{r.file}({'/'.join(r.issues)})" for r in found))
+        st.mark_done(key)
+        ctx.save()
+
     def _review_texts(self, i: int = 0) -> str:
         """수정 프롬프트에 넣을 지난 리뷰. 리뷰어가 여럿이면 역할별로 이어 붙인다. 중재 뒤 마지막 라운드면 중재 결과를 앞에."""
         st = self.state
@@ -518,14 +584,16 @@ class BuildPhase:
                     + "\n\n**이번 라운드는 유지된 지적("
                     + (", ".join(st.arbiter.get("upheld") or []) or "없음")
                     + ")만 고쳐라. 완화·기각된 지적은 고치지 않아도 된다.**\n\n")
+        closed = dedup.closed_block(st, for_fix=True) if self.cfg.dedup else ""
+        tail = f"\n\n{closed}" if closed else ""
         if not self.multi or not st.last_reviews:
-            return head + self.ctx.transcript.read(st.last_review)  # type: ignore[arg-type]
+            return head + self.ctx.transcript.read(st.last_review).rstrip() + tail  # type: ignore[arg-type]
         chunks = []
         for role in self.reviewers:
             f = st.last_reviews.get(role)
             if f:
                 chunks.append(f"### {role} 의 리뷰\n\n{self.ctx.transcript.read(f).strip()}")
-        return head + "\n\n".join(chunks)
+        return head + "\n\n".join(chunks) + tail
 
     # ---------------------------------------------------------------- tests
     def _env_drops(self) -> list[str]:
@@ -564,8 +632,12 @@ class BuildPhase:
 
     def _tests_for_review(self, i: int) -> str:
         """리뷰·중재 프롬프트의 테스트 결과. 테스트 변경 경고가 있으면 아래에 붙인다 (DESIGN.md 24.1)."""
-        guard = self._guard_text(i)
-        return self._tests_text(i) + (f"\n\n{guard}" if guard else "")
+        warnings = [w for w in (self._guard_text(i), self._revert_text(i)) if w]
+        return self._tests_text(i) + "".join(f"\n\n{w}" for w in warnings)
+
+    def _revert_text(self, i: int) -> str:
+        g = self.state.reverts.get(str(i))
+        return revert.format_reverts(g["reverts"]) if g and g.get("reverts") else ""
 
     # ---------------------------------------------------------------- test guard (DESIGN.md 24.1)
     def _guard_tests(self, i: int, base: str) -> None:
