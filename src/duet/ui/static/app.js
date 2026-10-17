@@ -378,8 +378,8 @@ function buildModelPicker(box) {
   const paint = () => {
     const m = input.value ? modelInfo(agent, input.value) : null;
     const label = !input.value ? '기본 모델' : m ? m.label : input.value;
-    const note = !input.value ? 'CLI 기본값' : m ? (m.note || '') : '목록에 없음';
-    btn.title = input.value || 'CLI 기본값';
+    const note = !input.value ? `CLI 기본 · ${cliDefaultLabel(agent)}` : m ? (m.note || '') : '목록에 없음';
+    btn.title = input.value || `CLI 기본 모델: ${cliDefaultLabel(agent)}`;
     btn.replaceChildren(agentLogo(agent, 18), h('span', { class: `mp-label${input.value ? '' : ' def'}` }, label),
       note ? h('span', { class: 'mp-note' }, note) : null, chevron());
   };
@@ -394,7 +394,7 @@ function buildModelPicker(box) {
     const sugg = ((((app.settings || {}).suggestions || {})[agent]) || {}).models || [];
     const known = sugg.some(m => m.id === input.value);
     const menu = h('div', { class: 'fm', role: 'listbox' },
-      fmItem({ label: '기본 모델', note: 'CLI 에 설정된 기본값 · 새 모델이 나오면 CLI 를 따라감', on: !input.value, icon: agentLogo(agent, 18), onPick: () => { setVal(''); btn.focus(); } }),
+      fmItem({ label: '기본 모델', note: `지금 ${cliDefaultLabel(agent)} · CLI 설정을 따라감(새 모델이 나오면 함께 바뀜)`, on: !input.value, icon: agentLogo(agent, 18), onPick: () => { setVal(''); btn.focus(); } }),
       sugg.length ? h('div', { class: 'fm-group' }, '모델') : null,
       sugg.map(m => fmItem({ label: m.label || m.id, note: m.note, on: m.id === input.value, onPick: () => { setVal(m.id); btn.focus(); } })),
       input.value && !known ? fmItem({ label: input.value, note: '지금 설정값 · 목록에 없음', on: true, onPick: () => btn.focus() }) : null);
@@ -2337,8 +2337,15 @@ function roleSetting(role, withOverrides = true) {
   }
   return { agent: role.agent, model, effort, step, stepModel };
 }
+// CLI 가 모델을 지정하지 않을 때 쓰는 모델의 이름 (DESIGN.md 30.6)
+function cliDefaultLabel(agent) {
+  const id = (((app.settings || {}).suggestions || {})[agent] || {}).cli_default;
+  if (!id) return agent === 'claude' ? 'Claude Code 기본값' : 'Codex 기본값';
+  const m = modelInfo(agent, id);
+  return m ? m.label : id;
+}
 function modelLabel(agent, id) {
-  if (!id) return '기본 모델';
+  if (!id) return `기본 · ${cliDefaultLabel(agent)}`;
   const m = modelInfo(agent, id);
   return m ? m.label : id;
 }
@@ -2533,7 +2540,7 @@ function renderWorkflowDiagram() {
         const model = dlgOption('dedup_model') || '';
         const effort = dlgOption('dedup_effort') || '';
         sig['중복 확인'] = `${agent}|${model}|${effort}`;
-        extras.push(wfCard('중복 확인', agent, agent, model, [['', effort]],
+        extras.push(wfCard('중복 확인', agent, agent, modelLabel(agent, model), [['', effort]],
           { small: true, key: '중복 확인', note: '해결·기각된 지적의 반복 확인 (작은 모델)' }));
       }
       const guards = [gatesOn ? '판정 관문' : null, gatesOn && dlgOption('spec_gate') !== false ? '요구 근거' : null,

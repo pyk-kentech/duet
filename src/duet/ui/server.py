@@ -597,6 +597,31 @@ CODEX_NOTE_KO = {
 }
 
 
+def cli_default_models() -> dict[str, str | None]:
+    """각 CLI 가 모델을 지정하지 않을 때 쓰는 모델 (화면의 '기본 모델'이 무엇인지 보이려고, DESIGN.md 30.6).
+
+    Codex: ~/.codex/config.toml 의 model. Claude: ~/.claude/settings.json 의 model (없으면 None = Claude Code 기본값).
+    """
+    import tomllib
+
+    from duet.usage import claude_home
+
+    out: dict[str, str | None] = {"claude": None, "codex": None}
+    try:
+        data = tomllib.loads((codex_home() / "config.toml").read_text(encoding="utf-8"))
+        if isinstance(data.get("model"), str) and data["model"].strip():
+            out["codex"] = data["model"].strip()
+    except (OSError, ValueError):
+        pass
+    try:
+        data = json.loads((claude_home() / "settings.json").read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("model"), str) and data["model"].strip():
+            out["claude"] = data["model"].strip()
+    except (OSError, ValueError):
+        pass
+    return out
+
+
 def model_suggestions() -> dict[str, Any]:
     """모델 선택 상자에 보여줄 후보. Codex 는 ~/.codex/models_cache.json 에서 읽는다."""
     codex: list[dict[str, Any]] = []
@@ -609,10 +634,12 @@ def model_suggestions() -> dict[str, Any]:
                               "default_effort": m.get("default_reasoning_level")})
     except (OSError, ValueError, AttributeError):
         pass
+    cli = cli_default_models()
     return {
         "claude": {"models": [{"id": x, **CLAUDE_MODEL_INFO.get(x, {"label": x})} for x in CLAUDE_MODEL_SUGGESTIONS],
+                   "cli_default": cli["claude"],
                    "efforts": EFFORT_SUGGESTIONS["claude"]},
-        "codex": {"models": codex, "efforts": EFFORT_SUGGESTIONS["codex"]},
+        "codex": {"models": codex, "efforts": EFFORT_SUGGESTIONS["codex"], "cli_default": cli["codex"]},
     }
 
 

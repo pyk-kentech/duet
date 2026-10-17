@@ -199,3 +199,32 @@ def test_extended_removed(tmp_path: Path):
                  '[[steps]]\nkind = "build"\nmanager = "m"\nworkers = ["w"]\nreviewers = ["r"]\n', encoding="utf-8")
     with pytest.raises(WorkflowError, match="없앤 기능"):
         load_workflow(f"@{p}", None, Config())
+
+
+# ====================================================================== 30.6 판단량으로 정한 기본 모델
+def test_default_model_tiers():
+    cfg = Config()
+    assert cfg.claude.model == "" and cfg.codex.model == ""                  # 판단 자리는 CLI 기본(주 모델)
+    assert cfg.dedup_model == "claude-haiku-5-5"                              # 중복 확인은 가벼운 모델
+    scout = load_workflow("existing", None, cfg).roles["scout"].agent_config(cfg)
+    assert (scout.model_for("explore"), scout.effort_for("explore")) == ("gpt-6-luna", "low")
+    lean = load_workflow("lean", None, cfg)
+    assert lean.roles["claude"].agent_config(cfg).model_for("implement") == "claude-sonnet-5-5"
+    assert lean.roles["codex"].agent_config(cfg).model_for("review") == ""   # 리뷰는 추론이 필요해 기본 모델
+
+
+def test_cli_default_models(tmp_path: Path, monkeypatch):
+    from duet.ui.server import cli_default_models, model_suggestions
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    assert cli_default_models() == {"claude": None, "codex": None}
+    (tmp_path / "codex").mkdir()
+    (tmp_path / "codex" / "config.toml").write_text('model = "gpt-6.1-sol"\nmodel_reasoning_effort = "high"\n', encoding="utf-8")
+    (tmp_path / "claude").mkdir()
+    (tmp_path / "claude" / "settings.json").write_text('{"model": "claude-opus-5-5"}', encoding="utf-8")
+    assert cli_default_models() == {"claude": "claude-opus-5-5", "codex": "gpt-6.1-sol"}
+    s = model_suggestions()
+    assert s["claude"]["cli_default"] == "claude-opus-5-5" and s["codex"]["cli_default"] == "gpt-6.1-sol"
+    (tmp_path / "codex" / "config.toml").write_text("not = [toml", encoding="utf-8")
+    assert cli_default_models()["codex"] is None                             # 못 읽으면 모름

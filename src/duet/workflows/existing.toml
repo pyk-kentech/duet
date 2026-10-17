@@ -1,8 +1,10 @@
 name = "existing"
 description = "기존 코드 조사 → 이번 변경만 설계 → 구현 → 리뷰"
 
+# 사전 조사는 찾아서 요약하는 자리라 가벼운 모델 (DESIGN.md 30.6)
 [roles.scout]
 agent = "codex"
+model = "gpt-6-luna"
 effort = "low"
 
 [roles.claude]
