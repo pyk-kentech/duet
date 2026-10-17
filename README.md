@@ -169,6 +169,7 @@ duet run "..." --workdir ./x --workflow secure
 | `secure` | classic + 보안 리뷰어(Codex, 보안 전용 프롬프트) + 승인 뒤 Claude 의 전체 감사 |
 | `existing` | 기존 코드베이스용: Codex 가 먼저 코드를 조사하고, 이번 변경만 설계해 `docs/changes/<실행 ID>.md` 에 저장(프로젝트의 `DESIGN.md` 는 그대로) → 구현·리뷰 |
 | `lean` | 가장 쌈: Claude 혼자 설계(토론 없음) → 구현 → Codex 리뷰 |
+| `extended` | 큰 과제용 분업: Codex(high) 관리자가 설계를 작업 묶음(파일 소유)으로 나눔 → Claude Sonnet 작업자가 맡은 파일만 순서대로 구현 → 관리자가 통합 → Codex 리뷰. 수정은 지적의 파일 주인 작업자가 맡습니다 (DESIGN.md 29장) |
 
 직접 만들려면 `<작업 폴더>/.duet/workflows/<이름>.toml` 또는 `~/.duet/workflows/<이름>.toml` 에 둡니다. 단계 종류는 `explore`(사전 조사), `debate`(설계), `build`(구현·리뷰, 리뷰어 최대 3명), `audit`(승인 뒤 감사, 참고용)입니다.
 

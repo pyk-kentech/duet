@@ -87,6 +87,24 @@ class MockAdapter:
                                "summary": "지적이 타당하다"}, ensure_ascii=False)
         if step == "dedup":       # 기본: 중복 없음 (DESIGN.md 26.2)
             return json.dumps({"matches": []})
+        if step == "plan":        # 기본: 묶음 둘 (DESIGN.md 29장)
+            return json.dumps({"packages": [
+                {"id": "P1", "title": "본체", "files": [self.write_file], "goal": "기능", "interfaces": "main()",
+                 "depends_on": []},
+                {"id": "P2", "title": "테스트", "files": ["tests/"], "goal": "테스트", "interfaces": "",
+                 "depends_on": ["P1"]}], "shared": "표준 라이브러리만"}, ensure_ascii=False)
+        if step == "part":        # 맡은 파일만 쓴다
+            import re
+
+            for path in re.findall(r"^- (\S+)$", req.prompt.split("[맡은 파일]", 1)[-1].split("[네가", 1)[0], re.MULTILINE):
+                target = Path(req.cwd) / (path + "test_part.py" if path.endswith("/") else path)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(f"# {self.name} part\n", encoding="utf-8")
+            return f"{self.name}: part 완료\n"
+        if step == "integrate":
+            if req.mode is Mode.WRITE:
+                self._touch(req.cwd)
+            return f"{self.name}: integrate 완료\n"
         if step == "explore":
             return f"# {self.name} 사전 조사\n- 기존 코드 없음\n"
         if step == "audit":

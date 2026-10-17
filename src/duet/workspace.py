@@ -126,6 +126,16 @@ class Workspace:
         return self.git("diff", "--no-color", "--stat=200,150", base, head, "--", *self._pathspec(exclude, ()))
 
     # ---------------------------------------------------------------- restore
+    def revert_paths(self, paths: Iterable[str]) -> None:
+        """지금 HEAD 기준으로 이 파일들만 되돌린다: 추적 파일은 복원, 새 파일은 삭제 (DESIGN.md 29.2)."""
+        for p in paths:
+            if self.git("ls-tree", "--name-only", "HEAD", "--", p).strip():
+                self.git("checkout", "HEAD", "--", p)
+            else:
+                target = self.workdir / p
+                if target.is_file():
+                    target.unlink()
+
     def restore_clean(self, keep: Sequence[str] = (DUET_DIR,)) -> None:
         """추적 파일 되돌리기 + 미추적 파일 삭제(keep 은 제외)."""
         self.git("checkout", "--", ".")

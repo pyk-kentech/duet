@@ -83,6 +83,7 @@ class RunState:
     limit_waited_sec: float = 0.0                                     # 한도 대기에 쓴 시간 합
     dedup: dict[str, dict] = field(default_factory=dict)              # "round:역할" → 재제기 확인 결과 (DESIGN.md 26.2)
     reverts: dict[str, dict] = field(default_factory=dict)            # round → 되돌림 경고 (DESIGN.md 26.3)
+    team: dict = field(default_factory=dict)                          # 관리자·작업자 분업 (DESIGN.md 29.4)
     review_sessions: dict[str, dict] = field(default_factory=dict)    # 역할 → {id, round, rounds} (DESIGN.md 21.3)
     design_doc: str | None = None    # 설계 문서(작업 폴더 기준). None 이면 DESIGN.md, 변경 설계면 docs/changes/<run>.md
     error: str | None = None

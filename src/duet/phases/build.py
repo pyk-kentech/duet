@@ -19,6 +19,7 @@ resume 키:
   revert:i          되돌림 감지 (DESIGN.md 26.3, 결과는 state.reverts[i])
   review:i          리뷰 + 판정 완료 (판정은 policy.decide: 심각도 기준·테스트 결과 반영)
   review:i:<역할>   리뷰어가 여럿일 때 그 리뷰어의 리뷰 완료 (판정은 state.round_reviews[i][역할])
+  plan:1, part:<id>[:called], integrate:1, route:<i>:<담당>   관리자·작업자 분업 (DESIGN.md 29장)
 
 리뷰어가 여럿이면(DESIGN.md 19.3) 모두 승인해야 승인, 막는 지적 수는 합.
 
@@ -36,11 +37,13 @@ from duet.phases.common import PhaseContext
 from duet.phases.debate import DESIGN_FILENAME
 from duet import arbiter as arb
 from duet import dedup, gates, revert, testguard
+from duet import team as teammod
 from duet.dedup import DEDUP_ROLE
 from duet.packet import READ_INSTRUCTION_PACKET, READ_INSTRUCTION_PLAIN, call_sites, changed_symbols
 from duet.policy import Decision, decide, stalled
 from duet.prompts import TemplateError, load_template
 from duet.review_json import REVIEW_SCHEMA, output_instruction, render_review
+from duet.agents.base import parse_structured
 from duet.repro import parse_repros, write_repros
 from duet.runner import env_drops
 from duet.testing import STATUS_KO, describe_for_prompt, resolve_command, run_tests
@@ -97,7 +100,9 @@ class BuildPhase:
         self.state = ctx.state
         self.cfg = ctx.cfg
         self.ws = workspace or Workspace(ctx.workdir)
-        self.implementer = step.implementer if step is not None and step.implementer else ctx.cfg.implementer
+        self.implementer = step.lead if step is not None and step.lead else ctx.cfg.implementer
+        self.manager = step.manager if step is not None else None          # 분업 (DESIGN.md 29장)
+        self.workers: list[str] = list(step.workers) if step is not None else []
         self.reviewers: list[str] = list(step.reviewers) if step is not None else [ctx.cfg.reviewer]
         self.arbiter_role = self._pick_arbiter(step)
         self.reviewer = self.reviewers[0]
@@ -124,6 +129,8 @@ class BuildPhase:
             impl_key, review_key = f"impl:{i}", f"review:{i}"
 
             if not st.is_done(impl_key):
+                if not st.is_done(f"{impl_key}:called") and self.manager:
+                    self._team_impl(i)
                 if not st.is_done(f"{impl_key}:called"):
                     ctx.set_position(PHASE_BUILD, "implement", i)
                     ctx.save()
@@ -227,6 +234,165 @@ class BuildPhase:
         ctx.set_position(PHASE_DONE, "unapproved", self.max_review)
         ctx.save()
         return False
+
+    # ---------------------------------------------------------------- team (DESIGN.md 29장)
+    def _team_impl(self, i: int) -> None:
+        """1라운드: 분해 → 묶음 구현 → 통합. 수정 라운드: 지적을 파일 주인에게."""
+        st = self.state
+        if i == 1 or not st.last_review:
+            self._team_plan()
+            for pid in st.team["order"]:
+                self._team_part(pid)
+            self._team_integrate()
+        else:
+            self._team_fix(i)
+        st.mark_done(f"impl:{i}:called")
+        self.ctx.save()
+
+    def _team_plan(self) -> None:
+        ctx, st = self.ctx, self.state
+        if st.is_done("plan:1"):
+            return
+        ctx.set_position(PHASE_BUILD, "plan", 1)
+        ctx.save()
+        ctx.log(f"[1/{self.max_review}] 분해: {self.manager} (작업자 {', '.join(self.workers)})")
+        prompt = ctx.prompt(self.manager, "plan", task=ctx.task, output_instruction=teammod.OUTPUT_INSTRUCTION)
+        holder: dict = {}
+
+        def transform(r):
+            data = r.structured if r.structured is not None else parse_structured(r.text)
+            try:
+                holder["plan"] = teammod.validate(data)
+            except teammod.PlanError as e:
+                holder["error"] = str(e)
+                return r.text
+            p = holder["plan"]
+            lines = [f"## 작업 묶음 ({len(p['packages'])}개, 순서: {' → '.join(p['order'])})", ""]
+            for pkg in p["packages"]:
+                lines += [f"### {pkg['id']} {pkg['title']}", f"- 파일: {', '.join(pkg['files'])}",
+                          f"- 목표: {pkg['goal'] or '-'}", f"- 인터페이스: {pkg['interfaces'] or '-'}",
+                          f"- 먼저: {', '.join(pkg['depends_on']) or '-'}", ""]
+            lines += ["## 공유 약속", p["shared"] or "(없음)"]
+            return "\n".join(lines)
+
+        out = ctx.call(self.manager, "plan", prompt, Mode.READ, label=f"plan1_{self.manager}", round_=1,
+                       output_schema=teammod.PLAN_SCHEMA, transform=transform)
+        self._undo_reviewer_changes()
+        plan = holder.get("plan")
+        if plan is None:
+            reason = holder.get("error") or "계획(JSON)을 읽지 못함"
+            plan = teammod.fallback_plan(reason)
+            ctx.log(f"[1/{self.max_review}] 분해 결과를 쓸 수 없어 묶음 하나로 진행합니다: {reason}")
+        else:
+            ctx.log(f"[1/{self.max_review}] 작업 묶음 {len(plan['packages'])}개: "
+                    + ", ".join(f"{p['id']} {p['title']}" for p in plan["packages"]) + f" → {out.file}")
+        st.team = {"plan": plan, "order": plan["order"], "fallback": plan.get("fallback"), "plan_file": out.file,
+                   "parts": {}, "routes": {}}
+        st.mark_done("plan:1")
+        ctx.save()
+
+    def _team_part(self, pid: str) -> None:
+        ctx, st = self.ctx, self.state
+        key = f"part:{pid}"
+        if st.is_done(key):
+            return
+        plan = st.team["plan"]
+        pkg = teammod.package(plan, pid)
+        idx = plan["order"].index(pid)
+        worker = self.workers[idx % len(self.workers)]
+        rec = st.team["parts"].setdefault(pid, {"worker": worker})
+        if not st.is_done(f"{key}:called"):
+            ctx.set_position(PHASE_BUILD, "part", 1)
+            ctx.save()
+            ctx.log(f"[1/{self.max_review}] 묶음 {pid} ({idx + 1}/{len(plan['order'])}): {worker} — {pkg['title']}")
+            done = [f"- {d} {teammod.package(plan, d)['title']}" for d in plan["order"][:idx]]
+            prompt = ctx.prompt(worker, "part", task=ctx.task, pkg_id=pid, pkg_title=pkg["title"],
+                                pkg_goal=pkg["goal"] or "-", pkg_files=teammod.format_files(pkg),
+                                pkg_interfaces=pkg["interfaces"] or "(없음)", shared=plan["shared"] or "(없음)",
+                                others=teammod.format_others(plan, pid), done="\n".join(done) or "(없음)",
+                                test_hint=self._test_hint())
+            out = ctx.call(worker, "part", prompt, Mode.WRITE, label=f"part_{pid}_{worker}", round_=1)
+            rec["file"] = out.file
+            st.mark_done(f"{key}:called")
+            ctx.save()
+        rec.update(self._enforce_ownership(pkg, plan, f"묶음 {pid}"))
+        rec["commit"] = self.ws.commit_all(f"duet: part {pid}")
+        st.mark_done(key)
+        ctx.save()
+
+    def _enforce_ownership(self, pkg: dict, plan: dict, who: str) -> dict:
+        """작업자가 소유 밖을 바꿨으면 되돌린다 (DESIGN.md 29.2)."""
+        changed = self.ws.dirty_files()
+        bad = [] if plan.get("fallback") else teammod.outside(pkg, changed)
+        if bad:
+            self.ws.revert_paths(bad)
+            self.ctx.log(f"경고: {who} 작업자가 맡지 않은 파일을 바꿔 되돌림: {', '.join(bad[:5])}"
+                         + (" ..." if len(bad) > 5 else ""))
+        return {"changed": [c for c in changed if c not in bad], "reverted": bad}
+
+    def _team_integrate(self) -> None:
+        ctx, st = self.ctx, self.state
+        if st.is_done("integrate:1"):
+            return
+        ctx.set_position(PHASE_BUILD, "integrate", 1)
+        ctx.save()
+        ctx.log(f"[1/{self.max_review}] 통합: {self.manager}")
+        prompt = ctx.prompt(self.manager, "integrate", task=ctx.task,
+                            parts=teammod.format_parts(st.team["plan"], st.team["parts"]), test_hint=self._test_hint())
+        out = ctx.call(self.manager, "integrate", prompt, Mode.WRITE, label=f"integrate1_{self.manager}", round_=1)
+        st.last_impl = out.file
+        st.mark_done("integrate:1")
+        ctx.save()
+
+    def _team_routes(self) -> list[tuple[str, str | None, list[str]]]:
+        """(담당 역할, 묶음 id, 지적 id들). 원장이 없거나 대체 계획이면 관리자 혼자."""
+        st = self.state
+        plan = st.team.get("plan") or {}
+        upto = ("P1", "P2", "P3")[: ("P1", "P2", "P3").index(self.cfg.block_severity) + 1]
+        issues = [x for x in st.issues if x.get("status") == "open" and x.get("severity") in upto]
+        if not issues or not plan or plan.get("fallback"):
+            return [(self.manager, None, [x["id"] for x in issues])]
+        groups: dict[tuple[str, str | None], list[str]] = {}
+        for x in issues:
+            pid = teammod.owner_of(plan, x.get("file"))
+            worker = (st.team.get("parts", {}).get(pid) or {}).get("worker") if pid else None
+            groups.setdefault((worker, pid) if worker else (self.manager, None), []).append(x["id"])
+        workers = sorted((k for k in groups if k[1] is not None), key=lambda k: plan["order"].index(k[1]))
+        manager = [k for k in groups if k[1] is None]
+        return [(role, pid, groups[(role, pid)]) for role, pid in [*workers, *manager]]
+
+    def _team_fix(self, i: int) -> None:
+        ctx, st = self.ctx, self.state
+        plan = st.team.get("plan") or {}
+        routes = st.team.setdefault("routes", {}).setdefault(str(i), {})
+        for role, pid, ids in self._team_routes():
+            key = f"route:{i}:{role}:{pid or '-'}"
+            if st.is_done(key):
+                continue
+            ctx.set_position(PHASE_BUILD, "fix", i)
+            ctx.save()
+            if pid:
+                pkg = teammod.package(plan, pid)
+                head = (f"### 이번에 네가 고칠 지적: {', '.join(ids)} (묶음 {pid}, 맡은 파일: {', '.join(pkg['files'])})\n"
+                        "다른 지적은 다른 작업자나 관리자가 고친다. 맡은 파일 밖은 고치지 마라(duet 가 되돌린다). "
+                        "밖의 파일이 바뀌어야 하면 IMPLEMENTATION_NOTES.md 에 적어라.\n\n")
+            else:
+                head = (f"### 이번에 네가 고칠 지적: {', '.join(ids)} (주인이 없거나 여러 묶음에 걸친 지적)\n\n"
+                        if ids and len(self._team_routes()) > 1 else "")
+            ctx.log(f"[{i}/{self.max_review}] 리뷰 반영: {role}" + (f" (묶음 {pid}: {', '.join(ids)})" if pid else
+                                                                    (f" ({', '.join(ids)})" if ids else "")))
+            prompt = ctx.prompt(role, "fix", task=ctx.task, review=head + self._review_texts(i),
+                                reviewer_name=", ".join(self.reviewers),
+                                tests=self._tests_text(i - 1), repro=self._repro_text(i - 1))
+            out = ctx.call(role, "fix", prompt, Mode.WRITE, label=f"fix{i}_{role}" + (f"_{pid}" if pid else ""), round_=i)
+            rec = {"ids": ids, "file": out.file}
+            if pid:
+                rec.update(self._enforce_ownership(teammod.package(plan, pid), plan, f"묶음 {pid}"))
+                self.ws.commit_all(f"duet: fix round {i} {pid}")   # 다음 작업자의 소유 확인이 이 변경을 보지 않게
+            routes[f"{role}:{pid or '-'}"] = rec
+            st.last_impl = out.file
+            st.mark_done(key)
+            ctx.save()
 
     # ---------------------------------------------------------------- arbiter (DESIGN.md 23장)
     def _pick_arbiter(self, step) -> str | None:

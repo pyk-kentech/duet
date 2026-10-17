@@ -50,7 +50,8 @@ EFFORT_SUGGESTIONS = {
     "codex": ["minimal", "low", "medium", "high", "xhigh", "max"],
 }
 # step_effort 의 키. "rereview" 는 2라운드부터의 리뷰 (DESIGN.md 18.1)
-EFFORT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "rereview", "arbitrate")
+EFFORT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "rereview", "arbitrate",
+                "plan", "part", "integrate")   # plan·part·integrate: 관리자·작업자 분업 (DESIGN.md 29장)
 
 # 에이전트·테스트 자식 프로세스에서 뺄 환경 변수 이름(glob, 대소문자 무시) (DESIGN.md 18.2)
 DEFAULT_ENV_STRIP = [

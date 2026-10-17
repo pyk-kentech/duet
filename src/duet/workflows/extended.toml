@@ -1,0 +1,28 @@
+name = "extended"
+description = "큰 과제용 분업: Codex(high) 관리자가 설계를 작업 묶음으로 나누고, Claude Sonnet 작업자가 맡은 파일만 순서대로 구현 → 관리자가 통합 → Codex 리뷰 (DESIGN.md 29장)"
+
+[roles.claude]
+agent = "claude"
+
+[roles.codex]
+agent = "codex"
+
+[roles.manager]
+agent = "codex"
+effort = "high"
+
+[roles.worker]
+agent = "claude"
+model = "claude-sonnet-5-5"
+effort = "medium"
+
+[[steps]]
+kind = "debate"
+proposers = ["claude", "codex"]
+synth = "codex"
+
+[[steps]]
+kind = "build"
+manager = "manager"
+workers = ["worker"]
+reviewers = ["codex"]
