@@ -104,6 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
     b_run.add_argument("--out", help="결과 폴더 (기본: ~/.duet/bench)")
     b_run.add_argument("--wait-on-limit", action="store_true",
                        help="한도에 걸리면 멈추지 않고 재개 시각까지 기다렸다가 이어감")
+    b_run.add_argument("--fixed-design", action="store_true",
+                       help="과제의 design.md 로 설계 토론을 건너뛰고 모든 워크플로가 같은 설계로 구현부터 (DESIGN.md 31.2)")
     b_run.add_argument("--mock", action="store_true", help="실제 CLI 호출 없이 흐름만 확인")
     b_run.add_argument("--yes", action="store_true", help="실제 구독을 쓰는 실행에 동의")
     b_run.add_argument("--verbose", action="store_true", help="각 실행의 진행 로그도 출력")
@@ -242,7 +244,7 @@ def cmd_bench_run(args: argparse.Namespace) -> int:
     try:
         run_bench(suite=args.suite, workflows=workflows, task_names=args.task, repeat=args.repeat,
                   max_review=args.max_review, out_root=out, mock=args.mock, verbose=args.verbose,
-                  wait_on_limit=args.wait_on_limit)
+                  wait_on_limit=args.wait_on_limit, fixed_design=args.fixed_design)
     except BenchError as e:
         raise OrchestratorError(str(e)) from e
     return EXIT_OK

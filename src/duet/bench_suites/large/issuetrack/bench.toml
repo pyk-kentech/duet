@@ -1,0 +1,6 @@
+name = "issuetrack"
+description = "이슈 트래커 패키지 + CLI (모듈 7개): 상태 전이·질의 언어·저장 v1 이전·CSV 전부 아니면 전무·보고서"
+kind = "new"
+max_review = 3
+timeout_sec = 2400
+hidden_tests = 131

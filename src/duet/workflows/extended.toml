@@ -1,5 +1,5 @@
 name = "extended"
-description = "설계 토론 → 관리자가 작업 분배 → 작업자 분업 구현 → 통합 → 리뷰"
+description = "설계 토론 → 관리자가 작업 분배 → 작업자 분업 구현 → 통합 → 리뷰 · 실험"
 
 [roles.claude]
 agent = "claude"

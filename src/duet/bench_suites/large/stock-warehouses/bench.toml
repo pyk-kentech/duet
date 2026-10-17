@@ -1,0 +1,6 @@
+name = "stock-warehouses"
+description = "기존 재고 관리 프로젝트(모듈 5개)를 다중 창고로 확장: 창고별 한도·이동·저장 v1→v2·새 보고 모듈·CLI (모든 모듈을 건드림)"
+kind = "existing"
+max_review = 3
+timeout_sec = 2400
+hidden_tests = 61

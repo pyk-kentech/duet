@@ -1,6 +1,7 @@
 """벤치마크: 같은 과제 묶음을 워크플로별로 돌리고 숨은 수용 테스트로 채점한다 (DESIGN.md 20장).
 
-과제 폴더: bench.toml(name, description, kind=new|existing, max_review, timeout_sec), task.md, setup/, hidden/
+과제 폴더: bench.toml(name, description, kind=new|existing, max_review, timeout_sec), task.md, setup/, hidden/,
+design.md(선택: --fixed-design 일 때 모든 워크플로가 쓰는 같은 설계, DESIGN.md 31.2)
 결과: <out>/<시각>/results.json (실행별 행) + summary.md (워크플로별 집계)
 """
 
@@ -38,6 +39,10 @@ HIDDEN_DIR = "duet_hidden_tests"
 GRADE_TIMEOUT_SEC = 300
 RESULTS_JSON = "results.json"
 SUMMARY_MD = "summary.md"
+FIXED_DESIGN = "design.md"
+FIXED_DESIGN_HEADING = "## 이번 변경 (벤치마크 고정 설계)"
+# Codex 요금표 비율: 미캐시 입력 1, 캐시 입력 0.1, 출력 5 (DESIGN.md 17·21장, 31.3)
+CODEX_WEIGHTS = (1.0, 0.1, 5.0)
 
 Printer = Callable[[str], None]
 
@@ -59,10 +64,16 @@ class Task:
     path: Path
     max_review: int | None = None
     timeout_sec: int | None = None
+    hidden_tests: int | None = None   # 숨은 테스트 수. 모이지 않은 테스트(import 실패)를 실패로 센다 (DESIGN.md 31.1)
 
     @property
     def prompt(self) -> str:
         return (self.path / "task.md").read_text(encoding="utf-8").strip()
+
+    @property
+    def fixed_design(self) -> Path | None:
+        p = self.path / FIXED_DESIGN
+        return p if p.is_file() else None
 
 
 # ====================================================================== suites
@@ -101,7 +112,8 @@ def load_suite(spec: str = BUILTIN_SUITE) -> list[Task]:
         if kind == "existing" and not (d / "setup").is_dir():
             raise BenchError(f"{d}: existing 과제는 setup/ 이 있어야 합니다")
         tasks.append(Task(name=str(meta.get("name") or d.name), description=str(meta.get("description") or ""),
-                          kind=kind, path=d, max_review=meta.get("max_review"), timeout_sec=meta.get("timeout_sec")))
+                          kind=kind, path=d, max_review=meta.get("max_review"), timeout_sec=meta.get("timeout_sec"),
+                          hidden_tests=meta.get("hidden_tests")))
     if not tasks:
         raise BenchError(f"{root} 에 과제가 없습니다 (bench.toml 이 있는 하위 폴더)")
     return tasks
@@ -118,8 +130,11 @@ def pick_tasks(tasks: list[Task], names: Sequence[str] | None) -> list[Task]:
 
 
 # ====================================================================== prepare / grade
-def prepare_workdir(task: Task, wd: Path) -> None:
-    """작업 폴더를 만든다. existing 과제는 setup/ 을 복사하고 커밋해 '기존 프로젝트'로 만든다."""
+def prepare_workdir(task: Task, wd: Path, *, fixed_design: bool = False) -> None:
+    """작업 폴더를 만든다. existing 과제는 setup/ 을 복사하고 커밋해 '기존 프로젝트'로 만든다.
+
+    fixed_design: 과제의 design.md 를 DESIGN.md 로 둔다(기존 과제는 시작 코드의 DESIGN.md 끝에 붙임, 커밋 안 함).
+    """
     wd.mkdir(parents=True, exist_ok=True)
     setup = task.path / "setup"
     if setup.is_dir():
@@ -128,6 +143,14 @@ def prepare_workdir(task: Task, wd: Path) -> None:
         ws = Workspace(wd)
         ws.ensure_repo()
         ws.commit_all("bench: setup")
+    if fixed_design:
+        if task.fixed_design is None:
+            raise BenchError(f"{task.name}: 고정 설계({FIXED_DESIGN})가 없습니다")
+        text = task.fixed_design.read_text(encoding="utf-8").strip()
+        target = wd / "DESIGN.md"
+        if task.kind == "existing" and target.is_file():
+            text = target.read_text(encoding="utf-8").rstrip() + f"\n\n{FIXED_DESIGN_HEADING}\n\n" + text
+        target.write_text(text + "\n", encoding="utf-8")
 
 
 def default_pytest_cmd() -> list[str]:
@@ -164,7 +187,8 @@ def grade(task: Task, wd: Path, eval_dir: Path, *, pytest_cmd: Sequence[str] | N
     shutil.copytree(task.path / "hidden", hidden)
     ini = hidden / "pytest.ini"
     ini.write_text("[pytest]\n", encoding="utf-8")
-    cmd = [*(pytest_cmd or default_pytest_cmd()), "-q", "-p", "no:cacheprovider", "-c", str(ini),
+    # 한 파일의 import 실패가 다른 파일의 채점까지 막지 않게 (DESIGN.md 20.3)
+    cmd = [*(pytest_cmd or default_pytest_cmd()), "-q", "-p", "no:cacheprovider", "--continue-on-collection-errors", "-c", str(ini),
            "--rootdir", str(eval_dir), "--confcutdir", str(hidden), str(hidden)]
     cfg = Config()
     r = run_process(cmd, eval_dir, timeout_sec=timeout_sec,
@@ -173,7 +197,12 @@ def grade(task: Task, wd: Path, eval_dir: Path, *, pytest_cmd: Sequence[str] | N
     out = (r.stdout or "") + ("\n" + r.stderr if r.stderr else "")
     counts = parse_pytest_summary(r.stdout or "")
     total = counts["passed"] + counts["failed"] + counts["errors"]
+    # import 실패한 파일은 테스트 수 대신 오류 1개로만 잡힌다 → 알려진 개수로 맞춰 빠진 만큼 실패로 센다
+    uncollected = max((task.hidden_tests or 0) - counts["passed"] - counts["failed"], 0) if task.hidden_tests else 0
+    if uncollected:
+        total = counts["passed"] + counts["failed"] + uncollected
     return {"passed": counts["passed"], "failed": counts["failed"], "errors": counts["errors"], "total": total,
+            "uncollected": uncollected,
             "all_passed": total > 0 and counts["passed"] == total and r.exit_code == 0,
             "exit_code": r.exit_code, "timed_out": r.timed_out, "output_tail": out[-3000:]}
 
@@ -191,6 +220,65 @@ def _usage(st: RunState) -> dict[str, dict[str, int]]:
     return out
 
 
+def _max_input(st: RunState) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for c in st.calls:
+        n = int((c.usage or {}).get("input_tokens") or 0)
+        out[c.agent] = max(out.get(c.agent, 0), n)
+    return out
+
+
+def codex_limit_equiv(usage: dict[str, dict[str, int]]) -> float:
+    """Codex 한도 환산 = 미캐시 입력 + 0.1×캐시 + 5×출력 (DESIGN.md 31.3)"""
+    u = usage.get("codex") or {}
+    cached = u.get("cached", 0)
+    w_in, w_cache, w_out = CODEX_WEIGHTS
+    return round(max(u.get("input", 0) - cached, 0) * w_in + cached * w_cache + u.get("output", 0) * w_out, 1)
+
+
+def _weekly_percent(rl: Any) -> float | None:
+    """호출에 기록된 한도 요약에서 7일 창 사용률. Claude 는 seven_day, Codex 는 가장 긴 창."""
+    if not isinstance(rl, dict):
+        return None
+    w = rl.get("seven_day")
+    if not isinstance(w, dict):
+        wins = [x for x in (rl.get("primary"), rl.get("secondary")) if isinstance(x, dict)]
+        w = max(wins, key=lambda x: x.get("window_minutes") or 0) if wins else None
+    v = (w or {}).get("used_percent")
+    return float(v) if isinstance(v, (int, float)) else None
+
+
+def week_marks(st: RunState) -> dict[str, tuple[float, float]]:
+    """CLI 별 (첫 호출, 마지막 호출)의 7일 창 사용률."""
+    out: dict[str, tuple[float, float]] = {}
+    for c in st.calls:
+        v = _weekly_percent((c.usage or {}).get("rate_limits"))
+        if v is None:
+            continue
+        first = out[c.agent][0] if c.agent in out else v
+        out[c.agent] = (first, v)
+    return out
+
+
+def week_delta(marks: dict[str, tuple[float, float]], prev: dict[str, float]) -> dict[str, float | None]:
+    """이번 실행의 사용률 변화. 앞 실행의 마지막 값이 있으면 그것과, 없으면 첫 호출과 비교. 창이 바뀌면 None."""
+    out: dict[str, float | None] = {}
+    for cli, (first, last) in marks.items():
+        base = prev.get(cli, first)
+        out[cli] = round(last - base, 1) if last >= base else None
+        prev[cli] = last
+    return out
+
+
+def _team(st: RunState) -> dict[str, Any] | None:
+    t = st.team or {}
+    if not t.get("plan"):
+        return None
+    parts = t.get("parts") or {}
+    return {"packages": len(t["plan"].get("packages") or []), "fallback": t.get("fallback"),
+            "parts_done": len(parts), "reverted": sum(len(r.get("reverted") or []) for r in parts.values())}
+
+
 def _row(task: Task, workflow: str, rep: int, wd: Path, seconds: float, outcome: Any | None,
          error: str | None, hidden: dict[str, Any] | None) -> dict[str, Any]:
     row: dict[str, Any] = {"task": task.name, "kind": task.kind, "workflow": workflow, "rep": rep,
@@ -201,11 +289,13 @@ def _row(task: Task, workflow: str, rep: int, wd: Path, seconds: float, outcome:
     st: RunState = outcome.state
     last_test = st.tests[max(st.tests, key=int)] if st.tests else None
     cost = sum(float((c.usage or {}).get("cost_usd") or 0) for c in st.calls)
+    usage = _usage(st)
     row.update(status=STATUS.get(st.status, st.status), approved=st.status == DONE_APPROVED,
                arbiter=st.stop_reason if (st.stop_reason or "").startswith("arbiter") else None,
                stop_reason=st.stop_reason, rounds=len(st.review_history), calls=len(st.calls),
-               usage=_usage(st), cost_usd=round(cost, 4), run_dir=str(outcome.run_dir),
-               own_tests=last_test.get("status") if last_test else None, hidden=hidden, error=st.error)
+               usage=usage, cost_usd=round(cost, 4), run_dir=str(outcome.run_dir),
+               own_tests=last_test.get("status") if last_test else None, hidden=hidden, error=st.error,
+               max_input=_max_input(st), codex_equiv=codex_limit_equiv(usage), team=_team(st))
     if st.limit_waited_sec:
         row["limit_wait_sec"] = round(st.limit_waited_sec, 1)   # 소요 시간에서 뺄 수 있게 (DESIGN.md 25.1)
     return row
@@ -215,25 +305,30 @@ def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC
               task_names: Sequence[str] | None = None, repeat: int = 1, max_review: int | None = None,
               out_root: Path, mock: bool = False, printer: Printer = print, verbose: bool = False,
               pytest_cmd: Sequence[str] | None = None, now: dt.datetime | None = None,
-              wait_on_limit: bool = False) -> Path:
+              wait_on_limit: bool = False, fixed_design: bool = False) -> Path:
     """벤치마크를 돌리고 결과 폴더를 돌려준다. 한도 도달·사용자 중단이면 거기서 멈춘다."""
     from duet.orchestrator import Orchestrator, OrchestratorError, RunOptions
 
     tasks = pick_tasks(load_suite(suite), task_names)
+    if fixed_design:
+        missing = [t.name for t in tasks if t.fixed_design is None]
+        if missing:
+            raise BenchError(f"고정 설계({FIXED_DESIGN})가 없는 과제: {', '.join(missing)}")
     plan = [(t, w, n) for t in tasks for w in workflows for n in range(1, repeat + 1)]
     result_dir = Path(out_root).expanduser() / (now or dt.datetime.now()).strftime("%Y%m%d-%H%M%S")
     result_dir.mkdir(parents=True, exist_ok=False)
     remember_result_dir(result_dir)
     meta = {"suite": suite, "workflows": list(workflows), "tasks": [t.name for t in tasks], "repeat": repeat,
-            "max_review": max_review, "mock": mock, "wait_on_limit": wait_on_limit,
+            "max_review": max_review, "mock": mock, "wait_on_limit": wait_on_limit, "fixed_design": fixed_design,
             "started": dt.datetime.now().isoformat(timespec="seconds")}
     rows: list[dict[str, Any]] = []
+    prev_week: dict[str, float] = {}
     printer(f"벤치마크: 과제 {len(tasks)}개 × 워크플로 {len(workflows)}개 × {repeat}회 = {len(plan)}번 실행"
             + (" (mock)" if mock else "") + f" → {result_dir}")
     for i, (task, workflow, rep) in enumerate(plan, 1):
         wd = result_dir / task.name / f"{workflow}-{rep}"
         printer(f"[{i}/{len(plan)}] {task.name} × {workflow} #{rep} 실행 중...")
-        prepare_workdir(task, wd)
+        prepare_workdir(task, wd, fixed_design=fixed_design)
         orch = Orchestrator(printer=printer if verbose else (lambda line: None))
         overrides: dict[str, Any] = {"workflow": workflow}
         if wait_on_limit:
@@ -245,7 +340,8 @@ def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC
         started = time.monotonic()
         outcome, error = None, None
         try:
-            outcome = orch.run(RunOptions(task=task.prompt, workdir=wd, mock=mock, overrides=overrides, register=False))
+            outcome = orch.run(RunOptions(task=task.prompt, workdir=wd, mock=mock, overrides=overrides, register=False,
+                                          skip_design=fixed_design))
         except OrchestratorError as e:
             error = str(e)
         seconds = time.monotonic() - started
@@ -253,6 +349,8 @@ def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC
         if outcome is not None and outcome.state.status in (DONE_APPROVED, DONE_UNAPPROVED):
             hidden = grade(task, wd, result_dir / "_grade" / task.name / f"{workflow}-{rep}", pytest_cmd=pytest_cmd)
         row = _row(task, workflow, rep, wd, seconds, outcome, error, hidden)
+        if outcome is not None:
+            row["week_pct"] = week_delta(week_marks(outcome.state), prev_week)
         rows.append(row)
         _save(result_dir, meta, rows)
         printer(f"[{i}/{len(plan)}] {task.name} × {workflow} #{rep}: {describe_row(row)}")
@@ -350,26 +448,38 @@ def workflow_stats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "calls": _mean([r.get("calls") or 0 for r in rs]),
             "input": {a: _mean([((r.get("usage") or {}).get(a) or {}).get("input", 0) for r in rs]) for a in ("claude", "codex")},
             "output": _mean([sum(u.get("output", 0) for u in (r.get("usage") or {}).values()) for r in rs]),
+            "codex_equiv": _mean([r.get("codex_equiv") or 0 for r in rs]),
+            "max_input": {a: _mean([(r.get("max_input") or {}).get(a, 0) for r in rs]) for a in ("claude", "codex")},
+            # 기록된 실행만 평균 (값이 없으면 None)
+            "week_pct": {a: (_mean(vals) if vals else None) for a in ("claude", "codex")
+                         for vals in [[(r.get("week_pct") or {}).get(a) for r in rs if (r.get("week_pct") or {}).get(a) is not None]]},
         })
     return out
+
+
+def _pct(v: float | None) -> str:
+    return "-" if v is None else f"{v:.1f}%p"
 
 
 def summarize(data: dict[str, Any]) -> str:
     meta, rows = data.get("meta", {}), data.get("rows", [])
     lines = [f"# 벤치마크 결과 ({meta.get('started', '')})", "",
              f"과제 묶음 `{meta.get('suite')}`, 과제 {len(meta.get('tasks', []))}개, "
-             f"반복 {meta.get('repeat')}회" + (", mock" if meta.get("mock") else "") + f", 실행 {len(rows)}번", ""]
+             f"반복 {meta.get('repeat')}회" + (", mock" if meta.get("mock") else "")
+             + (", 고정 설계" if meta.get("fixed_design") else "") + f", 실행 {len(rows)}번", ""]
     workflows = list(dict.fromkeys(r["workflow"] for r in rows))
     lines += ["## 워크플로별", "",
-              "| 워크플로 | 실행 | 승인 | 중재 승인 | 숨은 테스트 통과율 | 전부 통과 | 승인했는데 실패 | 평균 라운드 | 평균 시간 | 평균 호출 | 평균 입력 토큰 (Claude / Codex) | 평균 출력 토큰 |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "| 워크플로 | 실행 | 승인 | 중재 승인 | 숨은 테스트 통과율 | 전부 통과 | 승인했는데 실패 | 평균 라운드 | 평균 시간 | 평균 호출 | 평균 입력 토큰 (Claude / Codex) | 평균 출력 토큰 | Codex 한도 환산 | 호출당 최대 입력 (Claude / Codex) | 주간 사용률 변화 (Claude / Codex) |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     del workflows
     for s in workflow_stats(rows):
         lines.append(
             f"| {s['workflow']} | {s['runs']} | {s['approved']}/{s['runs']} | {s['arbiter']} | "
             f"{s['hidden_rate']:.0f}% ({s['graded']}개 채점) | {s['all_passed']}/{s['graded']} | {s['missed']} | "
             f"{s['rounds']:.1f} | {_fmt_sec(s['seconds'])} | "
-            f"{s['calls']:.1f} | {s['input']['claude']:,.0f} / {s['input']['codex']:,.0f} | {s['output']:,.0f} |")
+            f"{s['calls']:.1f} | {s['input']['claude']:,.0f} / {s['input']['codex']:,.0f} | {s['output']:,.0f} | "
+            f"{s['codex_equiv']:,.0f} | {s['max_input']['claude']:,.0f} / {s['max_input']['codex']:,.0f} | "
+            f"{_pct(s['week_pct']['claude'])} / {_pct(s['week_pct']['codex'])} |")
     lines += ["", "## 실행별", "", "| 과제 | 워크플로 | # | 결과 | 라운드 | 숨은 테스트 | 자체 테스트 | 시간 | 호출 | 입력 토큰 |",
               "|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
@@ -379,7 +489,16 @@ def summarize(data: dict[str, Any]) -> str:
         lines.append(f"| {r['task']} | {r['workflow']} | {r['rep']} | {STATUS_KO.get(r['status'], r['status'])} | "
                      f"{r.get('rounds') or 0} | {hidden} | {r.get('own_tests') or '-'} | "
                      f"{_fmt_sec(r.get('seconds') or 0)} | {r.get('calls') or 0} | {tok:,} |")
+    teams = [r for r in rows if r.get("team")]
+    if teams:
+        lines += ["", "## 분업", "", "| 과제 | 워크플로 | # | 묶음 | 구현한 묶음 | 되돌린 파일 | 계획 대체 |", "|---|---|---|---|---|---|---|"]
+        for r in teams:
+            t = r["team"]
+            lines.append(f"| {r['task']} | {r['workflow']} | {r['rep']} | {t['packages']} | {t['parts_done']} | "
+                         f"{t['reverted']} | {t['fallback'] or '-'} |")
     lines += ["", "- 숨은 테스트: 에이전트가 보지 못한 수용 테스트. 승인·미승인으로 끝난 실행만 채점한다.",
+              "- Codex 한도 환산: 미캐시 입력 + 0.1×캐시 입력 + 5×출력 (요금표 비율). 주간 사용률 변화: 호출에 기록된 7일 창 "
+              "사용률의 차이(앞 실행 마지막 값 기준, 같은 시간에 따로 쓴 양이 섞일 수 있음).",
               "- 승인했는데 실패: 리뷰가 승인했지만 숨은 테스트가 하나라도 실패한 실행 (리뷰가 놓친 결함)."]
     return "\n".join(lines) + "\n"
 
