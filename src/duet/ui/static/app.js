@@ -2089,10 +2089,18 @@ function renderWorkflowDiagram() {
       const workers = st.workers || [];
       if (st.manager) {
         // 관리자·작업자 분업 (DESIGN.md 29장): 분해 → 묶음을 순서대로 → 통합
-        stage('분해 · 분업 구현', ['큰 과제용', `작업자 ${workers.length}명`],
+        // 작업자 수 = 묶음 수(관리자가 실행 중에 정함, 보통 2~5개). 묶음마다 새 세션이라 서로의 대화를 보지 않는다.
+        // workers 는 작업자 '역할'(모델 설정) 목록이고, 여럿이면 묶음을 돌아가며 맡는다.
+        stage('분해 · 분업 구현', ['큰 과제용', '작업자 = 묶음 수 (관리자가 정함)',
+          workers.length > 1 ? `모델 설정 ${workers.length}가지를 번갈아` : null],
           h('div', { class: 'wf-row' }, node('분해', st.manager, [['plan', '']], { note: '설계를 작업 묶음으로 나눔 · 파일 소유를 정함' })),
           arrow('묶음마다 순서대로 (맡은 파일만 고침, 밖은 duet 가 되돌림)'),
-          h('div', { class: 'wf-row' }, workers.map(w => node('묶음 구현', w, [['part', '']], { note: workers.length > 1 ? '묶음을 돌아가며 맡음' : '모든 묶음을 차례로' }))),
+          h('div', { class: 'wf-row' }, workers.map(w => {
+            const el = node('묶음 구현', w, [['part', '']], { note: '묶음마다 새 작업자(새 세션) · 맡은 파일만 봄' });
+            el.classList.add('stack');
+            el.querySelector('.wf-node-head').append(h('span', { class: 'wf-many', title: '묶음 수만큼' }, '× 묶음 수'));
+            return el;
+          })),
           arrow('이음새 맞추기'),
           h('div', { class: 'wf-row' }, node('통합', st.manager, [['integrate', '']], { note: 'import·호출·형식을 맞추고 테스트를 고침' })));
       }

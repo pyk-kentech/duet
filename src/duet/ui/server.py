@@ -645,11 +645,14 @@ def exec_restart(server: "DuetServer") -> None:
     argv = [sys.executable, "-m", "duet", "ui", "--no-browser", "--host", str(host), "--port", str(port)]
     sys.stdout.flush()
     print("\nUI 를 다시 시작합니다 (같은 주소)...", flush=True)
-    server.server_close()
     if procs.IS_WINDOWS:
-        # Windows 의 exec 는 새 프로세스를 띄우고 지금 것을 끝내는 흉내라, 직접 그렇게 한다
+        # Windows 의 exec 는 새 프로세스를 띄우고 지금 것을 끝내는 흉내라, 직접 그렇게 한다.
+        # 소켓을 먼저 닫지 않는다: 이 함수는 다른 스레드에서 불리는데, 메인 스레드가 기다리던 소켓을 닫으면
+        # WinError 10038 로 메인 스레드가 먼저 죽어 새 프로세스를 띄우지 못한다. 새 프로세스는 포트가 풀릴 때까지
+        # 다시 시도하고(serve 의 exact 경로), 이 프로세스가 끝나면 소켓은 운영체제가 닫는다.
         subprocess.Popen(argv, env=env)
         os._exit(0)
+    server.server_close()
     os.execve(sys.executable, argv, env)
 
 
