@@ -65,7 +65,7 @@ class CodexAdapter:
         if self._resumes(req):
             # codex exec resume [OPTIONS] [SESSION_ID] [PROMPT] — --sandbox·-C 가 없다 (DESIGN.md 21.3)
             cmd = [self.agent_cfg.bin, *self.agent_cfg.resume_args,
-                   *self.model_args(self._effort(req)),
+                   *self.model_args(self._effort(req), self._model(req)),
                    *(self.agent_cfg.resume_read_args or self.agent_cfg.read_args)]
             if schema_path is not None:
                 cmd += ["--output-schema", str(schema_path)]
@@ -77,7 +77,7 @@ class CodexAdapter:
         cmd = [
             self.agent_cfg.bin,
             *self.agent_cfg.base_args,
-            *self.model_args(self._effort(req)),
+            *self.model_args(self._effort(req), self._model(req)),
             "-C", str(req.cwd),
             *mode_args,
             *(["--output-schema", str(schema_path)] if schema_path is not None else []),
@@ -88,16 +88,20 @@ class CodexAdapter:
         # '-' 로 시작하는 프롬프트가 옵션으로 읽히지 않게 (codex-cli 0.162.1 에서 `--` 동작 확인)
         return [*cmd, "--", req.prompt], None
 
-    def model_args(self, effort: str | None = None) -> list[str]:
+    def model_args(self, effort: str | None = None, model: str | None = None) -> list[str]:
         """effort 가 None 이면 단계 구분 없는 기본 강도(agent_cfg.effort)."""
         effort = self.agent_cfg.effort if effort is None else effort
+        model = self.agent_cfg.model if model is None else model
         args: list[str] = []
-        if self.agent_cfg.model:
-            args += ["-m", self.agent_cfg.model]
+        if model:
+            args += ["-m", model]
         if effort:
             # ~/.codex/config.toml 의 model_reasoning_effort 를 이 호출에서만 덮어쓴다
             args += ["-c", f'model_reasoning_effort="{effort}"']
         return args
+
+    def _model(self, req: AgentRequest) -> str:
+        return self.agent_cfg.model_for(req.step, req.round)
 
     def _effort(self, req: AgentRequest) -> str:
         return req.effort if req.effort is not None else self.agent_cfg.effort_for(req.step, req.round)

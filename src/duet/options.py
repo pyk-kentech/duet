@@ -58,7 +58,8 @@ BY_KEY = {o.key: o for o in OPTIONS}
 
 # 설정 화면의 '기본 실행 설정' 카드가 직접 그리는 것
 BASIC_KEYS = ("implementer", "reviewer", "synth", "debate_rounds", "max_review", "claude", "codex", "test_command",
-              "block_severity", "stall_rounds", "require_tests_pass", "review_diff", "repro_tests")
+              "block_severity", "stall_rounds", "require_tests_pass", "review_diff", "repro_tests",
+              "step_overrides")   # step_overrides: 새 실행 창 순서도의 칸에서 고른다 (DESIGN.md 30.5)
 # UI 에서 바꾸지 않는 것 (duet.toml 로만)
 NOT_IN_UI = ("env_strip", "env_keep", "rate_limit_patterns", "diff_excludes", "prompt_arg_max_bytes")
 

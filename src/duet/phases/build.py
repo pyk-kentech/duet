@@ -640,6 +640,8 @@ class BuildPhase:
         s = self.state.review_sessions.get(role) or {}
         if not s.get("id") or s.get("round") != i - 1 or int(s.get("rounds") or 0) >= self.cfg.review_session_rounds:
             return None
+        if (s.get("model") or "") != self.ctx.agent_config(role).model_for("review", i):
+            return None      # 1회차와 2회차부터의 모델이 다르면 새 세션 (DESIGN.md 30.4)
         return str(s["id"])
 
     def _remember_session(self, role: str, i: int, result, effort: str | None = None) -> None:
@@ -648,7 +650,8 @@ class BuildPhase:
             self.state.review_sessions.pop(role, None)
             return
         rounds = int(prev.get("rounds") or 0) + 1 if result.resumed and prev.get("id") == result.session_id else 1
-        self.state.review_sessions[role] = {"id": result.session_id, "round": i, "rounds": rounds, "effort": effort or ""}
+        self.state.review_sessions[role] = {"id": result.session_id, "round": i, "rounds": rounds, "effort": effort or "",
+                                            "model": self.ctx.agent_config(role).model_for("review", i)}
 
     def _history_entry(self, i: int, decision: Decision, files: list[str], test: dict | None) -> dict:
         if not self.multi:

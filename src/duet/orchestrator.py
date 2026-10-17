@@ -19,7 +19,7 @@ from typing import IO, Any, Callable, Mapping
 
 from duet.agents import (AgentAdapter, AgentNotAvailable, ClaudeCodeAdapter, CodexAdapter, MockAdapter,
                          make_agents, make_role_agents)
-from duet.config import Config, ConfigError, dedup_agent_config, describe_effort, load_config
+from duet.config import Config, ConfigError, dedup_agent_config, describe_effort, describe_model, load_config
 from duet.dedup import DEDUP_ROLE
 from duet.lock import LockBusy, RunLock
 from duet.phases.build import BuildPhase
@@ -50,7 +50,7 @@ Printer = Callable[[str], None]
 
 CONFIG_KEYS = ("workflow", "implementer", "reviewer", "synth", "debate_rounds", "max_review",
                "claude.model", "claude.effort", "codex.model", "codex.effort",
-               "claude.step_effort", "codex.step_effort",
+               "claude.step_effort", "codex.step_effort", "claude.step_model", "codex.step_model", "step_overrides",
                "test_command", "block_severity", "stall_rounds", "require_tests_pass",
                "review_diff", "repro_tests", "review_packet", "review_json", "review_session",
                "review_session_rounds", "review_gates", "arbiter", "test_guard", "claude_sandbox", "spec_gate",
@@ -168,8 +168,8 @@ class Orchestrator:
                         f"구현: {cfg.implementer} / 리뷰: {cfg.reviewer} / 리뷰 최대 {cfg.max_review}회"
                     self.log(f"{design} / {build}" + (" / mock" if opts.mock else ""))
                     self.log("모델: " + " / ".join(
-                        f"{n} {getattr(cfg, n).model or '기본'}"
-                        + (f"({describe_effort(getattr(cfg, n))})" if describe_effort(getattr(cfg, n)) else "")
+                        f"{n} {describe_model(wf.roles[n].agent_config(cfg))}"
+                        + (f"({describe_effort(wf.roles[n].agent_config(cfg))})" if describe_effort(wf.roles[n].agent_config(cfg)) else "")
                         for n in ("claude", "codex")))
                 else:
                     flags = [x for x, on in (("설계 생략", opts.skip_design), ("설계만", opts.design_only),
@@ -346,6 +346,10 @@ class Orchestrator:
             wf = load_workflow(cfg.workflow, workdir, cfg)
         except WorkflowError as e:
             raise OrchestratorError(f"워크플로 오류: {e}") from e
+        unknown = sorted(set(cfg.step_overrides) - set(wf.roles))
+        if unknown:
+            raise OrchestratorError(f"설정 오류: 칸 단위 지정(step_overrides)의 역할 {', '.join(unknown)} 이 "
+                                    f"워크플로 {wf.name} 에 없습니다 (가능: {', '.join(wf.roles)})")
         if wf.is_classic:
             return wf, cfg
         given = [f"--{k}" for k in ("implementer", "reviewer", "synth") if opts.overrides.get(k)]
@@ -374,7 +378,7 @@ class Orchestrator:
         role = wf.roles[name]
         ac = role.agent_config(cfg)
         effort = describe_effort(ac)
-        return f"{name}={role.agent}({ac.model or '기본'}" + (f", {effort}" if effort else "") + ")"
+        return f"{name}={role.agent}({describe_model(ac)}" + (f", 강도 {effort}" if effort else "") + ")"
 
     # ---------------------------------------------------------------- helpers
     def _locked(self, workdir: Path, verb: str) -> RunLock:
@@ -438,6 +442,8 @@ class Orchestrator:
             "claude.model": cfg.claude.model, "claude.effort": cfg.claude.effort,
             "codex.model": cfg.codex.model, "codex.effort": cfg.codex.effort,
             "claude.step_effort": dict(cfg.claude.step_effort), "codex.step_effort": dict(cfg.codex.step_effort),
+            "claude.step_model": dict(cfg.claude.step_model), "codex.step_model": dict(cfg.codex.step_model),
+            "step_overrides": {r: {s: dict(v) for s, v in steps.items()} for r, steps in cfg.step_overrides.items()},
             "workflow": cfg.workflow,
             "test_command": cfg.test_command, "block_severity": cfg.block_severity,
             "stall_rounds": cfg.stall_rounds, "require_tests_pass": cfg.require_tests_pass,

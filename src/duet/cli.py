@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Sequence
 
 from duet import __version__
-from duet.config import ConfigError, parse_step_effort
+from duet.config import ConfigError, parse_set_step, parse_step_effort, parse_step_model
 from duet.orchestrator import Orchestrator, OrchestratorError, RunOptions
 from duet.state import RunState, latest_run_dir, list_run_dirs
 from duet.transcript import Transcript
@@ -65,6 +65,10 @@ def build_parser() -> argparse.ArgumentParser:
         p_run.add_argument(f"--{agent}-step-effort", metavar="STEP=LEVEL,...",
                            help=f"{agent} 단계별 추론 강도 (예: review=high,fix=low). "
                                 "단계: propose, critique, synthesize, implement, fix, review, rereview(2라운드부터 리뷰)"),
+        p_run.add_argument(f"--{agent}-step-model", metavar="STEP=MODEL,...",
+                           help=f"{agent} 단계별 모델 (예: implement={example.split(', ')[-1]}). 단계는 --{agent}-step-effort 와 같음")
+    p_run.add_argument("--set-step", action="append", default=None, metavar="ROLE.STEP.KEY=VALUE",
+                       help="칸(역할·단계) 하나의 모델·강도 (여러 번). 예: worker.part.model=claude-haiku-5-5, codex.review.effort=xhigh")
     p_run.set_defaults(func=cmd_run)
 
     p_resume = sub.add_parser("resume", help="중단된 마지막 실행을 이어서 진행")
@@ -169,6 +173,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         "codex.model": args.codex_model, "codex.effort": args.codex_effort,
         "claude.step_effort": _step_effort(args.claude_step_effort),
         "codex.step_effort": _step_effort(args.codex_step_effort),
+        "claude.step_model": _step_effort(args.claude_step_model, parse_step_model),
+        "codex.step_model": _step_effort(args.codex_step_model, parse_step_model),
+        "step_overrides": _step_effort(args.set_step, parse_set_step),
         "test_command": args.test_command, "block_severity": args.block_severity,
         "stall_rounds": args.stall_rounds,
         "arbiter": False if args.no_arbiter else None,
@@ -188,11 +195,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     return Orchestrator().run(opts).exit_code
 
 
-def _step_effort(text: str | None) -> dict[str, str] | None:
+def _step_effort(text, parse=parse_step_effort):
     if text is None:
         return None
     try:
-        return parse_step_effort(text)
+        return parse(text)
     except ConfigError as e:
         raise OrchestratorError(f"설정 오류: {e}") from e
 
@@ -300,7 +307,9 @@ def cmd_workflows(args: argparse.Namespace) -> int:
         ac = role.agent_config(cfg)
         from duet.config import describe_effort
 
-        extra = [f"모델 {ac.model or '기본'}"]
+        from duet.config import describe_model
+
+        extra = [f"모델 {describe_model(ac)}"]
         if describe_effort(ac):
             extra.append(f"강도 {describe_effort(ac)}")
         if role.templates:

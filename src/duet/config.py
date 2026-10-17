@@ -51,7 +51,10 @@ EFFORT_SUGGESTIONS = {
 }
 # step_effort 의 키. "rereview" 는 2라운드부터의 리뷰 (DESIGN.md 18.1)
 EFFORT_STEPS = ("propose", "critique", "synthesize", "implement", "fix", "review", "rereview", "arbitrate",
-                "plan", "part", "integrate")   # plan·part·integrate: 관리자·작업자 분업 (DESIGN.md 29장)
+                "plan", "part", "integrate",   # plan·part·integrate: 관리자·작업자 분업 (DESIGN.md 29장)
+                "explore", "audit")            # 사전 조사·승인 뒤 감사 (DESIGN.md 30.1)
+STEP_OVERRIDE_KEYS = ("model", "effort")       # 칸 단위 지정 (DESIGN.md 30.3)
+_ROLE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,39}$")
 
 # 에이전트·테스트 자식 프로세스에서 뺄 환경 변수 이름(glob, 대소문자 무시) (DESIGN.md 18.2)
 DEFAULT_ENV_STRIP = [
@@ -83,13 +86,22 @@ class AgentConfig:
     effort: str = ""    # 추론 강도. 비우면 CLI 기본값
     # 단계별 추론 강도 {단계: 강도}. 없는 단계는 effort (DESIGN.md 18.1)
     step_effort: dict[str, str] = field(default_factory=dict)
+    # 단계별 모델 {단계: 모델}. 없는 단계는 model (DESIGN.md 30.2)
+    step_model: dict[str, str] = field(default_factory=dict)
     # claude_sandbox 를 켜면 쓰기 모드에 붙이는 설정 JSON (DESIGN.md 24.3, Claude 만)
     sandbox_settings: str = ""
 
     def effort_for(self, step: str, round_: int = 0) -> str:
         """이 호출에 쓸 추론 강도. 리뷰는 2라운드부터 "rereview" 키를 본다."""
-        key = "rereview" if step == "review" and round_ >= 2 else step
-        return self.step_effort.get(key) or self.effort
+        return self.step_effort.get(step_key(step, round_)) or self.effort
+
+    def model_for(self, step: str, round_: int = 0) -> str:
+        """이 호출에 쓸 모델 (DESIGN.md 30.2). 비면 CLI 기본 모델."""
+        return self.step_model.get(step_key(step, round_)) or self.model
+
+
+def step_key(step: str, round_: int = 0) -> str:
+    return "rereview" if step == "review" and round_ >= 2 else step
 
 
 CLAUDE_SANDBOX_SETTINGS = json.dumps(
@@ -166,6 +178,8 @@ class Config:
     dedup_agent: str = "claude"
     dedup_model: str = "claude-haiku-5-5"
     dedup_effort: str = ""              # 비우면 CLI 기본
+    # 실행마다 칸(역할·단계) 단위로 모델·강도를 덮어쓴다 {역할: {단계: {model, effort}}} (DESIGN.md 30.3)
+    step_overrides: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
     rate_limit_patterns: list[str] = field(default_factory=lambda: list(DEFAULT_RATE_LIMIT_PATTERNS))
     env_strip: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_STRIP))
     env_keep: list[str] = field(default_factory=lambda: list(DEFAULT_ENV_KEEP))
@@ -260,19 +274,57 @@ class Config:
                     json.loads(ac.sandbox_settings)
                 except ValueError as e:
                     raise ConfigError(f"[{name}] sandbox_settings 가 올바른 JSON 이 아닙니다: {e}") from e
-            if not isinstance(ac.step_effort, dict):
-                raise ConfigError(f"[{name}] step_effort 는 {{단계 = 강도}} 테이블이어야 합니다")
-            for step, v in ac.step_effort.items():
-                if step not in EFFORT_STEPS:
-                    raise ConfigError(f"[{name}] step_effort 의 단계가 잘못되었습니다: {step!r} "
-                                      f"(가능: {', '.join(EFFORT_STEPS)})")
+            for key, what in (("step_effort", "강도"), ("step_model", "모델")):
+                m = getattr(ac, key)
+                if not isinstance(m, dict):
+                    raise ConfigError(f"[{name}] {key} 는 {{단계 = {what}}} 테이블이어야 합니다")
+                for step, v in m.items():
+                    if step not in EFFORT_STEPS:
+                        raise ConfigError(f"[{name}] {key} 의 단계가 잘못되었습니다: {step!r} "
+                                          f"(가능: {', '.join(EFFORT_STEPS)})")
+                    if not isinstance(v, str) or not v or not _TOKEN_RE.match(v):
+                        raise ConfigError(f"[{name}] {key}.{step} 값이 잘못되었습니다: {v!r}")
+        validate_step_overrides(self.step_overrides)
+
+
+def validate_step_overrides(ov: Any) -> None:
+    """{역할: {단계: {model?, effort?}}} 형식 검사 (DESIGN.md 30.3). 역할이 워크플로에 있는지는 실행 시작 때 본다."""
+    if not isinstance(ov, Mapping):
+        raise ConfigError("step_overrides 는 {역할 = {단계 = {model, effort}}} 테이블이어야 합니다")
+    for role, steps in ov.items():
+        if not isinstance(role, str) or not _ROLE_NAME_RE.match(role):
+            raise ConfigError(f"step_overrides 의 역할 이름이 잘못되었습니다: {role!r}")
+        if not isinstance(steps, Mapping):
+            raise ConfigError(f"step_overrides.{role} 는 {{단계 = {{model, effort}}}} 테이블이어야 합니다")
+        for step, vals in steps.items():
+            if step not in EFFORT_STEPS:
+                raise ConfigError(f"step_overrides.{role} 의 단계가 잘못되었습니다: {step!r} (가능: {', '.join(EFFORT_STEPS)})")
+            if not isinstance(vals, Mapping) or not vals:
+                raise ConfigError(f"step_overrides.{role}.{step} 는 model·effort 를 담은 테이블이어야 합니다")
+            for k, v in vals.items():
+                if k not in STEP_OVERRIDE_KEYS:
+                    raise ConfigError(f"step_overrides.{role}.{step} 에 알 수 없는 키: {k!r} (가능: model, effort)")
                 if not isinstance(v, str) or not v or not _TOKEN_RE.match(v):
-                    raise ConfigError(f"[{name}] step_effort.{step} 값이 잘못되었습니다: {v!r}")
+                    raise ConfigError(f"step_overrides.{role}.{step}.{k} 값이 잘못되었습니다: {v!r}")
+
+
+def apply_step_overrides(ac: AgentConfig, cfg: "Config", role: str) -> AgentConfig:
+    """역할의 설정을 다 만든 뒤 칸 단위 지정을 마지막에 덮어쓴다 (DESIGN.md 30.3)."""
+    ov = (cfg.step_overrides or {}).get(role)
+    if not ov:
+        return ac
+    step_model, step_effort = dict(ac.step_model), dict(ac.step_effort)
+    for step, vals in ov.items():
+        if vals.get("model"):
+            step_model[step] = vals["model"]
+        if vals.get("effort"):
+            step_effort[step] = vals["effort"]
+    return replace(ac, step_model=step_model, step_effort=step_effort)
 
 
 def dedup_agent_config(cfg: "Config") -> AgentConfig:
     """재제기 확인자가 쓰는 CLI 설정: dedup_agent 의 설정에 dedup_model·dedup_effort 를 덮어씀 (DESIGN.md 26.2)."""
-    return replace(cfg.agent(cfg.dedup_agent), model=cfg.dedup_model, effort=cfg.dedup_effort, step_effort={})
+    return replace(cfg.agent(cfg.dedup_agent), model=cfg.dedup_model, effort=cfg.dedup_effort, step_effort={}, step_model={})
 
 
 CONFIG_FILENAME = "duet.toml"
@@ -333,8 +385,11 @@ def _apply(cfg: Config, data: Mapping[str, Any], *, source: str) -> Config:
             if "effort" in value and "step_effort" not in value:
                 # effort 만 정한 층은 '모든 단계 같은 강도' (DESIGN.md 18.1 층 규칙)
                 value["step_effort"] = {}
-            if isinstance(value.get("step_effort"), Mapping):
-                value["step_effort"] = dict(value["step_effort"])
+            if "model" in value and "step_model" not in value:
+                value["step_model"] = {}     # 모델도 같은 규칙 (DESIGN.md 30.2)
+            for k in ("step_effort", "step_model"):
+                if isinstance(value.get(k), Mapping):
+                    value[k] = dict(value[k])
             top[key] = replace(cfg.agent(key), **value)
         elif key in _TOP_LEVEL_KEYS:
             top[key] = value
@@ -360,7 +415,7 @@ def _nest(flat: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
-def parse_step_effort(text: str) -> dict[str, str]:
+def parse_step_effort(text: str, what: str = "추론 강도", example: str = "review=high,fix=low") -> dict[str, str]:
     """CLI 의 "review=high,fix=low" → {"review": "high", "fix": "low"}. 검증은 Config.validate 가 한다."""
     out: dict[str, str] = {}
     for part in text.split(","):
@@ -369,9 +424,37 @@ def parse_step_effort(text: str) -> dict[str, str]:
             continue
         step, sep, level = part.partition("=")
         if not sep or not step.strip() or not level.strip():
-            raise ConfigError(f"단계별 추론 강도 형식이 잘못되었습니다: {part!r} (예: review=high,fix=low)")
+            raise ConfigError(f"단계별 {what} 형식이 잘못되었습니다: {part!r} (예: {example})")
         out[step.strip()] = level.strip()
     return out
+
+
+def parse_step_model(text: str) -> dict[str, str]:
+    return parse_step_effort(text, "모델", "implement=claude-sonnet-5-5,review=claude-opus-5-5")
+
+
+def parse_set_step(items: list[str] | None) -> dict[str, dict[str, dict[str, str]]]:
+    """`--set-step 역할.단계.model=값` 여러 개 → step_overrides (DESIGN.md 30.3). 검증은 Config.validate."""
+    out: dict[str, dict[str, dict[str, str]]] = {}
+    for item in items or []:
+        lhs, sep, value = str(item).partition("=")
+        parts = lhs.strip().split(".")
+        if not sep or len(parts) != 3 or not all(parts) or not value.strip():
+            raise ConfigError(f"--set-step 형식이 잘못되었습니다: {item!r} (예: worker.part.model=claude-haiku-5-5)")
+        role, step, key = parts
+        out.setdefault(role, {}).setdefault(step, {})[key] = value.strip()
+    return out
+
+
+def describe_model(ac: AgentConfig) -> str:
+    """시작 로그용: "gpt-6.1-sol; review=gpt-6-astra" (단계별 모델이 없으면 모델만, 둘 다 없으면 '기본')"""
+    groups: dict[str, list[str]] = {}
+    for step in EFFORT_STEPS:
+        m = ac.step_model.get(step)
+        if m and m != ac.model:
+            groups.setdefault(m, []).append(step)
+    rest = ", ".join(f"{'·'.join(steps)}={m}" for m, steps in groups.items())
+    return "; ".join(p for p in (ac.model or "기본", rest) if p)
 
 
 def describe_effort(ac: AgentConfig) -> str:

@@ -249,16 +249,17 @@ function watchSelect(sel, paint) {
 // 떠 있는 메뉴: 창(dialog) 안에 있어도 잘리지 않게 화면 기준으로 띄우고, 아래 자리가 모자라면 위로 연다.
 let openFloat = null;
 function closeFloat() { if (openFloat) openFloat.close(); }
-function floatMenu(anchor, menu) {
+function floatMenu(anchor, menu, { width = 260 } = {}) {
   closeFloat();
   const host = anchor.closest('dialog[open]') || document.body;
   menu.classList.add('float-menu');
   host.append(menu);
   const place = () => {
     const r = anchor.getBoundingClientRect();
-    const w = Math.max(r.width, 260);
+    const w = Math.max(r.width, width);
     const below = window.innerHeight - r.bottom - 12, above = r.top - 12;
-    const up = below < 240 && above > below;
+    const need = Math.min(menu.scrollHeight || 240, 440);    // 메뉴가 아래에 다 안 들어가면 위로
+    const up = below < need && above > below;
     menu.style.width = `${Math.min(w, window.innerWidth - 16)}px`;
     menu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - w - 8))}px`;
     menu.style.maxHeight = `${Math.max(160, Math.min(440, up ? above : below))}px`;
@@ -267,7 +268,12 @@ function floatMenu(anchor, menu) {
   };
   place();
   const onDown = ev => { if (!menu.contains(ev.target) && !anchor.contains(ev.target)) st.close(); };
-  const onScroll = ev => { if (!menu.contains(ev.target)) st.close(); };
+  // 바깥이 스크롤되면 따라 움직이고, 기준 칸이 화면 밖으로 나가면 닫는다(칸을 눌러 생기는 스크롤로 닫히지 않게)
+  const onScroll = ev => {
+    if (menu.contains(ev.target) || !anchor.isConnected) return;
+    const r = anchor.getBoundingClientRect();
+    if (r.bottom < 0 || r.top > window.innerHeight) st.close(); else place();
+  };
   const onKey = ev => {
     if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); st.close(); anchor.focus(); return; }
     if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
@@ -300,9 +306,9 @@ function floatMenu(anchor, menu) {
   (menu.querySelector('.fm-item.on') || menu.querySelector('.fm-item'))?.scrollIntoView({ block: 'nearest' });
   return st;
 }
-function fmItem({ label, note, on, disabled, icon, onPick }) {
+function fmItem({ label, note, on, disabled, icon, onPick, keep = false }) {
   return h('button', { type: 'button', role: 'option', class: `fm-item${on ? ' on' : ''}`, 'aria-selected': on ? 'true' : 'false', disabled: disabled || null,
-    onclick: () => { closeFloat(); onPick(); } },
+    onclick: () => { if (!keep) closeFloat(); onPick(); } },
   icon || null,
   h('span', { class: 'fm-text' }, h('span', { class: 'fm-label' }, label), note ? h('span', { class: 'fm-note' }, note) : null),
   h('span', { class: 'fm-check', 'aria-hidden': 'true' }, on ? '✓' : ''));
@@ -2304,25 +2310,114 @@ function dlgOption(key) {
   if (o && o.kind === 'int') return Number(raw);
   return raw;
 }
+// 모델도 같은 층 규칙(30.2): 모델만 고른 층은 단계별 모델을 비운다. 칸 단위 지정(30.3)은 마지막에 덮어쓴다.
+const STEP_KEYS = ['propose', 'critique', 'synthesize', 'implement', 'fix', 'review', 'rereview', 'arbitrate',
+  'plan', 'part', 'integrate', 'explore', 'audit'];
 function agentSetting(agent) {
   const f = form.elements;
   const base = ((dlgState.eff || {})[agent]) || {};
-  let model = base.model || '';
+  let model = base.model_base ?? base.model ?? '';
+  let stepModel = { ...(base.step_model || {}) };
   let effort = base.effort_base ?? base.effort ?? '';
   let step = { ...(base.step_effort || {}) };
   const m = f[`${agent}_model`] ? f[`${agent}_model`].value.trim() : '';
   const e = f[`${agent}_effort`] ? f[`${agent}_effort`].value : '';
-  if (m) model = m;
+  if (m) { model = m; stepModel = {}; }
   if (e) { effort = e; step = {}; }
-  return { model, effort, step };
+  return { model, effort, step, stepModel };
 }
-function roleSetting(role) {
-  const s = agentSetting(role.agent);
-  let { model, effort, step } = s;
-  if (role.model) model = role.model;
+function roleSetting(role, withOverrides = true) {
+  let { model, effort, step, stepModel } = agentSetting(role.agent);
+  if (role.model) { model = role.model; stepModel = { ...(role.step_model || {}) }; }
+  else if (role.step_model) stepModel = { ...role.step_model };
   if (role.effort) { effort = role.effort; step = { ...(role.step_effort || {}) }; }
   else if (role.step_effort) step = { ...role.step_effort };
-  return { agent: role.agent, model, effort, step };
+  if (withOverrides) {
+    for (const [k, v] of Object.entries(((dlgState.stepOv || {})[role.name]) || {})) {
+      if (v.model) stepModel[k] = v.model;
+      if (v.effort) step[k] = v.effort;
+    }
+  }
+  return { agent: role.agent, model, effort, step, stepModel };
+}
+function modelLabel(agent, id) {
+  if (!id) return '기본 모델';
+  const m = modelInfo(agent, id);
+  return m ? m.label : id;
+}
+function stepOverride(roleName, key) { return (((dlgState.stepOv || {})[roleName]) || {})[key] || {}; }
+function setStepOverride(roleName, keys, field, value) {
+  const ov = dlgState.stepOv = dlgState.stepOv || {};
+  for (const k of keys) {
+    const cur = { ...(((ov[roleName]) || {})[k] || {}) };
+    if (value) cur[field] = value; else delete cur[field];
+    ov[roleName] = ov[roleName] || {};
+    if (Object.keys(cur).length) ov[roleName][k] = cur; else delete ov[roleName][k];
+    if (!Object.keys(ov[roleName]).length) delete ov[roleName];
+  }
+  scheduleWorkflowDiagram();
+}
+function stepOverrideCount() {
+  return Object.values(dlgState.stepOv || {}).reduce((n, steps) => n + Object.keys(steps).length, 0);
+}
+// 보낼 칸 지정: 지금 워크플로에 있는 역할만
+function stepOverridesForSubmit() {
+  const m = workflowModel();
+  if (!m) return {};
+  const out = {};
+  for (const [role, steps] of Object.entries(dlgState.stepOv || {})) if (m.roles[role] || m.classic) out[role] = steps;
+  return out;
+}
+
+// 칸 설정 창: 그 칸의 모델(단계 공통)과 단계마다 추론 강도
+function openStepEditor(anchor, role, keys, label) {
+  if (openFloat && openFloat.anchor === anchor) { closeFloat(); return; }
+  const menu = h('div', { class: 'fm se-pop', role: 'dialog', 'aria-label': `${label} 설정` });
+  const agent = role.agent;
+  const draw = () => {
+    const base = roleSetting(role, false);
+    const cur = roleSetting(role, true);
+    const ovModel = stepOverride(role.name, keys[0][0]).model || '';
+    const inheritedModel = base.stepModel[keys[0][0]] || base.model;
+    const sugg = ((((app.settings || {}).suggestions || {})[agent]) || {});
+    const models = sugg.models || [];
+    const modelNow = cur.stepModel[keys[0][0]] || cur.model;
+    const levelsFor = () => {
+      const mi = modelInfo(agent, modelNow);
+      return (mi && mi.efforts && mi.efforts.length ? mi.efforts : sugg.efforts) || [];
+    };
+    const effortRows = keys.map(([k, lbl]) => {
+      const ovE = stepOverride(role.name, k).effort || '';
+      const inh = base.step[k] || base.effort || '';
+      const sel = h('select', { 'aria-label': `${lbl || label} 추론 강도` },
+        h('option', { value: '' }, `따름 · ${inh || '기본'}`), levelsFor().map(l => h('option', { value: l }, l)));
+      if (ovE && ![...sel.options].some(o => o.value === ovE)) sel.append(h('option', { value: ovE }, ovE));
+      sel.value = ovE;
+      sel.addEventListener('change', () => { setStepOverride(role.name, [k], 'effort', sel.value); draw(); });
+      const seg = segmentize(sel, { ...EFFORT_LABELS, '': '따름' });
+      return h('div', { class: 'se-row' }, keys.length > 1 ? h('div', { class: 'se-sub' }, lbl) : null, sel, seg);
+    });
+    menu.replaceChildren(...[
+      h('div', { class: 'se-head' }, agentLogo(agent, 18),
+        h('div', null, h('b', null, label), h('small', null, role.name !== agent ? `${role.name} · ${agent}` : agent))),
+      h('div', { class: 'fm-group' }, '모델'),
+      fmItem({ label: '위 설정 따름', note: modelLabel(agent, inheritedModel), on: !ovModel, keep: true,
+        onPick: () => { setStepOverride(role.name, keys.map(k => k[0]), 'model', ''); draw(); } }),
+      models.map(m => fmItem({ label: m.label || m.id, note: m.note, on: ovModel === m.id, keep: true,
+        onPick: () => { setStepOverride(role.name, keys.map(k => k[0]), 'model', m.id); draw(); } })),
+      ovModel && !models.some(m => m.id === ovModel) ? fmItem({ label: ovModel, note: '목록에 없음', on: true, keep: true, onPick: () => {} }) : null,
+      h('div', { class: 'fm-group' }, '추론 강도'),
+      effortRows,
+      h('div', { class: 'se-foot' },
+        h('button', { type: 'button', class: 'btn btn-sm', onclick: () => {
+          for (const [k] of keys) { setStepOverride(role.name, [k], 'model', ''); setStepOverride(role.name, [k], 'effort', ''); }
+          draw();
+        } }, '이 칸 되돌리기'),
+        h('span', { class: 'spacer' }),
+        h('button', { type: 'button', class: 'btn btn-sm btn-primary', onclick: () => closeFloat() }, '닫기'))].flat().filter(Boolean));
+  };
+  draw();
+  floatMenu(anchor, menu, { width: 320 });
 }
 function workflowModel() {
   const f = form.elements;
@@ -2357,15 +2452,22 @@ function wfCard(label, agent, roleName, model, pairs, opts = {}) {
   const base = agent === 'claude' || agent === 'codex' ? agent : 'x';
   const effs = wfEffort(pairs);
   const many = effs.length > 1;          // 단계별로 다르면 칸이 좁아지지 않게 아래 줄에
-  return h('div', { class: `wf-node wf-${base}${opts.small ? ' small' : ''}`, 'data-key': opts.key || `${label}:${roleName}` },
+  const cls = `wf-node wf-${base}${opts.small ? ' small' : ''}${opts.onEdit ? ' editable' : ''}${opts.set ? ' wf-set' : ''}`;
+  const el = h('div', { class: cls, 'data-key': opts.key || `${label}:${roleName}`,
+    ...(opts.onEdit ? { role: 'button', tabindex: '0', title: '눌러서 이 칸의 모델·추론 강도 바꾸기' } : {}) },
     h('div', { class: 'wf-node-head' },
       h('span', { class: `wf-avatar wf-avatar-${base}` }, agentLogo(agent, 18)),
       h('div', { class: 'wf-who' }, h('span', { class: 'wf-step' }, label),
         h('span', { class: 'wf-name' }, roleName && roleName !== agent ? `${roleName} · ${agent}` : agent)),
       many ? null : h('div', { class: 'wf-effs' }, effs)),
-    h('div', { class: 'wf-model' }, model || '기본 모델'),
+    h('div', { class: 'wf-model' }, model || '기본 모델', opts.set ? h('span', { class: 'wf-setmark', title: '이 칸만 따로 지정함' }, '지정') : null),
     many ? h('div', { class: 'wf-effs wide' }, effs) : null,
     opts.note ? h('div', { class: 'wf-note' }, opts.note) : null);
+  if (opts.onEdit) {
+    el.addEventListener('click', () => opts.onEdit(el));
+    el.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); opts.onEdit(el); } });
+  }
+  return el;
 }
 function renderWorkflowDiagram() {
   const box = $('#workflow-diagram');
@@ -2381,10 +2483,15 @@ function renderWorkflowDiagram() {
     const r = R(roleName);
     const rs = roleSetting(r);
     const pairs = keys.map(([k, lbl]) => [lbl, rs.step[k] || rs.effort || '']);
+    const models = [...new Set(keys.map(([k]) => rs.stepModel[k] || rs.model))];
+    const modelText = models.map(x => modelLabel(r.agent, x)).join(' · ');
     const key = `${label}:${roleName}`;
-    sig[key] = `${r.agent}|${rs.model}|${wfEffortText(pairs)}`;
+    sig[key] = `${r.agent}|${modelText}|${wfEffortText(pairs)}`;
     if (uses[r.agent] && !uses[r.agent].includes(label)) uses[r.agent].push(label);
-    return wfCard(label, r.agent, r.name, rs.model, pairs, { ...opts, key });
+    const editable = keys.every(([k]) => STEP_KEYS.includes(k));
+    const set = keys.some(([k]) => Object.keys(stepOverride(r.name, k)).length);
+    return wfCard(label, r.agent, r.name, modelText, pairs,
+      { ...opts, key, set, onEdit: editable ? el => openStepEditor(el, r, keys, label) : null });
   };
   const arrow = (text) => h('div', { class: 'wf-arrow' }, text ? h('span', null, text) : null);
   const stages = [];
@@ -2475,7 +2582,12 @@ function renderWorkflowDiagram() {
     if (el) el.textContent = uses[a].length ? uses[a].join(' · ') : '이 워크플로에서는 쓰지 않음';
   }
   const prev = box._sig || {};
-  box.replaceChildren(...stages, h('div', { class: 'wf-end' }, '✓ 승인'));
+  const nSet = stepOverrideCount();
+  const hint = h('div', { class: 'wf-hintbar' },
+    h('span', null, '칸을 누르면 그 단계만 모델·추론 강도를 바꿀 수 있습니다.'),
+    nSet ? h('span', { class: 'wf-hintcount' }, `${nSet}개 단계 지정`,
+      h('button', { type: 'button', class: 'linklike', onclick: () => { dlgState.stepOv = {}; closeFloat(); scheduleWorkflowDiagram(); } }, '모두 되돌리기')) : null);
+  box.replaceChildren(hint, ...stages, h('div', { class: 'wf-end' }, '✓ 승인'));
   // 바뀐 칸만 잠깐 빛나게 (창을 처음 열 때는 안 함)
   if (box._sig) for (const el of box.querySelectorAll('.wf-node[data-key]')) {
     const k = el.getAttribute('data-key');
@@ -2502,7 +2614,7 @@ async function openRunDialog({ machine = LOCAL, project = '', defaults = null, h
   catch (e) { toast(e.message, true); return; }
   form.reset();
   formError.hidden = true;
-  dlgState = { fixedProject: project || null };
+  dlgState = { fixedProject: project || null, stepOv: {} };
   const f = form.elements;
   f.machine.replaceChildren(...app.groups.map(g => h('option', { value: g.id }, g.local ? '이 머신' : g.name)));
   f.machine.value = machine;
@@ -2580,6 +2692,7 @@ form.addEventListener('submit', async ev => {
     test_command: f.test_command.value.trim(), block_severity: f.block_severity.value, stall_rounds: f.stall_rounds.value,
     design_only: f.design_only.checked, skip_design: f.skip_design.checked, mock: f.mock.checked, force: f.force.checked,
     options: collectOptions($('#run-advanced-body'), false),
+    step_overrides: stepOverridesForSubmit(),
   };
   const problem = !body.project ? (f.root.value === CUSTOM ? '작업 폴더 경로를 입력하세요.' : '폴더 이름을 입력하세요.')
     : !/^([\/~]|[A-Za-z]:[\\/]|\\\\)/.test(body.project) ? '작업 폴더는 절대 경로여야 합니다 (/…, ~/…, C:\\…).'

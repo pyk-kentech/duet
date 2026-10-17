@@ -64,7 +64,7 @@ class ClaudeCodeAdapter:
         base = (self.agent_cfg.resume_args or self.agent_cfg.base_args) if req.resume_session else self.agent_cfg.base_args
         if req.resume_session and self.agent_cfg.resume_read_args and req.mode is Mode.READ:
             mode_args = self.agent_cfg.resume_read_args
-        cmd = [self.agent_cfg.bin, *base, *self.model_args(effort), *mode_args]
+        cmd = [self.agent_cfg.bin, *base, *self.model_args(effort, self.agent_cfg.model_for(req.step, req.round)), *mode_args]
         if self.cfg.claude_sandbox and req.mode is Mode.WRITE and self.agent_cfg.sandbox_settings:
             cmd += ["--settings", self.agent_cfg.sandbox_settings]   # OS 샌드박스 (DESIGN.md 24.3)
         if req.output_schema is not None:
@@ -76,12 +76,13 @@ class ClaudeCodeAdapter:
         # `--allowedTools <tools...>` 같은 가변 인자 옵션이 프롬프트를 삼키지 않도록 옵션 종료자를 넣는다
         return [*cmd, "--", req.prompt], None
 
-    def model_args(self, effort: str | None = None) -> list[str]:
-        """effort 가 None 이면 단계 구분 없는 기본 강도(agent_cfg.effort)."""
+    def model_args(self, effort: str | None = None, model: str | None = None) -> list[str]:
+        """effort·model 이 None 이면 단계 구분 없는 기본값(agent_cfg.effort·model)."""
         effort = self.agent_cfg.effort if effort is None else effort
+        model = self.agent_cfg.model if model is None else model
         args: list[str] = []
-        if self.agent_cfg.model:
-            args += ["--model", self.agent_cfg.model]
+        if model:
+            args += ["--model", model]
         if effort:
             args += ["--effort", effort]
         return args

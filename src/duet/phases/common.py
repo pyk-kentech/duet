@@ -102,7 +102,9 @@ class PhaseContext:
             return self.workflow.roles[role].agent_config(self.cfg)
         if role == DEDUP_ROLE:
             return dedup_agent_config(self.cfg)
-        return self.cfg.agent(self.cli_of(role))
+        from duet.config import apply_step_overrides
+
+        return apply_step_overrides(self.cfg.agent(self.cli_of(role)), self.cfg, role)
 
     def can_run_commands(self, role: str) -> bool:
         """읽기 모드에서 이 역할이 명령을 실행할 수 있는가 (DESIGN.md 19.6).

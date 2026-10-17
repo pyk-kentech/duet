@@ -36,9 +36,11 @@ def make_agents(cfg: Config, *, mock: bool = False) -> dict[str, AgentAdapter]:
     """
     if mock:
         return dict(mock_pair(delay_sec=_mock_delay()))
+    from duet.config import apply_step_overrides
+
     return {
-        "claude": ClaudeCodeAdapter(cfg),
-        "codex": CodexAdapter(cfg),
+        "claude": ClaudeCodeAdapter(cfg, apply_step_overrides(cfg.claude, cfg, "claude")),
+        "codex": CodexAdapter(cfg, apply_step_overrides(cfg.codex, cfg, "codex")),
     }
 
 

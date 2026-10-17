@@ -462,6 +462,10 @@ env_keep = ["CLAUDE_CODE_OAUTH_TOKEN"]
 - build 단계의 `manager`·`workers`: 관리자가 설계를 작업 묶음(파일 소유)으로 나누고, 작은 모델 작업자가 맡은 묶음을 순서대로 구현, 관리자가 통합. 수정 라운드는 지적의 파일 주인에게 보낸다. 내장 `extended` 템플릿 (29장)
 - ✅ 계획 검증(파일 겹침·경로·의존 순환·개수), 소유 밖 변경 되돌림, 분업 → 통합 → 테스트 → 리뷰 흐름, 지적별 수정 라우팅, 계획을 못 읽을 때 대체, resume(묶음 단위), UI 순서도·기록 표시
 
+### M24. 단계별 모델·추론 강도 (2026-10-17 사용자 요청으로 추가)
+- `step_model`(에이전트·역할 층), 실행마다 칸 단위 `step_overrides`(`--set-step`), 세션 이어가기의 모델 유지, 새 실행 창 순서도에서 칸별 지정 (30장)
+- ✅ 모델·강도 결정 규칙(층 규칙, 역할, 칸 덮어쓰기, rereview), CLI 인자에 실제로 붙는 `--model`/`-m`, run.json 저장·resume, 세션 이어가기 모델 유지, UI API 검증과 순서도 표시
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -1128,3 +1132,35 @@ reviewers = ["codex"]
 ### 29.5 하지 않은 것
 - 작업자 병렬 실행(작업 트리 여러 개 + 병합). 소유가 겹치지 않으니 다음 단계 후보.
 - 묶음 수에 따른 비용 예측. 실제 효과는 hard 묶음 벤치마크로 classic·lean 과 비교한다(구독 사용).
+
+## 30. 단계별 모델·추론 강도 (2026-10-17 사용자 요청)
+
+지금까지 모델은 에이전트(Claude·Codex)마다 하나였고, 추론 강도만 단계별(18.1)이었다. 순서도의 칸(= 어떤 역할이 하는 어떤 단계)마다 모델과 강도를 따로 고를 수 있게 한다. 예: 설계안은 Opus, 구현은 Sonnet, 리뷰는 GPT-6-Astra xhigh.
+
+### 30.1 단계 키
+- 18.1 의 단계 키에 `explore`(사전 조사)·`audit`(승인 뒤 감사)를 더한다: `propose`, `critique`, `synthesize`, `implement`, `fix`, `review`, `rereview`, `arbitrate`, `plan`, `part`, `integrate`, `explore`, `audit`. 중복 확인(26장)은 따로 정한다(`dedup_model`·`dedup_effort`).
+
+### 30.2 에이전트 층: `step_model`
+- `[claude]`·`[codex]`(와 워크플로 역할 `[roles.<이름>]`)에 `step_model = { 단계 = 모델 }`. `step_effort` 와 같은 규칙이다.
+  - 호출의 모델 = `step_model[단계]` → 없으면 `model` → 비어 있으면 모델 플래그 없음(CLI 기본). 리뷰 2라운드부터는 `rereview` 키.
+  - **층 규칙**: 한 층이 `model` 만 정하고 `step_model` 을 안 정하면 그 층이 `step_model` 을 비운다(= 모든 단계 같은 모델). 역할도 같다(역할이 `model` 을 정하면 에이전트의 `step_model` 을 물려받지 않는다).
+- CLI: `--{agent}-step-model implement=claude-sonnet-5-5,review=claude-opus-5-5`.
+
+### 30.3 칸 단위 지정: `step_overrides`
+- 실행마다 역할·단계 단위로 덮어쓴다(가장 우선). 설정 키 `step_overrides = { 역할 = { 단계 = { model = "...", effort = "..." } } }`.
+  - classic 의 역할 이름은 `claude`·`codex`, 다른 워크플로는 그 역할 이름(`manager`, `worker` …).
+  - 역할의 설정(30.2·18.1 규칙)을 만든 뒤 마지막에 `step_model[단계]`·`step_effort[단계]` 를 바꾼다.
+- CLI: `--set-step 역할.단계.model=값`, `--set-step 역할.단계.effort=값` (여러 번). 예: `--set-step worker.part.model=claude-haiku-5-5 --set-step codex.review.effort=xhigh`.
+- 검증: 단계는 30.1 키, 항목은 `model`·`effort` 만, 값은 모델·강도 이름 형식. 워크플로에 없는 역할이면 실행 시작 때 오류.
+- `run.json` config 에 `{agent}.step_model`·`step_overrides` 를 저장해 resume 이 같은 값을 쓴다.
+
+### 30.4 세션 이어가기
+- 리뷰어 세션을 이어갈 때(21.3)는 세션을 연 리뷰의 강도처럼 **모델도** 그대로 쓴다(`review_sessions` 에 model 기록). 1회차·2회차부터의 모델이 다르면 이어가지 않고 새 세션으로 연다.
+
+### 30.5 화면
+- 새 실행 창 순서도의 칸을 누르면 그 칸의 설정 창이 뜬다: 모델(목록, '위 설정 따름') + 그 칸 단계마다 추론 강도(분절 버튼, '위 설정 따름') + '이 칸 되돌리기'. 바꾼 칸은 테두리로 표시하고, 위 에이전트 카드의 모델·강도는 '나머지 단계 전체'의 값이 된다.
+- 칸 하나에 단계가 둘이면(구현·수정, 리뷰 1회차·2회차부터, 설계안·비판) 모델은 함께, 강도는 단계마다 고른다.
+- 시작 로그·역할 설명에 단계별 모델을 함께 적는다: `codex(gpt-6.1-sol; review=gpt-6-astra, 강도 medium; review=xhigh)`.
+
+### 30.6 하지 않은 것
+- 설정 화면의 단계별 기본값 편집(지금은 `duet.toml`·CLI 로). 관리자가 묶음 난이도로 작업자 모델을 고르는 것(다음 후보).

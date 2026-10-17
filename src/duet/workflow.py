@@ -26,6 +26,7 @@ from duet.config import (
     AgentConfig,
     Config,
     _TOKEN_RE,
+    apply_step_overrides,
 )
 
 ROLE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,23}$")
@@ -41,7 +42,7 @@ PROJECT_DIR = Path(".duet") / "workflows"
 
 SOURCE_LABELS = {"config": "기본", "builtin": "내장", "user": "내 템플릿", "project": "프로젝트", "file": "파일"}
 
-_ROLE_KEYS = {"agent", "model", "effort", "step_effort", "instructions", "templates"}
+_ROLE_KEYS = {"agent", "model", "effort", "step_effort", "step_model", "instructions", "templates"}
 _STEP_KEYS = {
     "explore": {"kind", "id", "role"},
     "debate": {"kind", "id", "proposers", "rounds", "synth", "output"},
@@ -62,6 +63,7 @@ class Role:
     model: str | None = None              # None 이면 [claude]/[codex] 설정을 따른다
     effort: str | None = None
     step_effort: dict[str, str] | None = None
+    step_model: dict[str, str] | None = None
     instructions: str = ""
     templates: dict[str, str] = field(default_factory=dict)
 
@@ -71,16 +73,19 @@ class Role:
         changes: dict[str, Any] = {}
         if self.model is not None:
             changes["model"] = self.model
+            changes["step_model"] = dict(self.step_model or {})   # 모델을 정한 역할은 에이전트의 단계별 모델을 안 물려받음 (30.2)
+        elif self.step_model is not None:
+            changes["step_model"] = dict(self.step_model)
         if self.effort is not None:
             changes["effort"] = self.effort
             changes["step_effort"] = dict(self.step_effort or {})
         elif self.step_effort is not None:
             changes["step_effort"] = dict(self.step_effort)
-        return replace(base, **changes)
+        return apply_step_overrides(replace(base, **changes), cfg, self.name)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"agent": self.agent}
-        for key in ("model", "effort", "step_effort"):
+        for key in ("model", "effort", "step_effort", "step_model"):
             if getattr(self, key) is not None:
                 d[key] = getattr(self, key)
         if self.instructions:
@@ -245,16 +250,20 @@ def _parse_role(name: Any, data: Any, err) -> Role:
         v = data.get(key)
         if v is not None and (not isinstance(v, str) or not _TOKEN_RE.match(v)):
             raise err(f"[roles.{name}] {key} 값이 잘못되었습니다: {v!r}")
-    step_effort = data.get("step_effort")
-    if step_effort is not None:
-        if not isinstance(step_effort, Mapping):
-            raise err(f"[roles.{name}] step_effort 는 {{단계 = 강도}} 테이블이어야 합니다")
-        for k, v in step_effort.items():
-            if k not in EFFORT_STEPS:
-                raise err(f"[roles.{name}] step_effort 의 단계가 잘못되었습니다: {k!r} (가능: {', '.join(EFFORT_STEPS)})")
-            if not isinstance(v, str) or not v or not _TOKEN_RE.match(v):
-                raise err(f"[roles.{name}] step_effort.{k} 값이 잘못되었습니다: {v!r}")
-        step_effort = dict(step_effort)
+    maps: dict[str, dict[str, str] | None] = {}
+    for key, what in (("step_effort", "강도"), ("step_model", "모델")):
+        m = data.get(key)
+        if m is not None:
+            if not isinstance(m, Mapping):
+                raise err(f"[roles.{name}] {key} 는 {{단계 = {what}}} 테이블이어야 합니다")
+            for k, v in m.items():
+                if k not in EFFORT_STEPS:
+                    raise err(f"[roles.{name}] {key} 의 단계가 잘못되었습니다: {k!r} (가능: {', '.join(EFFORT_STEPS)})")
+                if not isinstance(v, str) or not v or not _TOKEN_RE.match(v):
+                    raise err(f"[roles.{name}] {key}.{k} 값이 잘못되었습니다: {v!r}")
+            m = dict(m)
+        maps[key] = m
+    step_effort = maps["step_effort"]
     instructions = data.get("instructions", "")
     if not isinstance(instructions, str) or len(instructions) > MAX_INSTRUCTIONS:
         raise err(f"[roles.{name}] instructions 는 {MAX_INSTRUCTIONS}자 이하 문자열이어야 합니다")
@@ -269,7 +278,7 @@ def _parse_role(name: Any, data: Any, err) -> Role:
         if not isinstance(v, str) or not TEMPLATE_NAME_RE.match(v):
             raise err(f"[roles.{name}] templates.{k} 이름이 잘못되었습니다: {v!r}")
     return Role(name=name, agent=agent, model=data.get("model"), effort=data.get("effort"),
-                step_effort=step_effort, instructions=instructions, templates=dict(templates))
+                step_effort=step_effort, step_model=maps["step_model"], instructions=instructions, templates=dict(templates))
 
 
 def _role_list(sdata: Mapping, key: str, label: str, roles: Mapping, err, *, lo: int, hi: int) -> list[str]:
@@ -478,6 +487,7 @@ def describe(wf: Workflow, wid: str | None = None) -> dict[str, Any]:
         "roles": [{"name": r.name, "agent": r.agent, "model": r.model or "", "effort": r.effort or "",
                    # None(설정을 따름)과 {}(단계별 없음)를 구별한다: 새 실행 창의 순서도가 강도를 계산한다
                    "step_effort": dict(r.step_effort) if r.step_effort is not None else None,
+                   "step_model": dict(r.step_model) if r.step_model is not None else None,
                    "templates": dict(r.templates), "has_instructions": bool(r.instructions)}
                   for r in wf.roles.values() if r.name in wf.used_roles()],
         "steps": [s.to_dict() for s in wf.steps],

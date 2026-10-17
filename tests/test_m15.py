@@ -261,7 +261,7 @@ def test_json_verdict_and_session_reuse(tmp_path: Path, monkeypatch):
     assert "예외 처리 없음" in rv[1].prompt                                     # 지난 지적 목록
     assert "너는 깐깐하지만" in rv[0].prompt and "JSON" in rv[0].prompt
     assert rv[1].fallback_prompt and "너는 깐깐하지만" in rv[1].fallback_prompt
-    assert st.review_sessions["codex"] == {"id": "mock-codex-s3", "round": 3, "rounds": 3, "effort": "high"}
+    assert st.review_sessions["codex"] == {"id": "mock-codex-s3", "round": 3, "rounds": 3, "effort": "high", "model": ""}
     # 이어간 리뷰는 세션을 연 첫 리뷰의 강도(high)를 그대로 — rereview 강도(medium)로 바꾸면 Codex 캐시가 깨진다
     assert [c.effort for c in rv] == [None, "high", "high"]
     entries = {e.name: e for e in Transcript(rd).entries()}
@@ -279,7 +279,7 @@ def test_session_rounds_cap(tmp_path: Path, monkeypatch):
     _, seen, st, _ = run_mock(tmp_path, monkeypatch, "--stall-rounds", "0", approve=4, reuse=True)
     # 한 세션은 최대 3라운드 → 4라운드는 새 세션(s4)
     assert [c.resume_session for c in reviews(seen)] == [None, "mock-codex-s3", "mock-codex-s3", None]
-    assert st.review_sessions["codex"] == {"id": "mock-codex-s4", "round": 4, "rounds": 1, "effort": "medium"}
+    assert st.review_sessions["codex"] == {"id": "mock-codex-s4", "round": 4, "rounds": 1, "effort": "medium", "model": ""}
 
 
 def test_fresh_and_text_mode_via_toml(tmp_path: Path, monkeypatch):
@@ -292,7 +292,7 @@ def test_fresh_and_text_mode_via_toml(tmp_path: Path, monkeypatch):
     assert [c.resume_session for c in rv] == [None, None] and all(c.output_schema is None for c in rv)
     assert "파일을 직접 열어봐도 된다" in rv[0].prompt and "<verdict>" in rv[0].prompt
     assert st.config["review_session"] == "fresh" and st.config["review_json"] is False
-    assert st.review_sessions == {"codex": {"id": "mock-codex-s4", "round": 2, "rounds": 1, "effort": "medium"}}
+    assert st.review_sessions == {"codex": {"id": "mock-codex-s4", "round": 2, "rounds": 1, "effort": "medium", "model": ""}}
 
 
 def test_packet_call_sites_in_prompt(tmp_path: Path, monkeypatch):

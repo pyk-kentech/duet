@@ -1,0 +1,164 @@
+"""M24: 단계별 모델·추론 강도 (DESIGN.md 30장)."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+
+import duet.orchestrator as orch_mod
+from duet.agents import make_agents
+from duet.agents.base import AgentRequest, Mode
+from duet.agents.claude_code import ClaudeCodeAdapter
+from duet.agents.codex import CodexAdapter
+from duet.agents.mock import MockAdapter
+from duet.cli import main
+from duet.config import (
+    Config, ConfigError, apply_step_overrides, describe_model, load_config, parse_set_step,
+)
+from duet.state import RunState, list_run_dirs
+from duet.ui.dashboard import ApiError, Dashboard
+from duet.workflow import load_workflow
+
+
+# ====================================================================== 30.2 에이전트 층
+def test_model_for_and_rereview():
+    ac = replace(Config().claude, model="claude-opus-5-5",
+                 step_model={"implement": "claude-sonnet-5-5", "rereview": "claude-haiku-5-5"})
+    assert ac.model_for("implement") == "claude-sonnet-5-5"
+    assert ac.model_for("propose") == "claude-opus-5-5"
+    assert ac.model_for("review", 1) == "claude-opus-5-5" and ac.model_for("review", 2) == "claude-haiku-5-5"
+    assert describe_model(ac) == "claude-opus-5-5; implement=claude-sonnet-5-5, rereview=claude-haiku-5-5"
+    assert describe_model(Config().claude) == "기본"
+
+
+def test_layer_rule_model_clears_step_model(tmp_path: Path):
+    (tmp_path / "duet.toml").write_text('[claude]\nstep_model = { implement = "claude-sonnet-5-5" }\n', encoding="utf-8")
+    assert load_config(tmp_path).claude.model_for("implement") == "claude-sonnet-5-5"
+    # 위 층이 model 만 정하면 모든 단계 그 모델 (18.1 과 같은 층 규칙)
+    cfg = load_config(tmp_path, {"claude.model": "claude-opus-5-5"})
+    assert cfg.claude.step_model == {} and cfg.claude.model_for("implement") == "claude-opus-5-5"
+    with pytest.raises(ConfigError, match="step_model 의 단계"):
+        load_config(None, {"claude.step_model": {"nope": "x"}})
+    with pytest.raises(ConfigError, match="step_model.implement 값"):
+        load_config(None, {"claude.step_model": {"implement": "a b"}})
+
+
+def test_role_rules_and_explore_audit_keys(tmp_path: Path):
+    cfg = load_config(None, {"claude.step_model": {"part": "claude-opus-5-5"}, "claude.step_effort": {"audit": "low"}})
+    wf = load_workflow("extended", None, cfg)
+    worker = wf.roles["worker"].agent_config(cfg)
+    # 모델을 정한 역할(작업자 Sonnet)은 에이전트의 단계별 모델을 물려받지 않는다
+    assert worker.model_for("part") == "claude-sonnet-5-5"
+    assert wf.roles["claude"].agent_config(cfg).model_for("part") == "claude-opus-5-5"
+
+
+# ====================================================================== 30.3 칸 단위 지정
+def test_parse_set_step_and_validate():
+    ov = parse_set_step(["worker.part.model=claude-haiku-5-5", "worker.part.effort=low", "codex.review.effort=xhigh"])
+    assert ov == {"worker": {"part": {"model": "claude-haiku-5-5", "effort": "low"}}, "codex": {"review": {"effort": "xhigh"}}}
+    for bad in ("worker.part=claude", "worker.part.model=", "a.b.c.d=x"):
+        with pytest.raises(ConfigError, match="--set-step"):
+            parse_set_step([bad])
+    for ov, msg in (({"w": {"nope": {"model": "x"}}}, "단계"), ({"w": {"part": {"temp": "1"}}}, "알 수 없는 키"),
+                    ({"w": {"part": {"model": "a b"}}}, "값이 잘못"), ({"1x": {"part": {"model": "x"}}}, "역할 이름")):
+        with pytest.raises(ConfigError, match=msg):
+            load_config(None, {"step_overrides": ov})
+
+
+def test_overrides_win_last_for_roles_and_classic():
+    cfg = load_config(None, {"step_overrides": {"worker": {"part": {"model": "claude-haiku-5-5", "effort": "low"}},
+                                                "codex": {"review": {"model": "gpt-6-astra", "effort": "xhigh"}}}})
+    wf = load_workflow("extended", None, cfg)
+    worker = wf.roles["worker"].agent_config(cfg)
+    assert (worker.model_for("part"), worker.effort_for("part")) == ("claude-haiku-5-5", "low")
+    assert worker.model_for("fix") == "claude-sonnet-5-5"                     # 다른 단계는 역할 설정 그대로
+    # classic: 역할 이름 = 에이전트 이름. 실제 어댑터(make_agents)에도 들어간다
+    codex = make_agents(cfg)["codex"].agent_cfg
+    assert (codex.model_for("review", 1), codex.effort_for("review", 1)) == ("gpt-6-astra", "xhigh")
+    assert codex.effort_for("review", 2) == "medium"                          # rereview 는 따로
+    assert apply_step_overrides(cfg.claude, cfg, "claude") == cfg.claude      # 지정 없는 역할은 그대로
+
+
+def test_adapters_put_step_model_on_command(fake_cfg: Config, tmp_path: Path):
+    cfg = replace(fake_cfg, claude=replace(fake_cfg.claude, model="claude-opus-5-5", step_model={"implement": "claude-sonnet-5-5"}),
+                  codex=replace(fake_cfg.codex, model="gpt-6.1-sol", step_model={"review": "gpt-6-astra"}))
+    c = ClaudeCodeAdapter(cfg)
+    cmd, _ = c.build_command(AgentRequest("구현해", tmp_path, Mode.WRITE, 20, "implement", round=1))
+    assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5-5"
+    cmd, _ = c.build_command(AgentRequest("설계해", tmp_path, Mode.READ, 20, "propose"))
+    assert cmd[cmd.index("--model") + 1] == "claude-opus-5-5"
+    x = CodexAdapter(cfg)
+    cmd, _ = x.build_command(AgentRequest("리뷰해", tmp_path, Mode.READ, 20, "review", round=1), tmp_path / "last.md")
+    assert cmd[cmd.index("-m") + 1] == "gpt-6-astra"
+    cmd, _ = x.build_command(AgentRequest("리뷰해", tmp_path, Mode.READ, 20, "review", round=2), tmp_path / "last.md")
+    assert cmd[cmd.index("-m") + 1] == "gpt-6.1-sol"                         # rereview 지정이 없으면 model
+
+
+# ====================================================================== 실행: 기록·확인·세션
+def run_mock(tmp_path: Path, monkeypatch, *extra: str, reuse: bool = False):
+    seen: dict = {}
+    wd = tmp_path / "w"
+    wd.mkdir(parents=True, exist_ok=True)
+    if reuse:
+        (wd / "duet.toml").write_text('review_session = "reuse"\n', encoding="utf-8")
+
+    def factory(cfg, *, mock):
+        seen["cfg"] = cfg
+        seen["claude"] = MockAdapter(label="claude")
+        seen["codex"] = MockAdapter(label="codex", approve_on_review=3)
+        return {"claude": seen["claude"], "codex": seen["codex"]}
+
+    monkeypatch.setattr(orch_mod, "make_agents", factory)
+    rc = main(["run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", "--max-review", "4", *extra])
+    [rd] = list_run_dirs(wd)
+    return rc, seen, RunState.load(rd), rd
+
+
+def test_run_records_step_overrides_and_logs(tmp_path: Path, monkeypatch):
+    rc, seen, st, rd = run_mock(tmp_path, monkeypatch, "--set-step", "claude.implement.model=claude-haiku-5-5",
+                                "--codex-step-model", "review=gpt-6-astra")
+    assert rc == 0
+    assert st.config["step_overrides"] == {"claude": {"implement": {"model": "claude-haiku-5-5"}}}
+    assert st.config["codex.step_model"] == {"review": "gpt-6-astra"}
+    log = (rd / "console.log").read_text(encoding="utf-8")
+    assert "implement=claude-haiku-5-5" in log and "review=gpt-6-astra" in log
+
+
+def test_unknown_role_in_overrides_is_error(tmp_path: Path, monkeypatch, capsys):
+    wd = tmp_path / "w"
+    rc = main(["run", "t", "--workdir", str(wd), "--mock", "--set-step", "worker.part.model=claude-haiku-5-5"])
+    assert rc != 0 and "worker" in capsys.readouterr().err
+    assert not list_run_dirs(wd) if wd.exists() else True
+
+
+def test_review_session_not_reused_when_model_changes(tmp_path: Path, monkeypatch):
+    rc, seen, st, rd = run_mock(tmp_path, monkeypatch, "--codex-step-model", "rereview=gpt-6-luna", reuse=True)
+    assert rc == 0
+    rv = [c for c in seen["codex"].calls if c.step == "review"]
+    # 2회차는 1회차와 모델이 달라 새 세션, 3회차는 (같은 모델인) 2회차 세션을 잇는다
+    assert rv[0].resume_session is None and rv[1].resume_session is None and rv[2].resume_session is not None
+    assert st.review_sessions["codex"]["model"] == "gpt-6-luna"
+    # 같은 모델이면(지정 없음) 예전처럼 이어간다
+    rc, seen, st, rd = run_mock(tmp_path / "b", monkeypatch, reuse=True)
+    rv = [c for c in seen["codex"].calls if c.step == "review"]
+    assert rv[1].resume_session is not None
+
+
+# ====================================================================== UI
+def test_ui_start_run_passes_step_overrides(tmp_path: Path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv: seen.update(argv=argv) or {"id": "j"})
+    Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True, "workflow": "extended",
+                           "step_overrides": {"worker": {"part": {"model": "claude-haiku-5-5", "effort": ""}},
+                                              "codex": {"review": {"effort": "xhigh"}}}})
+    argv = seen["argv"]
+    pairs = [argv[i + 1] for i, a in enumerate(argv) if a == "--set-step"]
+    assert pairs == ["worker.part.model=claude-haiku-5-5", "codex.review.effort=xhigh"]
+    with pytest.raises(ApiError, match="manager2"):
+        Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True, "workflow": "extended",
+                               "step_overrides": {"manager2": {"plan": {"model": "x"}}}})
+    with pytest.raises(ApiError, match="단계"):
+        Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True,
+                               "step_overrides": {"claude": {"nope": {"model": "x"}}}})

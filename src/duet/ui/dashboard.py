@@ -388,6 +388,14 @@ class Dashboard:
                 v = payload.get(f"{agent}_{field_}")
                 if v not in (None, ""):
                     overrides[f"{agent}.{field_}"] = str(v).strip()
+        step_items = self._step_items(payload.get("step_overrides"))
+        if step_items:
+            from duet.config import parse_set_step
+
+            try:
+                overrides["step_overrides"] = parse_set_step(step_items)
+            except ConfigError as e:
+                raise ApiError(400, f"설정 오류: {e}") from e
         if str(payload.get("test_command") or "").strip():
             overrides["test_command"] = str(payload["test_command"]).strip()
         if payload.get("block_severity"):
@@ -413,6 +421,9 @@ class Dashboard:
             wf = load_workflow(cfg.workflow, wd if wd.is_dir() else None, cfg)
         except WorkflowError as e:
             raise ApiError(400, f"워크플로 오류: {e}") from e
+        unknown = sorted(set(cfg.step_overrides) - set(wf.roles))
+        if unknown:
+            raise ApiError(400, f"칸 단위 지정의 역할 {', '.join(unknown)} 이 워크플로 {wf.name} 에 없습니다.")
         if design_only and wf.first("debate") is None:
             raise ApiError(400, f"워크플로 {wf.name} 에는 설계 단계가 없어 '설계만'을 고를 수 없습니다.")
         if skip_design and not (wd / DESIGN_FILENAME).is_file():
@@ -436,12 +447,36 @@ class Dashboard:
                 argv += [flag, str(overrides[key])]
         for key, value in advanced.items():
             argv += ["--set", f"{key}={to_cli(value)}"]
+        for item in step_items:
+            argv += ["--set-step", item]
         for on, flag in ((design_only, "--design-only"), (skip_design, "--skip-design"),
                          (mock, "--mock"), (force, "--force")):
             if on:
                 argv.append(flag)
         self.registry.add(wd)
         return self._spawn("run", wd, argv)
+
+    @staticmethod
+    def _step_items(raw: Any) -> list[str]:
+        """UI 의 {역할: {단계: {model, effort}}} → ["역할.단계.model=값", ...] (검증은 parse_set_step·Config.validate)"""
+        if raw in (None, "", {}):
+            return []
+        if not isinstance(raw, dict):
+            raise ApiError(400, "step_overrides 는 객체여야 합니다.")
+        items: list[str] = []
+        for role, steps in raw.items():
+            if not isinstance(steps, dict):
+                raise ApiError(400, f"step_overrides.{role} 는 객체여야 합니다.")
+            for step, vals in steps.items():
+                if not isinstance(vals, dict):
+                    raise ApiError(400, f"step_overrides.{role}.{step} 는 객체여야 합니다.")
+                for k, v in vals.items():
+                    v = str(v or "").strip()
+                    if v:
+                        if any(c in f"{role}{step}{k}" for c in ".="):
+                            raise ApiError(400, "step_overrides 의 이름에 '.' 이나 '=' 를 쓸 수 없습니다.")
+                        items.append(f"{role}.{step}.{k}={v}")
+        return items
 
     def resume(self, payload: dict[str, Any]) -> dict[str, Any]:
         wd = self.project(payload.get("project"))
@@ -577,7 +612,9 @@ class Dashboard:
                 "synth": cfg.synth_name,
                 "debate_rounds": cfg.debate_rounds, "max_review": cfg.max_review,
                 # 단계별 강도가 있으면 effort 를 비워 둔다: 화면이 그 값을 다시 넘기면 단계별 설정이 지워진다
-                **{n: {"model": getattr(cfg, n).model,
+                # 단계별 모델이 있으면 model 도 비워 둔다(같은 이유, DESIGN.md 30.2)
+                **{n: {"model": "" if getattr(cfg, n).step_model else getattr(cfg, n).model,
+                       "model_base": getattr(cfg, n).model, "step_model": dict(getattr(cfg, n).step_model),
                        "effort": "" if getattr(cfg, n).step_effort else getattr(cfg, n).effort,
                        "effort_label": describe_effort(getattr(cfg, n)),
                        # 순서도용 실제 값 (effort 칸은 위처럼 비워 두지만 그림에는 단계별 강도를 보인다)
