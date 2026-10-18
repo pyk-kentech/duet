@@ -15,6 +15,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from duet.tools import codex_mode_args, codex_top_args
 from duet.agents.base import (
     AgentNotAvailable,
     AgentRequest,
@@ -64,18 +65,19 @@ class CodexAdapter:
     ) -> tuple[list[str], str | None]:
         if self._resumes(req):
             # codex exec resume [OPTIONS] [SESSION_ID] [PROMPT] — --sandbox·-C 가 없다 (DESIGN.md 21.3)
-            cmd = [self.agent_cfg.bin, *self.agent_cfg.resume_args,
+            cmd = [self.agent_cfg.bin, *codex_top_args(self.cfg, req), *self.agent_cfg.resume_args,
                    *self.model_args(self._effort(req), self._model(req)),
-                   *(self.agent_cfg.resume_read_args or self.agent_cfg.read_args)]
+                   *codex_mode_args(self.cfg, self.agent_cfg, req, resume=True)]
             if schema_path is not None:
                 cmd += ["--output-schema", str(schema_path)]
             cmd += ["--output-last-message", str(last_message_path), "--", req.resume_session]  # type: ignore[list-item]
             if prompt_via_stdin(req.prompt, self.cfg.prompt_arg_max_bytes, self.agent_cfg.bin):
                 return [*cmd, STDIN_MARKER], req.prompt
             return [*cmd, req.prompt], None
-        mode_args = self.agent_cfg.read_args if req.mode is Mode.READ else self.agent_cfg.write_args
+        mode_args = codex_mode_args(self.cfg, self.agent_cfg, req, resume=False)   # 권한·첨부·브라우저 (33장)
         cmd = [
             self.agent_cfg.bin,
+            *codex_top_args(self.cfg, req),
             *self.agent_cfg.base_args,
             *self.model_args(self._effort(req), self._model(req)),
             "-C", str(req.cwd),

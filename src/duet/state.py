@@ -80,6 +80,8 @@ class RunState:
     issues: list[dict] = field(default_factory=list)                  # 지적 원장 (DESIGN.md 22.1)
     arbiter: dict | None = None                                       # 중재 결과 (DESIGN.md 23장)
     report: str | None = None                                         # 결과 요약 기록 파일 (DESIGN.md 32장)
+    attachments: list[str] = field(default_factory=list)              # 첨부 파일 (실행 폴더 기준, DESIGN.md 33.3)
+    browser: dict = field(default_factory=dict)                       # 라운드 → 브라우저 확인 기록 (DESIGN.md 33.4)
     test_guard: dict[str, dict] = field(default_factory=dict)         # round → 테스트 변경 경고 (DESIGN.md 24.1)
     limit_wait: dict | None = None                                    # 한도 대기 중이면 {agent, step, until, reason} (25.1)
     limit_waited_sec: float = 0.0                                     # 한도 대기에 쓴 시간 합

@@ -169,7 +169,7 @@ def test_claude_reviewer_told_it_cannot_run(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(orch_mod, "make_agents", factory)
     wd = tmp_path / "w"
-    assert main(["run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0",
+    assert main(["run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", "--set", "access=standard",
                  "--implementer", "codex", "--reviewer", "claude"]) == 0
     review = next(c for c in seen["claude"].calls if c.step == "review").prompt
     assert "명령을 실행할 수 없다" in review and "좁게 실행해라" not in review and "재현 테스트로 내라" in review
@@ -193,9 +193,11 @@ def test_codex_reviewer_and_claude_with_bash(tmp_path: Path, monkeypatch):
 
     from tests.helpers import make_ctx
 
-    ctx = make_ctx(tmp_path / "x", overrides={"claude": {"read_args": ["--allowedTools", "Read,Glob,Grep,Bash"]}})
+    ctx = make_ctx(tmp_path / "x", overrides={"access": "standard",
+                                              "claude": {"read_args": ["--allowedTools", "Read,Glob,Grep,Bash"]}})
     assert ctx.can_run_commands("claude") and ctx.can_run_commands("codex")
-    assert not make_ctx(tmp_path / "y").can_run_commands("claude")
+    assert not make_ctx(tmp_path / "y", overrides={"access": "standard"}).can_run_commands("claude")
+    assert make_ctx(tmp_path / "z").can_run_commands("claude")               # 권한 full(기본)은 명령 가능 (33.5)
 
 
 def test_audit_run_instruction_by_cli(tmp_path: Path, monkeypatch):
@@ -203,7 +205,8 @@ def test_audit_run_instruction_by_cli(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(orch_mod, "make_role_agents", recording(store, codex={"approve_on_review": 1},
                                                                 security={"approve_on_review": 1}))
     wd = tmp_path / "w"
-    assert main(["run", "t", "--workdir", str(wd), "--mock", "--workflow", "secure", "--debate-rounds", "0"]) == 0
+    assert main(["run", "t", "--workdir", str(wd), "--mock", "--workflow", "secure", "--debate-rounds", "0",
+                 "--set", "access=standard"]) == 0
     audit = store["rounds"][0]["auditor"].calls[0].prompt   # auditor 는 claude
     assert "명령을 실행할 수 없다" in audit and "{run_instruction}" not in audit
 

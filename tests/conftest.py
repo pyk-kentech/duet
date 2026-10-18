@@ -47,6 +47,8 @@ def fake_cfg(fake_bin: Path) -> Config:
             "claude": {"bin": str(fake_bin / "claude")},
             "codex": {"bin": str(fake_bin / "codex")},
             "timeout_sec": 20,
+            # 인자를 그대로 확인하는 시험들은 예전 권한 기준. full·웹·조회는 test_m27 에서 따로 (DESIGN.md 33장)
+            "access": "standard", "web_search": "off", "package_lookup": False,
         },
     )
 

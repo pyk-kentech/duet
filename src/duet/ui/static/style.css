@@ -948,3 +948,12 @@ svg.ico { width: 16px; height: 16px; flex: 0 0 auto; fill: none; stroke: current
 .result-body { font-size: 14px; }
 .result-body h2 { font-size: 14.5px; margin: 14px 0 6px; }
 .result-body h2:first-child { margin-top: 4px; }
+
+/* ---- 과제 첨부 (DESIGN.md 33.3) */
+.attach-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.attach-btn { cursor: pointer; }
+.attach-list { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.attach-list li { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.attach-list:empty { display: none; }
+.attach-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.chip-warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }

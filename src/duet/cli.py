@@ -67,6 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
                                 "단계: propose, critique, synthesize, implement, fix, review, rereview(2라운드부터 리뷰)"),
         p_run.add_argument(f"--{agent}-step-model", metavar="STEP=MODEL,...",
                            help=f"{agent} 단계별 모델 (예: implement={example.split(', ')[-1]}). 단계는 --{agent}-step-effort 와 같음")
+    p_run.add_argument("--attach", action="append", default=None, metavar="FILE",
+                       help="과제와 함께 줄 파일(여러 번): 화면 시안·참고 문서·스크린샷. 최대 10개·합 20MB")
     p_run.add_argument("--set-step", action="append", default=None, metavar="ROLE.STEP.KEY=VALUE",
                        help="칸(역할·단계) 하나의 모델·강도 (여러 번). 예: worker.part.model=claude-haiku-5-5, codex.review.effort=xhigh")
     p_run.set_defaults(func=cmd_run)
@@ -199,6 +201,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         force=args.force,
         # --set 은 고급 설정 (DESIGN.md 28.4). 같은 설정의 전용 플래그를 주면 그쪽이 이긴다
         overrides={**assigned, **{k: v for k, v in explicit.items() if v is not None}},
+        attachments=[Path(x) for x in (args.attach or [])],
     )
     return Orchestrator().run(opts).exit_code
 

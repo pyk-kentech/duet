@@ -15,6 +15,7 @@ import json
 import re
 from pathlib import Path
 
+from duet.tools import claude_mode_args
 from duet.agents.base import (
     AgentNotAvailable,
     AgentRequest,
@@ -59,13 +60,13 @@ class ClaudeCodeAdapter:
     # ---------------------------------------------------------------- build
     def build_command(self, req: AgentRequest) -> tuple[list[str], str | None]:
         """(명령어, stdin 텍스트)를 돌려준다. 프롬프트가 길면 stdin으로 넘긴다."""
-        mode_args = self.agent_cfg.read_args if req.mode is Mode.READ else self.agent_cfg.write_args
+        # 권한·도구는 권한 수준(access)·단계에 따라 (DESIGN.md 33장)
+        mode_args = claude_mode_args(self.cfg, self.agent_cfg, req)
         effort = req.effort if req.effort is not None else self.agent_cfg.effort_for(req.step, req.round)
         base = (self.agent_cfg.resume_args or self.agent_cfg.base_args) if req.resume_session else self.agent_cfg.base_args
-        if req.resume_session and self.agent_cfg.resume_read_args and req.mode is Mode.READ:
-            mode_args = self.agent_cfg.resume_read_args
         cmd = [self.agent_cfg.bin, *base, *self.model_args(effort, self.agent_cfg.model_for(req.step, req.round)), *mode_args]
-        if self.cfg.claude_sandbox and req.mode is Mode.WRITE and self.agent_cfg.sandbox_settings:
+        if (self.cfg.claude_sandbox and self.cfg.access != "full" and req.mode is Mode.WRITE
+                and self.agent_cfg.sandbox_settings):
             cmd += ["--settings", self.agent_cfg.sandbox_settings]   # OS 샌드박스 (DESIGN.md 24.3)
         if req.output_schema is not None:
             cmd += ["--json-schema", json.dumps(req.output_schema, ensure_ascii=False)]

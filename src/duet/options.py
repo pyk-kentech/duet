@@ -13,7 +13,7 @@ from typing import Any
 
 from duet.config import Config, ConfigError, load_config
 
-GROUPS = {"run": "실행", "review": "리뷰", "safety": "안전", "limits": "시간·한도"}
+GROUPS = {"run": "실행", "tools": "권한·도구", "review": "리뷰", "safety": "안전", "limits": "시간·한도"}
 _TEXT_RE = re.compile(r"^[A-Za-z0-9._:\[\]/-]{0,80}$")
 
 
@@ -44,6 +44,14 @@ OPTIONS: tuple[Option, ...] = (
     Option("review_gates", "판정 관문", "근거 없는 막는 지적, 2라운드부터 범위 밖 새 지적을 P3 로 낮춘다 (22장).", "bool", "review"),
     Option("spec_gate", "요구 근거 관문", "취향 지적, 과제·설계에서 찾을 수 없는 요구 인용을 P3 로 낮춘다 (25.2).", "bool", "review"),
     Option("arbiter", "분쟁 중재자", "리뷰가 수렴하지 않거나 상한에 닿으면 한 번 열린 지적을 정리한다 (23장).", "bool", "review"),
+    Option("access", "에이전트 권한", "full: 모든 도구·명령·네트워크(작업 폴더 밖 변경도 막지 않음). standard: 읽기 단계는 읽기 도구만, "
+           "쓰기 단계는 편집·명령, Codex 는 샌드박스 (33.5).", "choice", "tools", ("full", "standard"), run_dialog=True),
+    Option("web_search", "웹 검색", "최신 문서·API·버전을 웹에서 찾게 한다. 권한 standard 면 읽기 단계에서만 (33.1).", "choice", "tools",
+           ("on", "off"), run_dialog=True),
+    Option("package_lookup", "패키지 버전 조회", "권한 standard 의 읽기 단계에 npm view·pip index versions 같은 조회 명령만 허용 (33.2).",
+           "bool", "tools"),
+    Option("browser_check", "브라우저 확인", "auto: 웹 화면이 있는 프로젝트면 리뷰 때 앱을 띄우고 리뷰어가 필요하면 브라우저로 확인 (33.4).",
+           "choice", "tools", ("auto", "off"), run_dialog=True),
     Option("report", "결과 요약", "실행이 끝나면 작은 모델이 만든 것과 실행 방법을 정리한다 (32장).", "bool", "run"),
     Option("report_agent", "결과 요약 CLI", "결과 요약에 쓸 CLI.", "choice", "run", ("claude", "codex")),
     Option("report_model", "결과 요약 모델", "결과 요약 모델(작은 모델 권장).", "text", "run"),

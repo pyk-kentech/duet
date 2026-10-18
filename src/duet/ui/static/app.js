@@ -435,6 +435,7 @@ const TIPS = {
   root: '프로젝트 폴더를 만들 상위 폴더입니다. 자주 쓰는 위치는 설정에 저장해 두면 여기에 나옵니다.',
   name: '새로 만들 프로젝트 폴더 이름입니다. "위치 / 이름"이 작업 폴더가 됩니다.',
   project: '프로젝트 폴더의 전체 경로입니다. 없는 폴더면 새로 만듭니다.',
+  attach: '과제와 함께 줄 파일입니다. 이미지·PDF·텍스트를 붙이면 설계·구현·리뷰 모델이 열어 봅니다 (최대 10개, 합 20MB).',
   task: '무엇을 만들지 평소 말로 적으세요. 원하는 기능과 제약을 자세히 쓸수록 설계가 정확해집니다.',
   implementer: '코드를 직접 작성하고, 리뷰를 받으면 고치는 AI 입니다.',
   workflow: '미리 정해 둔 역할군과 단계 순서입니다. classic 은 아래의 구현·리뷰·종합 설정을 그대로 씁니다. 다른 워크플로는 역할을 템플릿에서 정합니다(duet workflows 로 목록 확인).',
@@ -1216,6 +1217,10 @@ class RunView {
       h('span', { class: 'chip' }, 'claude ', h('b', null, modelOf('claude'))),
       h('span', { class: 'chip' }, 'codex ', h('b', null, modelOf('codex'))),
       c.mock ? h('span', { class: 'chip' }, 'mock') : null,
+      c.access ? h('span', { class: `chip${c.access === 'full' ? ' chip-warn' : ''}`, title: '에이전트 권한 (DESIGN.md 33.5)' }, '권한 ', h('b', null, c.access)) : null,
+      c.web_search === 'on' ? h('span', { class: 'chip' }, '웹 검색') : null,
+      Object.keys(st.browser || {}).some(k => (st.browser[k] || {}).url) ? h('span', { class: 'chip' }, '브라우저 확인') : null,
+      (st.attachments || []).length ? h('span', { class: 'chip', title: st.attachments.join('\n') }, `첨부 ${st.attachments.length}개`) : null,
       c.block_severity ? h('span', { class: 'chip' }, '반려 기준 ', h('b', null, { P1: 'P1', P2: 'P1·P2', P3: 'P1·P2·P3' }[c.block_severity] || c.block_severity)) : null,
       c.test_command ? h('span', { class: 'chip' }, '테스트 ', h('b', null, c.test_command === 'auto' ? '자동' : c.test_command)) : null,
       st.base_commit ? withTip(h('span', { class: 'chip' }, '기준 ', h('b', { class: 'mono' }, st.base_commit)), 'base') : null,
@@ -2588,7 +2593,10 @@ function renderWorkflowDiagram() {
       }
       const guards = [gatesOn ? '판정 관문' : null, gatesOn && dlgOption('spec_gate') !== false ? '요구 근거' : null,
         dlgOption('test_guard') !== false ? '테스트 변조 감지' : null, dlgOption('wait_on_limit') ? '한도 대기 후 재개' : null,
-        dlgOption('claude_sandbox') ? 'Claude 샌드박스' : null].filter(Boolean);
+        dlgOption('claude_sandbox') && dlgOption('access') !== 'full' ? 'Claude 샌드박스' : null,
+        dlgOption('access') === 'full' ? '권한 full' : '권한 standard',
+        dlgOption('web_search') !== 'off' ? '웹 검색' : null,
+        dlgOption('browser_check') !== 'off' ? '브라우저 확인 (웹 앱일 때)' : null].filter(Boolean);
       stage('구현 · 리뷰', [`최대 ${maxR}회`, reviewers.length > 1 ? `리뷰어 ${reviewers.length}명 모두 승인해야 통과` : null],
         h('div', { class: 'wf-row wf-flow' },
           implNode,
@@ -2642,6 +2650,8 @@ async function openRunDialog({ machine = LOCAL, project = '', defaults = null, h
   form.reset();
   formError.hidden = true;
   dlgState = { fixedProject: project || null, stepOv: {} };
+  attachFiles = [];
+  renderAttachments();
   const f = form.elements;
   f.machine.replaceChildren(...app.groups.map(g => h('option', { value: g.id }, g.local ? '이 머신' : g.name)));
   f.machine.value = machine;
@@ -2693,6 +2703,37 @@ $('#sidebar-new-run').addEventListener('click', () => {
 });
 dlg.addEventListener('click', ev => { if (ev.target.closest('[data-close]')) dlg.close(); });
 form.elements.machine.addEventListener('change', () => { fillRoots(); fillWorkflows(form.elements.machine.value, '', form.elements.workflow.value); });
+// 과제 첨부 (DESIGN.md 33.3): 고른 파일은 시작할 때 base64 로 보낸다
+const ATTACH_MAX_FILES = 10, ATTACH_MAX_BYTES = 20 * 1024 * 1024;
+let attachFiles = [];
+function fmtBytes(n) { return n >= 1048576 ? `${(n / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`; }
+function renderAttachments() {
+  const list = $('#attach-list'), sum = $('#attach-sum');
+  if (!list) return;
+  const total = attachFiles.reduce((a, f) => a + f.size, 0);
+  list.replaceChildren(...attachFiles.map((f, i) => h('li', null, h('span', { class: 'attach-name' }, f.name),
+    h('span', { class: 'muted small' }, fmtBytes(f.size)),
+    h('button', { type: 'button', class: 'icon-btn', 'aria-label': `${f.name} 빼기`, onclick: () => { attachFiles.splice(i, 1); renderAttachments(); } }, '×'))));
+  sum.textContent = attachFiles.length ? `${attachFiles.length}개 · ${fmtBytes(total)}` : '화면 시안·참고 문서·스크린샷을 붙이면 설계·구현 모델이 함께 봅니다.';
+}
+function readAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve({ name: file.name, data: String(r.result).split(',', 2)[1] || '' });
+    r.onerror = () => reject(r.error || new Error(file.name));
+    r.readAsDataURL(file);
+  });
+}
+$('#attach-input').addEventListener('change', ev => {
+  const add = [...ev.target.files];
+  ev.target.value = '';
+  for (const f of add) {
+    if (attachFiles.length >= ATTACH_MAX_FILES) { toast(`첨부는 ${ATTACH_MAX_FILES}개까지입니다.`, true); break; }
+    if (attachFiles.reduce((a, x) => a + x.size, 0) + f.size > ATTACH_MAX_BYTES) { toast('첨부는 합쳐서 20MB 까지입니다.', true); break; }
+    attachFiles.push(f);
+  }
+  renderAttachments();
+});
 {
   const projIn = form.elements.project;
   const row = h('div', { class: 'path-row' });
@@ -2727,6 +2768,10 @@ form.addEventListener('submit', async ev => {
     options: collectOptions($('#run-advanced-body'), false),
     step_overrides: stepOverridesForSubmit(),
   };
+  if (attachFiles.length) {
+    try { body.attachments = await Promise.all(attachFiles.map(readAsBase64)); }
+    catch (e) { formError.textContent = `첨부를 읽지 못했습니다: ${e.message || e}`; formError.hidden = false; return; }
+  }
   const problem = !body.project ? (f.root.value === CUSTOM ? '작업 폴더 경로를 입력하세요.' : '폴더 이름을 입력하세요.')
     : !/^([\/~]|[A-Za-z]:[\\/]|\\\\)/.test(body.project) ? '작업 폴더는 절대 경로여야 합니다 (/…, ~/…, C:\\…).'
     : !body.task.trim() ? '과제를 입력하세요.'

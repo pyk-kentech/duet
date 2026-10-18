@@ -229,18 +229,19 @@ def cmd(cfg: Config, mode: Mode) -> list[str]:
 
 
 def test_sandbox_flag_only_for_write_when_enabled():
-    assert "--settings" not in cmd(Config(), Mode.WRITE)
-    on = Config(claude_sandbox=True)
+    assert "--settings" not in cmd(Config(access="standard"), Mode.WRITE)
+    on = Config(claude_sandbox=True, access="standard")
     c = cmd(on, Mode.WRITE)
     settings = json.loads(c[c.index("--settings") + 1])
     assert settings["sandbox"]["enabled"] is True and settings["sandbox"]["allowUnsandboxedCommands"] is False
     assert "--settings" not in cmd(on, Mode.READ)
+    assert "--settings" not in cmd(Config(claude_sandbox=True), Mode.WRITE)     # 권한 full 은 샌드박스를 쓰지 않음 (33.5)
 
 
 def test_sandbox_settings_config(tmp_path):
     wd = tmp_path / "w"
     wd.mkdir()
-    (wd / "duet.toml").write_text('claude_sandbox = true\n[claude]\nsandbox_settings = \'{"sandbox": {"enabled": true}}\'\n',
+    (wd / "duet.toml").write_text('access = "standard"\nclaude_sandbox = true\n[claude]\nsandbox_settings = \'{"sandbox": {"enabled": true}}\'\n',
                                   encoding="utf-8")
     cfg = load_config(wd, global_defaults={})
     c = cmd(cfg, Mode.WRITE)
