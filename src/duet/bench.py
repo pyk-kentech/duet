@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import json
+import os
 import re
 import shutil
 import sys
@@ -157,7 +158,7 @@ def default_pytest_cmd() -> list[str]:
     """채점용 pytest. 지금 인터프리터에 pytest 가 있으면 그것, 없으면 uvx, 그것도 없으면 python3 -m pytest."""
     if importlib.util.find_spec("pytest") is not None:
         return [sys.executable, "-m", "pytest"]
-    uvx = shutil.which("uvx", path=augmented_path(None))
+    uvx = shutil.which("uvx", path=augmented_path(os.environ.get("PATH")))
     if uvx:
         return [uvx, "pytest"]
     return [procs.PYTHON_CMD, "-m", "pytest"]

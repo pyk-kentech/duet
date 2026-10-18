@@ -9,7 +9,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from duet.agents.base import Mode
 
 WEB_TOOLS = ("WebSearch", "WebFetch")
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit")
@@ -21,11 +20,16 @@ PLAYWRIGHT = "playwright"
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
 
 
-def web_allowed(cfg, step: str, mode: Mode) -> bool:
+def _is_read(mode) -> bool:
+    """Mode.READ 인가. duet.agents 를 불러오지 않는다(agents 어댑터가 이 모듈을 불러 순환이 생김)."""
+    return getattr(mode, "value", mode) == "read"
+
+
+def web_allowed(cfg, step: str, mode) -> bool:
     """이 호출에 웹 검색을 줄까 (33.1): full 이면 모든 단계, standard 면 읽기 단계만."""
     if getattr(cfg, "web_search", "off") != "on" or step in NO_WEB_STEPS:
         return False
-    return cfg.access == "full" or mode is Mode.READ
+    return cfg.access == "full" or _is_read(mode)
 
 
 def can_run_commands(cfg, read_args: Sequence[str]) -> bool:
@@ -72,7 +76,7 @@ class Browser:
 
 def claude_mode_args(cfg, ac, req) -> list[str]:
     """Claude 의 권한·도구 인자. full 은 권한 우회 + 단계별로 뺄 도구, standard 는 설정의 인자 + 더할 도구."""
-    read = req.mode is Mode.READ
+    read = _is_read(req.mode)
     web = web_allowed(cfg, req.step, req.mode)
     if cfg.access == "full":
         args = ["--permission-mode", "bypassPermissions"]
@@ -104,7 +108,7 @@ def codex_mode_args(cfg, ac, req, *, resume: bool) -> list[str]:
     elif resume:
         args = list(ac.resume_read_args or ac.read_args)
     else:
-        args = list(ac.read_args if req.mode is Mode.READ else ac.write_args)
+        args = list(ac.read_args if _is_read(req.mode) else ac.write_args)
     for img in req.images:
         args += ["-i", str(img)]
     if req.browser is not None:

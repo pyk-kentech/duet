@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import socket
@@ -56,7 +57,7 @@ def detect(workdir: Path) -> WebApp | None:
 
 def playwright_tool(url: str) -> Browser | None:
     """Playwright MCP 를 띄울 명령. npx 가 없으면 None."""
-    npx = shutil.which("npx", path=augmented_path(None))
+    npx = shutil.which("npx", path=augmented_path(os.environ.get("PATH")))
     if not npx:
         return None
     chrome = any(Path(p).is_file() for p in (

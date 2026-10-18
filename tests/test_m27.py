@@ -209,6 +209,27 @@ def test_detect_web_app(tmp_path: Path):
     assert app.kind == "static" and app.port and str(app.port) in app.command
 
 
+def test_playwright_tool_finds_npx_on_path(tmp_path: Path, monkeypatch):
+    # 실제 실행에서 시스템 PATH 를 빼고 찾아 'npx 가 없어'로 건너뛴 회귀
+    name = "npx.cmd" if sys.platform == "win32" else "npx"
+    fake = tmp_path / name
+    fake.write_text("@echo off\n" if sys.platform == "win32" else "#!/bin/sh\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr(browserlib.procs, "extra_bin_dirs", lambda: [])
+    tool = browserlib.playwright_tool("http://127.0.0.1:5173/")
+    assert tool is not None and Path(tool.command).parent == tmp_path
+    assert tool.args[:2] == ["-y", "@playwright/mcp@latest"] and "--headless" in tool.args
+
+
+@pytest.mark.parametrize("module", ["duet.tools", "duet.browser", "duet.attachments"])
+def test_new_modules_import_standalone(module: str):
+    # duet.tools 가 duet.agents 를 불러 순환 import 가 나던 회귀: 새 프로세스에서 단독으로 불러 본다
+    import subprocess
+    proc = subprocess.run([sys.executable, "-c", f"import {module}"], capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+
+
 def _closed(port: int) -> bool:
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=0.5):
