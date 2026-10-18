@@ -32,6 +32,8 @@ class AgentRequest:
     resume_session: str | None = None    # 이 세션을 이어서 부른다 (DESIGN.md 21.3)
     fallback_prompt: str | None = None   # 이어가기가 실패하면 새 세션으로 보낼 전체 프롬프트
     effort: str | None = None            # 추론 강도를 직접 정함(세션 이어가기는 세션의 강도 유지, DESIGN.md 21.3)
+    images: list = field(default_factory=list)   # 첨부 이미지 경로 (Codex 는 -i 로, DESIGN.md 33.3)
+    browser: object | None = None                # 브라우저 확인 도구 tools.Browser (DESIGN.md 33.4)
 
 
 @dataclass

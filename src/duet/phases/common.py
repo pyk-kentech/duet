@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping
 
+from duet.attachments import ATTACH_STEPS, is_image, prompt_note as attachments_note
 from duet.agents.base import AgentAdapter, AgentRequest, AgentResult, Mode
 from duet.config import Config, dedup_agent_config
 from duet.prompts import render
@@ -124,7 +125,9 @@ class PhaseContext:
             ac = self.workflow.roles[role].agent_config(self.cfg)
         else:
             ac = self.cfg.agent(cli)
-        return any("Bash" in a for a in ac.read_args)
+        from duet.tools import can_run_commands
+
+        return can_run_commands(self.cfg, ac.read_args)
 
     def prompt(self, role: str, step: str, **values: object) -> str:
         """step 의 프롬프트. 역할이 템플릿을 바꿨으면 그것을 쓰고, 사전 조사·변경 설계 안내·역할 지시를 붙인다."""
@@ -141,9 +144,40 @@ class PhaseContext:
             notes = self._explore_notes()
             if notes:
                 text += "\n\n## 사전 조사 (duet 가 먼저 기존 코드를 조사한 결과)\n\n" + notes
+        text += self._tools_note(step)
+        if step in ATTACH_STEPS and self.state.attachments:
+            text += "\n\n" + attachments_note([self._rel(self.run_dir / a) for a in self.state.attachments])
         if r is not None and r.instructions.strip():
             text += "\n\n## 이 역할에 대한 추가 지시\n\n" + r.instructions.strip()
         return text
+
+    def _rel(self, path: Path) -> str:
+        try:
+            return path.relative_to(self.workdir).as_posix()
+        except ValueError:
+            return str(path)
+
+    def _tools_note(self, step: str) -> str:
+        """최신 정보 안내 (DESIGN.md 33.1·33.2): 웹 검색·버전 조회를 쓸 수 있는 단계에만."""
+        cfg = self.cfg
+        design = step in ("propose", "critique", "synthesize", "explore")
+        coding = step in ("implement", "fix")
+        web = cfg.web_search == "on" and (design or step in ("review", "arbitrate", "audit")
+                                          or (coding and cfg.access == "full"))
+        out = ""
+        if web:
+            out += ("\n\n## 최신 정보\n\n라이브러리 버전·API·도구 사용법처럼 바뀌는 정보는 기억에 기대지 말고 웹에서 확인해라"
+                    "(공식 문서 우선). 근거로 쓴 출처는 링크로 적어라.")
+        if design and step != "critique" and (cfg.access == "full" or cfg.package_lookup or cfg.web_search == "on"):
+            out += ("\n\n패키지 최신 버전은 `npm view <이름> version`, `pip index versions <이름>` 같은 명령이나 웹 검색으로 "
+                    "확인하고, 고정할 버전을 설계에 적어라.")
+        return out
+
+    def images_for(self, step: str) -> list[str]:
+        """Codex 에 -i 로 붙일 첨부 이미지 (DESIGN.md 33.3)."""
+        if step not in ATTACH_STEPS:
+            return []
+        return [str(self.run_dir / a) for a in self.state.attachments if is_image(a)]
 
     def _explore_notes(self) -> str:
         parts = []
@@ -181,6 +215,7 @@ class PhaseContext:
         transform: Callable[[AgentResult], str] | None = None,
         effort: str | None = None,
         optional: bool = False,
+        browser: object | None = None,
     ) -> CallOutcome | None:
         """에이전트를 호출하고 기록·상태를 갱신한다. 실패 정책을 적용한다.
 
@@ -191,7 +226,8 @@ class PhaseContext:
         req = AgentRequest(prompt=prompt, cwd=self.workdir, mode=mode,
                            timeout_sec=self.cfg.timeout_sec, step=step, round=round_,
                            output_schema=output_schema, resume_session=resume_session,
-                           fallback_prompt=fallback_prompt, effort=effort)
+                           fallback_prompt=fallback_prompt, effort=effort,
+                           images=self.images_for(step), browser=browser)
         attempt = 0
         limit_hits = 0
         while True:

@@ -45,6 +45,7 @@ from duet.state import (
     latest_run_dir,
     list_run_dirs,
 )
+from duet import attachments
 from duet.transcript import Transcript
 from duet.workflow import SOURCE_LABELS, Workflow, WorkflowError, classic, load_workflow
 from duet.workspace import GitError, WorkdirRefused, check_workdir
@@ -59,6 +60,7 @@ CONFIG_KEYS = ("workflow", "implementer", "reviewer", "synth", "debate_rounds", 
                "review_session_rounds", "review_gates", "arbiter", "test_guard", "claude_sandbox", "spec_gate",
                "wait_on_limit", "limit_wait_max_min", "dedup", "dedup_agent", "dedup_model", "dedup_effort",
                "report", "report_agent", "report_model", "report_effort",
+               "access", "web_search", "package_lookup", "browser_check",
                "timeout_sec", "test_timeout_sec", "max_diff_chars")
 CONSOLE_LOG = "console.log"
 CHANGES_DIR = "docs/changes"   # 기존 프로젝트의 변경 설계를 두는 곳 (DESIGN.md 19.5)
@@ -83,6 +85,7 @@ class RunOptions:
     force: bool = False
     overrides: dict[str, Any] = field(default_factory=dict)   # CONFIG_KEYS 중 CLI 로 지정된 것
     register: bool = True     # UI 프로젝트 목록에 등록 (벤치마크 실행은 안 함, DESIGN.md 28.2)
+    attachments: list[Path] = field(default_factory=list)     # 과제 첨부 (DESIGN.md 33.3)
 
 
 @dataclass
@@ -138,6 +141,10 @@ class Orchestrator:
             raise OrchestratorError(str(e)) from e
         if opts.design_only and opts.skip_design:
             raise OrchestratorError("--design-only 와 --skip-design 은 함께 쓸 수 없습니다.")
+        try:
+            attach = attachments.check(opts.attachments)
+        except attachments.AttachmentError as e:
+            raise OrchestratorError(str(e)) from e
         workdir.mkdir(parents=True, exist_ok=True)
 
         cfg = self._load_config(workdir, opts.overrides)
@@ -157,6 +164,7 @@ class Orchestrator:
             lock.set_run(run_dir.name)
             state = RunState(run_id=run_dir.name, task=opts.task, config=self._snapshot(cfg, opts),
                              workflow=None if wf.is_classic else wf.to_dict())
+            state.attachments = attachments.copy_into(run_dir, attach)
             debate = wf.first("debate")
             if debate is not None and debate.output == "change" and not opts.skip_design:
                 state.design_doc = f"{CHANGES_DIR}/{run_dir.name}.md"   # DESIGN.md 19.5
@@ -165,6 +173,8 @@ class Orchestrator:
             state.save(run_dir)
             with self._console_to(run_dir):
                 self.log(f"실행 시작: {run_dir.name}  (기록: {run_dir})")
+                self.log(f"권한: {cfg.access} · 웹 검색 {cfg.web_search} · 브라우저 확인 {cfg.browser_check}"
+                         + (f" · 첨부 {len(state.attachments)}개" if state.attachments else ""))
                 if wf.is_classic:
                     design = "설계 생략(기존 DESIGN.md)" if opts.skip_design else \
                         f"종합: {cfg.synth_name} / 토론 {cfg.debate_rounds}라운드"
@@ -516,6 +526,8 @@ class Orchestrator:
             "review_gates": cfg.review_gates, "arbiter": cfg.arbiter,
             "test_guard": cfg.test_guard, "claude_sandbox": cfg.claude_sandbox, "spec_gate": cfg.spec_gate,
             "wait_on_limit": cfg.wait_on_limit, "limit_wait_max_min": cfg.limit_wait_max_min,
+            "access": cfg.access, "web_search": cfg.web_search, "package_lookup": cfg.package_lookup,
+            "browser_check": cfg.browser_check,
             "report": cfg.report, "report_agent": cfg.report_agent, "report_model": cfg.report_model,
             "report_effort": cfg.report_effort,
             "dedup": cfg.dedup, "dedup_agent": cfg.dedup_agent, "dedup_model": cfg.dedup_model,

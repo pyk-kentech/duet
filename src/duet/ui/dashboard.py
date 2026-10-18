@@ -430,8 +430,21 @@ class Dashboard:
             raise ApiError(400, f"'설계 생략'인데 {wd / DESIGN_FILENAME} 이 없습니다.")
         self._ensure_not_busy(wd)
 
+        uploads = self._decode_attachments(payload.get("attachments"))
         wd.mkdir(parents=True, exist_ok=True)
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        attach_paths = []
+        if uploads:
+            adir = wd / DUET_DIR / UI_DIR / "attachments" / stamp
+            adir.mkdir(parents=True, exist_ok=True)
+            for name, data in uploads:
+                target = adir / name
+                n = 2
+                while target.exists():
+                    target = adir / f"{Path(name).stem}-{n}{Path(name).suffix}"
+                    n += 1
+                target.write_bytes(data)
+                attach_paths.append(target)
         task_file = wd / DUET_DIR / UI_DIR / "tasks" / f"{stamp}.md"
         task_file.parent.mkdir(parents=True, exist_ok=True)
         task_file.write_text(task, encoding="utf-8")
@@ -449,12 +462,40 @@ class Dashboard:
             argv += ["--set", f"{key}={to_cli(value)}"]
         for item in step_items:
             argv += ["--set-step", item]
+        for p in attach_paths:
+            argv += ["--attach", str(p)]
         for on, flag in ((design_only, "--design-only"), (skip_design, "--skip-design"),
                          (mock, "--mock"), (force, "--force")):
             if on:
                 argv.append(flag)
         self.registry.add(wd)
         return self._spawn("run", wd, argv)
+
+    @staticmethod
+    def _decode_attachments(raw: Any) -> list[tuple[str, bytes]]:
+        """UI 가 보낸 [{name, data(base64)}] → [(안전한 이름, 바이트)] (DESIGN.md 33.3)"""
+        import base64
+        import binascii
+
+        from duet.attachments import MAX_FILES, MAX_TOTAL_BYTES, safe_name
+
+        if raw in (None, "", []):
+            return []
+        if not isinstance(raw, list) or len(raw) > MAX_FILES:
+            raise ApiError(400, f"첨부는 {MAX_FILES}개까지입니다.")
+        out, total = [], 0
+        for item in raw:
+            if not isinstance(item, dict) or not isinstance(item.get("data"), str):
+                raise ApiError(400, "첨부 형식이 잘못되었습니다.")
+            try:
+                data = base64.b64decode(item["data"], validate=True)
+            except (binascii.Error, ValueError):
+                raise ApiError(400, f"첨부를 읽을 수 없습니다: {item.get('name')}") from None
+            total += len(data)
+            if total > MAX_TOTAL_BYTES:
+                raise ApiError(400, f"첨부는 합쳐서 {MAX_TOTAL_BYTES // (1024 * 1024)}MB 까지입니다.")
+            out.append((safe_name(str(item.get("name") or "file")), data))
+        return out
 
     @staticmethod
     def _step_items(raw: Any) -> list[str]:

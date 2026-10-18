@@ -67,6 +67,14 @@
           <span class="field-label" data-help="task">과제</span>
           <textarea name="task" rows="5" required placeholder="프롬프트를 입력하세요"></textarea>
         </label>
+        <div class="field" id="attach-field">
+          <span class="field-label" data-help="attach">첨부 <em>선택 · 10개 · 합 20MB</em></span>
+          <div class="attach-row">
+            <label class="btn btn-sm attach-btn">파일 고르기<input type="file" id="attach-input" multiple hidden></label>
+            <span class="muted small" id="attach-sum">화면 시안·참고 문서·스크린샷을 붙이면 설계·구현 모델이 함께 봅니다.</span>
+          </div>
+          <ul class="attach-list" id="attach-list"></ul>
+        </div>
         <label class="field">
           <span class="field-label" data-help="workflow">워크플로</span>
           <select name="workflow"></select>

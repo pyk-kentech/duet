@@ -473,6 +473,10 @@ env_keep = ["CLAUDE_CODE_OAUTH_TOKEN"]
 - 실행이 끝나면 작은 모델이 '무엇을 만들었고 어떻게 실행하는지'를 정리한다. 실행 상세 맨 위에 보이고, 예전 실행은 버튼이나 `duet report` 로 만든다 (32장)
 - ✅ 승인·미승인 뒤 한 번 호출(설계만·중단·실패는 안 함), 실패·한도여도 실행 결과를 바꾸지 않음, 이어하기에서 다시 부르지 않음, `duet report`, UI 표시·만들기 API
 
+### M27. 최신 정보와 첨부 (2026-10-17 사용자 요청으로 추가)
+- 권한 수준(`access`, 기본 full), 웹 검색·문서 읽기, 패키지 최신 버전 조회 명령, 과제 첨부 파일(CLI·UI), 웹 화면이 있는 프로젝트의 브라우저 확인(필요할 때만) (33장)
+- ✅ 권한 수준·단계·설정별로 CLI 인자에 붙는 도구·플래그(`--permission-mode`, `--dangerously-bypass-approvals-and-sandbox`, `--allowedTools`·`--disallowedTools`, `--search`, `-i`, `--mcp-config`·`-c mcp_servers`), 첨부 복사·프롬프트·크기 제한·UI 업로드, 웹 앱 감지와 앱 띄우기·정리(가짜 서버), 설정·순서도 표시. 실제 모델로는 아직 확인하지 않음
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -1192,4 +1196,41 @@ M7(13장) 이후 기능은 계속 늘었는데 UI 는 그대로였다. 실제로
 ### 32.3 보기·만들기
 - 실행 상세 맨 위에 '결과 요약' 카드(마크다운 그대로, '크게 보기'로 가운데 창). 타임라인에도 '결과 요약' 기록으로 남는다.
 - 요약이 없는 끝난 실행(이 기능 전의 실행 포함)에는 '결과 요약 만들기' 버튼: `duet report --workdir <폴더> --run <실행>` 을 작업으로 띄운다(`POST /api/actions/report`). 그 실행의 저장된 설정(모델 등)을 쓰고 작업 폴더를 잠근다. 이미 있으면 '다시 만들기'.
+
+## 33. 최신 정보와 첨부 (2026-10-17 사용자 요청)
+
+에이전트가 자기 학습 지식만으로 설계·구현하면 새 라이브러리·바뀐 API 를 틀린다(사용자: "최신 지식을 써야지"). 웹 검색, 패키지 버전 조회, 사용자가 주는 첨부 자료, 그리고 웹 화면이 있는 결과물의 브라우저 확인을 더한다. 조사만 하는 단계를 따로 두지 않는다: 무엇이 필요한지 아는 쪽(설계·리뷰하는 모델)이 필요할 때 직접 찾는다(30.6).
+
+duet 의 목적은 에이전트 하나보다 나은 최종 결과물이다. 그래서 사용자 결정으로 에이전트 권한을 기본 **full**(모든 도구·명령·네트워크)로 연다(33.5). 안전장치는 권한 대신 duet 쪽에 둔다: 리뷰어 변경 되돌림(16장), 테스트 변조 감지(24.1), duet 가 직접 돌리는 테스트, 소유·되돌림 검사.
+
+### 33.1 웹 검색 (`web_search`, 기본 `on`)
+- `on`: 권한이 full 이면 모든 단계, standard 면 읽기 전용 단계(설계안·비판·종합·사전 조사·리뷰·중재·감사)만. `off`: 어디에도 안 붙인다. 중복 확인·결과 요약에는 붙이지 않는다.
+- Claude: standard 는 그 호출의 `--allowedTools` 에 `WebSearch`, `WebFetch` 를 더하고, full 은 권한 우회로 이미 쓸 수 있으니 `off`·제외 단계에서 `--disallowedTools` 로 뺀다. Codex: `codex --search exec ...`(최상위 옵션, 이어가기도 같음).
+- standard 에서 쓰기 단계를 뺀 이유: 웹 페이지 안의 숨은 지시(프롬프트 인젝션)가 파일 쓰기·명령 실행에 바로 닿는다. full 은 사용자가 그 위험을 받아들인 설정이다.
+- 프롬프트: 켜진 단계에는 "라이브러리 버전·API 처럼 바뀌는 정보는 웹에서 확인하고, 근거로 쓴 출처를 적어라"를 붙인다.
+
+### 33.2 패키지 최신 버전 조회 (`package_lookup`, 기본 켬)
+- 권한 standard 에서만 의미가 있다(full 은 모든 명령을 쓴다). Claude 의 읽기 단계에 조회 전용 명령만 허용: `Bash(npm view:*)`, `Bash(npm info:*)`, `Bash(pip index versions:*)`, `Bash(cargo search:*)`, `Bash(go list -m -versions:*)`. 아무 명령이나 여는 것이 아니다. 쓰기 단계는 원래 Bash 를 쓴다.
+- Codex 의 읽기 전용 샌드박스는 네트워크가 막혀 있어 웹 검색(33.1)으로 확인한다.
+- 프롬프트(설계안·종합·사전 조사): "패키지 최신 버전은 `npm view <이름> version`, `pip index versions <이름>` 으로 확인하고 고정할 버전을 정해라."
+
+### 33.3 첨부 파일
+- `duet run --attach 파일`(여러 번). 실행 폴더의 `attachments/` 로 복사하고(이름이 겹치면 번호), `run.json` 의 `attachments` 에 실행 폴더 기준 경로를 남긴다. 최대 10개, 합 20MB, 이름은 안전한 글자만.
+- 프롬프트(설계안·비판·종합·구현·수정·리뷰)에 `## 첨부 파일` 절: 작업 폴더 기준 경로 목록과 "이미지·PDF 는 파일을 열어서 봐라". Claude 는 Read 로 이미지·PDF 를 본다. Codex 는 이미지(png·jpg·jpeg·gif·webp)를 `-i` 로도 붙인다(이어가기 포함).
+- UI: 새 실행 창의 '첨부' 칸(여러 파일). 브라우저가 파일을 base64 로 보내고(원격 머신도 같은 `_api` stdin), 서버가 작업 폴더의 `.duet/ui/attachments/<시각>/` 에 저장한 뒤 `--attach` 로 넘긴다.
+
+### 33.4 브라우저 확인 (`browser_check`, 기본 `auto`)
+- **필요할 때만**: `auto` 는 결과물이 웹 화면이 있는 프로젝트이고(작업 폴더에 `package.json` 의 `dev`/`start` 스크립트와 `node_modules`, 또는 최상위 `index.html`) `npx` 가 있을 때만 켠다. `off` 는 끈다. 켜져도 리뷰어가 필요하다고 판단할 때만 브라우저를 쓴다.
+- 리뷰 라운드마다 duet 가 앱을 띄운다: `npm run dev`(없으면 `npm start`)를 백그라운드로 띄우고 출력에서 `http://localhost:포트` 를 찾는다(60초). `index.html` 만 있으면 duet 의 파이썬으로 `http.server` 를 빈 포트에 띄운다. 리뷰가 끝나면 프로세스 트리를 끈다. 못 띄우면 기록만 남기고 브라우저 없이 리뷰한다.
+- 리뷰어에게 Playwright MCP(`npx -y @playwright/mcp@latest --headless --isolated`, 브라우저는 설치된 Chrome, 없으면 Edge)를 붙인다. Claude: `--mcp-config <JSON>` + `--allowedTools mcp__playwright`. Codex: `-c mcp_servers.playwright.command=…`, `-c mcp_servers.playwright.args=[…]`. 리뷰 프롬프트에 "앱이 <주소> 에서 돌고 있다. 과제나 설계에 화면·레이아웃·화면 폭·버튼 동작 같은 요구가 있으면 열어서 직접 눌러 보고, 본 것을 지적의 근거로 적어라. 화면과 상관없는 변경이면 쓰지 않아도 된다".
+- 프롬프트에 도구 이름(`mcp__playwright__browser_navigate`·`browser_snapshot`·`browser_click`·`browser_type`·`browser_resize`)을 콕 집어 적는다. 실제 실행(2026-10-18)에서 "브라우저 도구(playwright)"라고만 쓰니 Codex 가 내장 computer-use 플러그인으로 가서 브라우저를 못 찾고 열지 않았다. 이름을 적어 주자 playwright 로 열고·폭을 바꿔 확인했다. 바로 안 보이면 도구 검색으로 찾으라고, 다른 브라우저 도구는 이 앱을 보지 못한다고도 적는다.
+- 실제 실행으로 확인한 것: full 권한에서 Codex 는 MCP 도구를 승인 없이 쓴다. Playwright MCP 는 내려받은 뒤 2초 안에 뜬다(첫 실행은 npx 내려받기만큼 더 걸린다).
+
+### 33.5 권한 수준 (`access`, 기본 `full`)
+- `full`(기본, 사용자 결정 2026-10-17): 에이전트가 모든 도구·명령·네트워크를 쓴다.
+  - Claude: `--permission-mode bypassPermissions`(설정의 `read_args`·`write_args` 의 권한 부분을 대신한다). 읽기 전용 단계는 `--disallowedTools Edit,Write,NotebookEdit` 로 파일 편집 도구만 뺀다(명령 실행·웹·MCP 는 쓴다). `claude_sandbox`(24.3)는 쓰지 않는다.
+  - Codex: `--dangerously-bypass-approvals-and-sandbox`(읽기·쓰기·이어가기 모두, `--sandbox` 대신).
+  - 읽기 단계도 명령을 돌릴 수 있으니 리뷰어가 직접 테스트·앱 실행으로 확인할 수 있다(19.6 의 '명령 실행 가능'). 작업 폴더 안의 변경은 지금처럼 duet 가 되돌린다. **작업 폴더 밖의 변경과 네트워크 사용은 막지 않는다.**
+- `standard`: 지금까지의 권한(Claude 읽기 Read·Glob·Grep, 쓰기 acceptEdits + Read·Edit·Write·Glob·Grep·Bash, Codex read-only·workspace-write 샌드박스) + 33.1·33.2 의 추가분.
+- 설정 화면·새 실행 창의 고급 설정에서 고르고, 실행 상세의 칩과 시작 로그에 보인다.
 

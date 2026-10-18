@@ -54,7 +54,8 @@ class TestClaude:
 
     def test_long_prompt_goes_to_stdin(self, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
         monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
-        cfg = load_config(None, {"claude": {"bin": fake_cfg.claude.bin}, "prompt_arg_max_bytes": 100})
+        cfg = load_config(None, {"claude": {"bin": fake_cfg.claude.bin}, "prompt_arg_max_bytes": 100,
+                                 "access": "standard", "web_search": "off", "package_lookup": False})
         long_prompt = "가" * 101
         a = ClaudeCodeAdapter(cfg)
         cmd, stdin = a.build_command(req(tmp_path, prompt=long_prompt))
@@ -136,7 +137,8 @@ class TestClaude:
         assert "설치" in str(e.value)
 
     def test_custom_flags_from_config(self, fake_cfg: Config, tmp_path: Path):
-        cfg = load_config(None, {"claude": {"bin": fake_cfg.claude.bin, "read_args": ["--tools", "Read"]}})
+        cfg = load_config(None, {"claude": {"bin": fake_cfg.claude.bin, "read_args": ["--tools", "Read"]},
+                                 "access": "standard", "web_search": "off", "package_lookup": False})
         cmd, _ = ClaudeCodeAdapter(cfg).build_command(req(tmp_path))
         assert cmd[-4:] == ["--tools", "Read", "--", "안녕"]
 

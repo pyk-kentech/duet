@@ -28,6 +28,8 @@ resume 키:
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -35,6 +37,7 @@ from duet.agents.base import Mode
 from duet.phases.common import PhaseContext
 from duet.phases.debate import DESIGN_FILENAME
 from duet import arbiter as arb
+from duet import browser as browserlib
 from duet import dedup, gates, revert, testguard
 from duet.dedup import DEDUP_ROLE
 from duet.packet import READ_INSTRUCTION_PACKET, READ_INSTRUCTION_PLAIN, call_sites, changed_symbols
@@ -319,7 +322,45 @@ class BuildPhase:
 
     # ---------------------------------------------------------------- review
     def _review_round(self, i: int, diff_title: str, diff: str) -> tuple[Decision, list[str]]:
-        """이 라운드의 리뷰어들을 차례로 부르고 판정을 합친다. (합친 판정, 리뷰 파일들)"""
+        """이 라운드의 리뷰어들을 차례로 부르고 판정을 합친다. (합친 판정, 리뷰 파일들)
+
+        웹 화면이 있는 결과물이면 리뷰 동안 앱을 띄워 두고 리뷰어에게 브라우저 도구를 붙인다 (DESIGN.md 33.4).
+        """
+        with self._browser_app(i) as browser:
+            return self._run_reviews(i, diff_title, diff, browser)
+
+    def _browser_ok(self) -> bool:
+        return self.cfg.browser_check == "auto" and not self.state.config.get("mock")
+
+    @contextmanager
+    def _browser_app(self, i: int):
+        ctx, st = self.ctx, self.state
+        parts = st.round_reviews.get(str(i)) or {}
+        pending = [r for r in self.reviewers if not (self.multi and st.is_done(f"review:{i}:{r}") and r in parts)]
+        app = browserlib.detect(ctx.workdir) if self._browser_ok() and pending else None
+        if app is None:
+            yield None
+            return
+        server = browserlib.AppServer(ctx.workdir, app, ctx.run_dir / f"browser{i}.log")
+        url = server.start()
+        tool = browserlib.playwright_tool(url) if url else None
+        if tool is None:
+            why = server.error or "npx 가 없어 브라우저 도구를 붙일 수 없음"
+            server.stop()
+            st.browser[str(i)] = {"error": why}
+            ctx.log(f"[{i}/{self.max_review}] 브라우저 확인 건너뜀: {why}")
+            ctx.save()
+            yield None
+            return
+        st.browser[str(i)] = {"url": url, "kind": app.kind}
+        ctx.log(f"[{i}/{self.max_review}] 브라우저 확인: 앱을 {url} 에 띄움 (리뷰어가 필요하면 열어 봄)")
+        ctx.save()
+        try:
+            yield tool
+        finally:
+            server.stop()
+
+    def _run_reviews(self, i: int, diff_title: str, diff: str, browser) -> tuple[Decision, list[str]]:
         ctx, st = self.ctx, self.state
         test = st.tests.get(str(i))
         tests_block = bool(test and test.get("status") in ("failed", "timeout"))
@@ -358,11 +399,15 @@ class BuildPhase:
                                                                 gates=use_gates, spec=spec_text is not None))
             full_prompt = ctx.prompt(role, "review", diff=diff, diff_title=diff_title, call_sites=sites_full,
                                      previous_review=self._previous_must_fix(role), **common)
+            if browser is not None:
+                full_prompt += "\n\n" + browser.prompt_note()
             resume_id = self._resumable_session(role, i, json_mode)
             if resume_id:
                 # 이어간 리뷰도 diff 는 review_diff 설정을 따른다 (기본 incremental: 지난 리뷰 이후만)
                 prompt = ctx.prompt(role, "rereview", diff=diff, diff_title=diff_title, call_sites=sites_full,
                                     previous_review=self._previous_must_fix(role), **common)
+                if browser is not None:
+                    prompt += "\n\n" + browser.prompt_note()
                 ctx.log(f"[{i}/{self.max_review}] 리뷰: {role} (지난 세션 이어서, diff {len(diff):,}자)")
             else:
                 prompt = full_prompt
@@ -392,7 +437,7 @@ class BuildPhase:
             out = ctx.call(role, "review", prompt, Mode.READ, label=f"review{i}_{role}", round_=i,
                            output_schema=REVIEW_SCHEMA if json_mode else None,
                            resume_session=resume_id, fallback_prompt=full_prompt if resume_id else None,
-                           transform=transform, effort=session_effort)
+                           transform=transform, effort=session_effort, browser=browser)
             self._remember_session(role, i, out.result,
                                    session_effort if out.result.resumed else ctx.agent_config(role).effort_for("review", i))
             if "res" in gated:

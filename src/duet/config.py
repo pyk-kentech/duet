@@ -177,6 +177,11 @@ class Config:
     dedup_agent: str = "claude"
     dedup_model: str = "claude-haiku-5-5"
     dedup_effort: str = ""              # 비우면 CLI 기본
+    # 권한·도구 (DESIGN.md 33장): 권한 수준, 웹 검색, 패키지 버전 조회, 브라우저 확인
+    access: str = "full"                # full | standard
+    web_search: str = "on"              # on | off
+    package_lookup: bool = True
+    browser_check: str = "auto"         # auto | off
     # 결과 요약: 실행이 끝나면 작은 모델이 만든 것·실행 방법을 정리 (DESIGN.md 32장)
     report: bool = True
     report_agent: str = "claude"
@@ -236,12 +241,16 @@ class Config:
         if not isinstance(self.repro_tests, bool):
             raise ConfigError("repro_tests 는 true/false 여야 합니다")
         for key in ("review_packet", "review_json", "review_gates", "arbiter", "test_guard", "claude_sandbox",
-                    "spec_gate", "wait_on_limit", "dedup", "report"):
+                    "spec_gate", "wait_on_limit", "dedup", "report", "package_lookup"):
             if not isinstance(getattr(self, key), bool):
                 raise ConfigError(f"{key} 는 true/false 여야 합니다")
         if (not isinstance(self.limit_wait_max_min, int) or isinstance(self.limit_wait_max_min, bool)
                 or not 1 <= self.limit_wait_max_min <= 7 * 24 * 60):
             raise ConfigError(f"limit_wait_max_min 은 1~10080(분) 사이여야 합니다: {self.limit_wait_max_min}")
+        for key, allowed in (("access", ("full", "standard")), ("web_search", ("on", "off")),
+                             ("browser_check", ("auto", "off"))):
+            if getattr(self, key) not in allowed:
+                raise ConfigError(f"{key} 값이 잘못됨: {getattr(self, key)!r} (가능: {', '.join(allowed)})")
         for key in ("dedup_agent", "report_agent"):
             if getattr(self, key) not in AGENT_NAMES:
                 raise ConfigError(f"{key} 값이 잘못됨: {getattr(self, key)!r} (가능: {', '.join(AGENT_NAMES)})")
