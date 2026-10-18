@@ -279,6 +279,7 @@ def test_review_gets_browser_for_web_project(tmp_path: Path, monkeypatch):
     assert reviews and all(c.browser is not None for c in reviews)
     url = st.browser["1"]["url"]
     assert url in reviews[0].prompt and "브라우저로 확인" in reviews[0].prompt
+    assert "mcp__playwright__browser_navigate" in reviews[0].prompt                # 도구 이름을 콕 집어 줌
     assert all(c.browser is None for c in seen["claude"].calls)                # 구현자에게는 안 붙임
     assert _closed(int(url.rsplit(":", 1)[1].strip("/")))                        # 리뷰가 끝나면 앱을 끔
 

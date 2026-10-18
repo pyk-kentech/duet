@@ -1222,8 +1222,9 @@ duet 의 목적은 에이전트 하나보다 나은 최종 결과물이다. 그�
 ### 33.4 브라우저 확인 (`browser_check`, 기본 `auto`)
 - **필요할 때만**: `auto` 는 결과물이 웹 화면이 있는 프로젝트이고(작업 폴더에 `package.json` 의 `dev`/`start` 스크립트와 `node_modules`, 또는 최상위 `index.html`) `npx` 가 있을 때만 켠다. `off` 는 끈다. 켜져도 리뷰어가 필요하다고 판단할 때만 브라우저를 쓴다.
 - 리뷰 라운드마다 duet 가 앱을 띄운다: `npm run dev`(없으면 `npm start`)를 백그라운드로 띄우고 출력에서 `http://localhost:포트` 를 찾는다(60초). `index.html` 만 있으면 duet 의 파이썬으로 `http.server` 를 빈 포트에 띄운다. 리뷰가 끝나면 프로세스 트리를 끈다. 못 띄우면 기록만 남기고 브라우저 없이 리뷰한다.
-- 리뷰어에게 Playwright MCP(`npx -y @playwright/mcp@latest --headless --isolated`, 브라우저는 설치된 Chrome, 없으면 Edge)를 붙인다. Claude: `--mcp-config <JSON>` + `--allowedTools mcp__playwright`. Codex: `-c mcp_servers.playwright.command=…`, `-c mcp_servers.playwright.args=[…]`. 리뷰 프롬프트에 "앱이 <주소> 에서 돌고 있다. 화면·동작을 직접 확인해야 판단할 수 있으면 브라우저 도구로 열어 확인하고, 본 것을 지적의 근거로 적어라".
-- 한계: Codex 의 MCP 도구 승인 방식과 첫 실행의 Playwright 내려받기 시간은 실제 실행으로 확인해야 한다.
+- 리뷰어에게 Playwright MCP(`npx -y @playwright/mcp@latest --headless --isolated`, 브라우저는 설치된 Chrome, 없으면 Edge)를 붙인다. Claude: `--mcp-config <JSON>` + `--allowedTools mcp__playwright`. Codex: `-c mcp_servers.playwright.command=…`, `-c mcp_servers.playwright.args=[…]`. 리뷰 프롬프트에 "앱이 <주소> 에서 돌고 있다. 과제나 설계에 화면·레이아웃·화면 폭·버튼 동작 같은 요구가 있으면 열어서 직접 눌러 보고, 본 것을 지적의 근거로 적어라. 화면과 상관없는 변경이면 쓰지 않아도 된다".
+- 프롬프트에 도구 이름(`mcp__playwright__browser_navigate`·`browser_snapshot`·`browser_click`·`browser_type`·`browser_resize`)을 콕 집어 적는다. 실제 실행(2026-10-18)에서 "브라우저 도구(playwright)"라고만 쓰니 Codex 가 내장 computer-use 플러그인으로 가서 브라우저를 못 찾고 열지 않았다. 이름을 적어 주자 playwright 로 열고·폭을 바꿔 확인했다. 바로 안 보이면 도구 검색으로 찾으라고, 다른 브라우저 도구는 이 앱을 보지 못한다고도 적는다.
+- 실제 실행으로 확인한 것: full 권한에서 Codex 는 MCP 도구를 승인 없이 쓴다. Playwright MCP 는 내려받은 뒤 2초 안에 뜬다(첫 실행은 npx 내려받기만큼 더 걸린다).
 
 ### 33.5 권한 수준 (`access`, 기본 `full`)
 - `full`(기본, 사용자 결정 2026-10-17): 에이전트가 모든 도구·명령·네트워크를 쓴다.

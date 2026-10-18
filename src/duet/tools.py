@@ -68,10 +68,14 @@ class Browser:
                 "-c", f"mcp_servers.{PLAYWRIGHT}.args={json.dumps(self.args)}"]
 
     def prompt_note(self) -> str:
+        # 도구 이름을 콕 집는다: '브라우저 도구'라고만 하면 Codex 가 내장 computer-use 로 가서 못 찾았다 (실제 실행)
+        p = f"mcp__{PLAYWRIGHT}__"
         return ("## 브라우저로 확인 (duet 가 앱을 띄워 둠)\n\n"
-                f"앱이 {self.url} 에서 돌고 있다. 화면·동작을 직접 봐야 판단할 수 있는 부분이 있으면 브라우저 도구"
-                f"({PLAYWRIGHT})로 열어 확인하고, 본 것(무엇을 눌렀고 어떻게 보였는지)을 지적의 근거로 적어라. "
-                "필요 없으면 쓰지 않아도 된다.")
+                f"앱이 {self.url} 에서 돌고 있다. 브라우저 도구는 {PLAYWRIGHT} MCP 서버의 {p}browser_navigate · "
+                f"{p}browser_snapshot · {p}browser_click · {p}browser_type · {p}browser_resize 등이다. "
+                f"바로 안 보이면 도구 검색으로 {PLAYWRIGHT} 를 찾아라. computer-use 같은 다른 브라우저 도구는 이 앱을 보지 못한다.\n"
+                "과제나 설계에 화면·레이아웃·화면 폭·버튼 동작 같은 요구가 있으면 열어서 직접 눌러 보고, "
+                "본 것(무엇을 눌렀고 어떻게 보였는지)을 지적의 근거로 적어라. 화면과 상관없는 변경이면 쓰지 않아도 된다.")
 
 
 def claude_mode_args(cfg, ac, req) -> list[str]:
