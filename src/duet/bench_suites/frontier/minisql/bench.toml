@@ -1,0 +1,6 @@
+name = "minisql"
+description = "SQLite 부분집합 인메모리 SQL 엔진 (타입 친화도, 3값 논리, NULL 집계·정렬, 조인·하위 질의·복합 SELECT, 결과 열 이름; sqlite3 신탁 비교)"
+kind = "new"
+max_review = 3
+timeout_sec = 3600
+hidden_tests = 461

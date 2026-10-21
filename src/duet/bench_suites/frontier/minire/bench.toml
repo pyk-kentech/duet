@@ -1,0 +1,6 @@
+name = "minire"
+description = "파이썬 re 부분집합 정규식 엔진 (re 와 결과 비교): 빈 매치 훑기·빈 반복·캡처 되돌림·lastindex·템플릿·pos/endpos"
+kind = "new"
+max_review = 3
+timeout_sec = 3600
+hidden_tests = 396

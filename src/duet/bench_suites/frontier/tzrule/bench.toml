@@ -1,0 +1,6 @@
+name = "tzrule"
+description = "POSIX TZ 규칙 문자열 해석과 지역 시각↔UTC (Jn·n·Mm.w.d, 틈·겹침 fold, 음수 DST, 해 넘김 전이, tzinfo, 반복 일정)"
+kind = "new"
+max_review = 3
+timeout_sec = 3600
+hidden_tests = 289
