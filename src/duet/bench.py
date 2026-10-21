@@ -55,7 +55,9 @@ STATUS_KO = {"approved": "승인", "unapproved": "미승인", "design_only": "�
 # 단일 에이전트 기준선 (DESIGN.md 34장): 워크플로가 아니라 벤치마크 전용 이름
 SOLO_PREFIX = "solo-"
 SOLO_WORKFLOWS = (SOLO_PREFIX + "claude", SOLO_PREFIX + "codex")
-SOLO_INSTRUCTION = "이 작업 폴더에서 위 과제를 끝까지 구현하라. 테스트를 직접 돌려 확인한 뒤 끝내라."
+# 비대화형임을 적는다: Codex 의 전역 스킬(brainstorming)이 설계 승인을 묻고 코드 없이 멈춘 실측 (DESIGN.md 34.1)
+SOLO_INSTRUCTION = ("이 작업 폴더에서 위 과제를 끝까지 구현하라. 답할 사람이 없는 비대화형 실행이므로 묻거나 승인을 "
+                    "기다리지 말고 스스로 정해 진행하라. 테스트를 직접 돌려 확인한 뒤 끝내라.")
 SOLO_DESIGN_NOTE = "작업 폴더의 DESIGN.md 에 정해 둔 설계가 있다. 그 설계를 따른다."
 
 
