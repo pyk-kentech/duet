@@ -1369,7 +1369,7 @@ duet 를 만드는 이유는 "에이전트 하나보다 나은 최종 결과"다
 - 주의 순서: blocked > done-unseen > working > idle. 열어 보면 unseen 이 지워진다. (herdr)
 
 #### 36.3.2 단계 결과 계약
-모든 단계는 `{outcome: done|blocked|failed|needs_human, reason, summary(3줄), files_changed, next}` 로 끝난다. 헤드리스 단계는 구조화 출력(JSON 스키마), 대화형 세션은 완료 표식(`DUET-DONE-<코드>: 요약 END-<코드>`, Daintree 의 handback)을 파싱한다. 표식이 없으면 `unconfirmed`. 전환은 `transitions.jsonl` 에 append-only. (OpenRig 의 hot-potato, Orca 의 worker_done)
+모든 단계는 `{outcome: done|blocked|failed|needs_human, reason, summary(3줄), files_changed, next}` 로 끝난다. 헤드리스 단계는 구조화 출력(JSON 스키마), 대화형 세션은 완료 표식(`DUET-DONE-<코드>: 요약 END-<코드>`, Daintree 의 handback)을 파싱한다. 표식이 없으면 `unconfirmed`. 상태 전환·단계 시작/끝·로그는 실행별 `events.jsonl` 에 순번(seq)을 붙여 append-only 로 남기고(따로 transitions 파일을 두지 않음), 화면은 `/api/stream`(SSE, 이 머신) 또는 `/api/events?since=`(폴링, 원격)로 받는다. 단계 결과는 `run.json` 의 호출 기록(outcome·reason)에도 남는다. 끝난 실행을 화면에서 열면 `seen_at` 을 적어 '끝났는데 안 봄'에서 빠진다. (OpenRig 의 hot-potato, Orca 의 worker_done)
 
 ### 36.4 에이전트 런타임
 

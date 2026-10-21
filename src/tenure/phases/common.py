@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping
 
+from tenure import events
+from tenure.outcome import step_outcome
 from tenure.attachments import ATTACH_STEPS, is_image, prompt_note as attachments_note
 from tenure.agents.base import AgentAdapter, AgentRequest, AgentResult, Mode
 from tenure.config import Config, dedup_agent_config
@@ -194,6 +196,12 @@ class PhaseContext:
     # ---------------------------------------------------------------- state
     def save(self) -> None:
         self.state.save(self.run_dir)
+        st = self.state
+        key = (st.status, st.phase, st.step, st.round)
+        if key != getattr(self, "_last_state_event", None):   # 상태 전환만 이벤트로 (36.3)
+            object.__setattr__(self, "_last_state_event", key)
+            events.for_run(self.run_dir).emit(events.STATE, status=st.status, phase=st.phase, step=st.step,
+                                              round=st.round, error=st.error)
 
     def set_position(self, phase: str, step: str, round_: int) -> None:
         self.state.phase, self.state.step, self.state.round = phase, step, round_
@@ -235,6 +243,8 @@ class PhaseContext:
             attempt += 1
             started = time.monotonic()
             self.log(f"{agent_name} ← {step}" + (f" (재시도 {attempt - 1})" if attempt > 1 else "") + " 실행 중...")
+            events.for_run(self.run_dir).emit(events.STEP_START, agent=self.cli_of(agent_name), role=agent_name,
+                                              step=step, round=round_, attempt=attempt)
             try:
                 result = agent.ask(req)
             except (OSError, RunnerError) as e:
@@ -246,13 +256,14 @@ class PhaseContext:
             elapsed = result.duration_sec or (time.monotonic() - started)
 
             cli = self.cli_of(agent_name)
+            outcome, why = step_outcome(result, expect_structured=output_schema is not None)
             meta = {
                 "agent": cli, **({"role": agent_name} if cli != agent_name else {}),
                 "adapter": agent.name, "step": step, "mode": mode.value,
                 "round": round_, "attempt": attempt,
                 "duration_sec": elapsed, "exit_code": result.exit_code,
                 "rate_limited": result.rate_limited, "timed_out": result.timed_out,
-                "ok": result.ok,
+                "ok": result.ok, "outcome": outcome, **({"reason": why} if why else {}),
                 **_usage_meta(result.usage),
                 **({"resumed": True} if result.resumed else {}),
                 **({"session_id": result.session_id} if result.session_id else {}),
@@ -265,7 +276,10 @@ class PhaseContext:
             self.state.record_call(cli, step, elapsed, result.exit_code,
                                    rate_limited=result.rate_limited, timed_out=result.timed_out,
                                    file=path.name, usage=result.usage,
-                                   role=agent_name if cli != agent_name else None)
+                                   role=agent_name if cli != agent_name else None, outcome=outcome, reason=why)
+            events.for_run(self.run_dir).emit(events.STEP_END, agent=cli, role=agent_name, step=step, round=round_,
+                                              attempt=attempt, outcome=outcome, reason=why, sec=round(elapsed, 1),
+                                              file=path.name)
 
             if result.ok:
                 self.log(f"{agent_name} ← {step} 완료 ({elapsed:.0f}초)"
@@ -308,6 +322,8 @@ class PhaseContext:
         until = dt.datetime.fromtimestamp(now + wait)
         self.state.limit_wait = {"agent": self.cli_of(agent_name), "role": agent_name, "step": step,
                                  "until": until.isoformat(timespec="seconds"), "reason": why}
+        events.for_run(self.run_dir).emit(events.ATTENTION, reason="구독 한도 대기", agent=self.cli_of(agent_name),
+                                          step=step, until=self.state.limit_wait["until"])
         self.save()
         self.log(f"⏳ {agent_name} 한도 도달 ({step}). {until:%m-%d %H:%M} 까지 기다렸다가 다시 시도합니다 "
                  f"({why}, 남은 대기 예산 {budget / 60:.0f}분)")

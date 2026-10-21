@@ -53,6 +53,8 @@ class CallRecord:
     file: str | None = None
     usage: dict | None = None
     role: str | None = None   # 워크플로 역할 이름 (agent 와 다를 때만)
+    outcome: str | None = None  # 단계 결과 done|blocked|failed|unconfirmed (DESIGN.md 36.3.2)
+    reason: str | None = None
 
 
 @dataclass
@@ -92,6 +94,7 @@ class RunState:
     attachments: list[str] = field(default_factory=list)              # 첨부 파일 (실행 폴더 기준, DESIGN.md 33.3)
     browser: dict = field(default_factory=dict)                       # 라운드 → 브라우저 확인 기록 (DESIGN.md 33.4)
     test_guard: dict[str, dict] = field(default_factory=dict)         # round → 테스트 변경 경고 (DESIGN.md 24.1)
+    seen_at: str | None = None                                        # 화면에서 끝난 실행을 연 시각 (36.3.1)
     limit_wait: dict | None = None                                    # 한도 대기 중이면 {agent, step, until, reason} (25.1)
     limit_waited_sec: float = 0.0                                     # 한도 대기에 쓴 시간 합
     dedup: dict[str, dict] = field(default_factory=dict)              # "round:역할" → 재제기 확인 결과 (DESIGN.md 26.2)
@@ -112,10 +115,11 @@ class RunState:
 
     def record_call(self, agent: str, step: str, sec: float, exit_code: int, *,
                     rate_limited: bool = False, timed_out: bool = False,
-                    file: str | None = None, usage: dict | None = None, role: str | None = None) -> None:
+                    file: str | None = None, usage: dict | None = None, role: str | None = None,
+                    outcome: str | None = None, reason: str | None = None) -> None:
         self.calls.append(CallRecord(agent, step, round(sec, 1), exit_code,
                                      rate_limited=rate_limited, timed_out=timed_out, file=file, usage=usage,
-                                     role=role))
+                                     role=role, outcome=outcome, reason=reason or None))
 
     def usage_totals(self) -> dict[str, dict]:
         """에이전트별 사용량 합계."""

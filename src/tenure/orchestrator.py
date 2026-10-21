@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Any, Callable, Mapping
 
+from tenure import events
 from tenure.agents import (AgentAdapter, AgentNotAvailable, ClaudeCodeAdapter, CodexAdapter, MockAdapter,
                          make_agents, make_role_agents)
 from tenure.config import (
@@ -120,11 +121,14 @@ class Orchestrator:
         # classic 이 아닌 워크플로: 역할 이름 → 어댑터 (DESIGN.md 19장)
         self.role_factory = role_factory or make_role_agents
         self._console: IO[str] | None = None
+        self._events: events.EventLog | None = None
 
     # ---------------------------------------------------------------- log
     def log(self, msg: str) -> None:
         line = f"[{dt.datetime.now():%H:%M:%S}] {msg}"
         self.printer(line)
+        if self._events is not None:              # 화면의 실시간 타임라인 (DESIGN.md 36.3)
+            self._events.emit(events.LOG, text=msg)
         if self._console is not None:
             try:
                 self._console.write(line + "\n")
@@ -558,8 +562,10 @@ class _ConsoleScope:
 
     def __enter__(self) -> None:
         self.orch._console = self.path.open("a", encoding="utf-8")
+        self.orch._events = events.for_run(self.path.parent)
 
     def __exit__(self, *exc: object) -> None:
         if self.orch._console is not None:
             self.orch._console.close()
         self.orch._console = None
+        self.orch._events = None

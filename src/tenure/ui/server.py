@@ -63,7 +63,7 @@ def is_loopback(host: str) -> bool:
         return False
 
 
-class DuetServer(ThreadingHTTPServer):
+class TenureServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, addr: tuple[str, int], dashboard: Dashboard, token: str):
@@ -76,7 +76,7 @@ class DuetServer(ThreadingHTTPServer):
         self._remote_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self.loaded_hash = package_digest()
         self.started_at = time.time()
-        self.restart_fn: Callable[["DuetServer"], None] = exec_restart
+        self.restart_fn: Callable[["TenureServer"], None] = exec_restart
         self._digest_cache: tuple[float, str] = (0.0, self.loaded_hash)
 
     # ================================================================ 서버 자신
@@ -362,7 +362,7 @@ class DuetServer(ThreadingHTTPServer):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server: DuetServer
+    server: TenureServer
     protocol_version = "HTTP/1.1"
     server_version = "tenure-ui"
 
@@ -461,10 +461,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not self._fetch_site_ok():
                     self._discard_body()
                     return self._json(HTTPStatus.FORBIDDEN, {"error": "다른 사이트에서 온 요청은 받지 않습니다."})
-                if not self._token_ok(self.headers.get("X-Tenure-Token")):
+                given = self.headers.get("X-Tenure-Token")
+                if method == "GET" and path == "/api/stream" and not given:
+                    given = self._cookie_token()          # EventSource 는 헤더를 못 붙인다 → 쿠키
+                if not self._token_ok(given):
                     self._discard_body()
                     return self._json(HTTPStatus.UNAUTHORIZED,
                                       {"error": "토큰이 맞지 않습니다. 터미널에 출력된 새 주소로 다시 접속하세요."})
+                if method == "GET" and path == "/api/stream":
+                    return self._stream(query)
                 body = self._read_json() if method == "POST" else {}
                 return self._json(HTTPStatus.OK, self._api(method, path, query, body))
             self._text(HTTPStatus.NOT_FOUND, "없는 페이지입니다.")
@@ -473,6 +478,55 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001 - UI 는 죽지 않아야 한다
             print(f"[tenure ui] 오류: {type(e).__name__}: {e}", file=sys.stderr)
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": f"서버 오류: {type(e).__name__}: {e}"})
+
+    STREAM_MAX_SEC = 1800          # 한 연결의 최대 길이. 넘으면 끊고, 화면이 since 로 다시 붙는다
+    STREAM_POLL_SEC = 0.5
+    STREAM_BEAT_SEC = 15
+
+    def _stream(self, q: dict[str, str]) -> None:
+        """실행의 이벤트를 SSE 로 흘려보낸다 (DESIGN.md 36.3). 이 머신의 실행만. 원격은 /api/events 폴링."""
+        from tenure.events import read_events
+        from tenure.state import RUNNING, RunState
+
+        dash = self.server.dashboard
+        wd = dash.project(q.get("project"))
+        rd = dash.run_dir(wd, q.get("run"))
+        since = _int(q.get("since"))
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        start = last_beat = last_check = time.monotonic()
+        finished = False
+        try:
+            while time.monotonic() - start < self.STREAM_MAX_SEC:
+                evs = read_events(rd, since=since)
+                for e in evs:
+                    since = int(e["seq"])
+                    data = json.dumps(e, ensure_ascii=False, default=str)
+                    self.wfile.write(f"id: {since}\nevent: {e.get('kind', 'message')}\ndata: {data}\n\n".encode("utf-8"))
+                now = time.monotonic()
+                if evs:
+                    self.wfile.flush()
+                    last_beat = now
+                elif now - last_beat >= self.STREAM_BEAT_SEC:
+                    self.wfile.write(b": keep-alive\n\n")
+                    self.wfile.flush()
+                    last_beat = now
+                if not evs and now - last_check >= 3:
+                    last_check = now
+                    try:
+                        finished = RunState.load(rd).status != RUNNING
+                    except (OSError, ValueError, TypeError):
+                        finished = True
+                    if finished:
+                        self.wfile.write(b"event: end\ndata: {}\n\n")
+                        self.wfile.flush()
+                        return
+                time.sleep(self.STREAM_POLL_SEC)
+        except OSError:
+            return                     # 상대가 연결을 닫음
 
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -571,6 +625,9 @@ class Handler(BaseHTTPRequestHandler):
         ("GET", "/api/bench"): "bench_list",
         ("GET", "/api/bench/result"): "bench_result",
         ("GET", "/api/fs/dirs"): "list_dirs",
+        ("GET", "/api/events"): "events",
+        ("POST", "/api/runs/seen"): "mark_seen",
+        ("GET", "/api/inbox"): "inbox",
     }
 
     def _api(self, method: str, path: str, q: dict[str, str], body: dict[str, Any]) -> Any:
@@ -785,13 +842,13 @@ def _forbidden_page() -> str:
 
 
 def make_server(host: str = "127.0.0.1", port: int = 8787, *, dashboard: Dashboard | None = None,
-                token: str | None = None, port_tries: int = 20) -> DuetServer:
+                token: str | None = None, port_tries: int = 20) -> TenureServer:
     dashboard = dashboard or Dashboard()
     token = token or secrets.token_urlsafe(24)
     last_err: OSError | None = None
     for i in range(max(1, port_tries)):
         try:
-            return DuetServer((host, port + i if port else 0), dashboard, token)
+            return TenureServer((host, port + i if port else 0), dashboard, token)
         except OSError as e:  # 포트 사용 중
             last_err = e
             if not port:
@@ -803,7 +860,7 @@ RESTART_TOKEN_ENV = "TENURE_UI_TOKEN"
 RESTART_PORT_ENV = "TENURE_UI_EXACT_PORT"
 
 
-def exec_restart(server: "DuetServer") -> None:
+def exec_restart(server: "TenureServer") -> None:
     """같은 포트·토큰으로 자기 자신을 다시 실행한다(바뀐 tenure 코드를 읽도록). 실행 중인 tenure run 은 별도 프로세스라 영향 없음."""
     host, port = server.server_address[0], server.port
     env = dict(os.environ)

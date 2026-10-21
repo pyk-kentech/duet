@@ -19,6 +19,8 @@ from pathlib import Path
 from subprocess import Popen
 from typing import Any
 
+from tenure.events import last_event, read_events
+from tenure.outcome import run_activity
 from tenure import procs, stopflag
 from tenure.activity import agent_activity, call_start_epoch
 from tenure.workflow import WorkflowError, list_workflows, load_workflow, role_agent_map
@@ -222,7 +224,49 @@ class Dashboard:
             "current_call": self._current_call(rd) if live and live.get("run_id") == st.run_id else None,
             "resume": self._resume_hint(st, wd),
             "now": dt.datetime.now().isoformat(timespec="seconds"),
+            "activity": self._activity(rd, st, bool(live and live.get("run_id") == st.run_id)),
+            "last_seq": (last_event(rd) or {}).get("seq", 0),
         }
+
+    def events(self, project: str | None, run_id: str | None, since: int = 0) -> dict[str, Any]:
+        """seq 가 since 보다 큰 이벤트 (실시간 타임라인, DESIGN.md 36.3). SSE 가 없는 원격·브라우저는 이것으로 폴링."""
+        wd = self.project(project)
+        rd = self.run_dir(wd, run_id)
+        evs = read_events(rd, since=int(since or 0))
+        return {"events": evs, "last_seq": evs[-1]["seq"] if evs else int(since or 0)}
+
+    def mark_seen(self, project: str | None, run_id: str | None) -> dict[str, Any]:
+        """끝난 실행을 열어 봤다고 적는다(받은편지함에서 '끝났는데 안 봄'이 사라짐). 진행 중이면 그대로."""
+        wd = self.project(project)
+        rd = self.run_dir(wd, run_id)
+        live = self._live(wd)
+        if live and live.get("run_id") == rd.name:
+            return {"ok": False, "reason": "진행 중"}
+        st = RunState.load(rd)
+        st.seen_at = dt.datetime.now().isoformat(timespec="seconds")
+        st.save(rd)
+        return {"ok": True, "seen_at": st.seen_at}
+
+    def inbox(self, limit: int = 50, per_project: int = 20) -> dict[str, Any]:
+        """프로젝트를 가로질러 주의 순으로: 나를 기다림 > 끝났는데 안 봄 > 진행 중 (DESIGN.md 36.7 받은편지함)."""
+        items: list[dict[str, Any]] = []
+        for proj in self.projects():
+            path = proj.get("path") if isinstance(proj, dict) else None
+            if not path or not proj.get("exists", True):
+                continue
+            wd = Path(path)
+            for rd in list(reversed(list_run_dirs(wd)))[:per_project]:
+                summary = self._run_summary(wd, rd)
+                act = summary.get("activity") or {}
+                if act.get("state") in ("blocked", "done-unseen", "working", "unverifiable") or (
+                        act.get("state") == "failed" and summary.get("status") == RUNNING):
+                    items.append({"project": str(wd), "run_id": summary["run_id"], "task": summary.get("task", "")[:200],
+                                  "status": summary.get("status"), "activity": act,
+                                  "updated_at": summary.get("updated_at")})
+        items.sort(key=lambda x: str(x.get("updated_at") or ""), reverse=True)   # 같은 순위 안에서는 최근 것 먼저
+        items.sort(key=lambda x: -x["activity"].get("rank", 0))
+        return {"items": items[:limit], "counts": {k: sum(1 for i in items if i["activity"]["state"] == k)
+                                                    for k in ("blocked", "done-unseen", "working", "unverifiable")}}
 
     def activity(self, project: str | None, run_id: str | None) -> dict[str, Any]:
         """지금 진행 중인 호출에서 에이전트가 하는 일(파일 읽기·수정·명령·메시지)."""
@@ -636,7 +680,13 @@ class Dashboard:
             "calls": len(st.calls), "total_sec": round(sum(c.sec for c in st.calls), 1),
             "last_verdict": st.last_verdict, "config": st.config, "error": st.error,
             "live": is_live, "stale": st.status == RUNNING and not is_live,
+            "activity": self._activity(rd, st, is_live),
         }
+
+    def _activity(self, rd: Path, st: RunState, is_live: bool) -> dict[str, Any]:
+        """화면이 정렬·표시할 활동 상태 (DESIGN.md 36.3.1)."""
+        ev = last_event(rd)
+        return run_activity(st.to_dict(), live=is_live, last_ts=(ev or {}).get("ts") or st.updated_at)
 
     def _resume_hint(self, st: RunState, wd: Path) -> dict[str, Any]:
         cur = int(st.config.get("max_review") or 0)
