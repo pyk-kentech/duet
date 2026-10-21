@@ -426,11 +426,25 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         self._dispatch("DELETE")
 
+    def _discard_body(self) -> None:
+        """거절할 때도 요청 본문을 읽어 버린다. 안 읽고 닫으면 윈도우가 연결을 끊어(RST) 상대가 응답을 못 받는다."""
+        try:
+            n = min(int(self.headers.get("Content-Length") or 0), 1 << 20)
+        except ValueError:
+            n = 0
+        if n > 0:
+            try:
+                self.rfile.read(n)
+            except OSError:
+                pass
+
     def _dispatch(self, method: str) -> None:
         if not self._host_ok():
+            self._discard_body()
             self._text(HTTPStatus.FORBIDDEN, "허용되지 않은 Host 입니다.")
             return
         if not self._origin_ok():
+            self._discard_body()
             self._text(HTTPStatus.FORBIDDEN, "다른 출처에서 온 요청은 받지 않습니다.")
             return
         url = urlsplit(self.path)
@@ -445,8 +459,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._logo(path[len("/logos/"):-len(".svg")])
             if path.startswith("/api/"):
                 if not self._fetch_site_ok():
+                    self._discard_body()
                     return self._json(HTTPStatus.FORBIDDEN, {"error": "다른 사이트에서 온 요청은 받지 않습니다."})
                 if not self._token_ok(self.headers.get("X-Tenure-Token")):
+                    self._discard_body()
                     return self._json(HTTPStatus.UNAUTHORIZED,
                                       {"error": "토큰이 맞지 않습니다. 터미널에 출력된 새 주소로 다시 접속하세요."})
                 body = self._read_json() if method == "POST" else {}
