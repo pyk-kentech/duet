@@ -410,13 +410,13 @@ class Dashboard:
             raise ApiError(400, str(e)) from e
         overrides: dict[str, Any] = {}
         workflow = str(payload.get("workflow") or "").strip()
-        if workflow and workflow != CLASSIC_WORKFLOW:
+        if workflow:                                   # classic 도 명시해서 넘긴다(기본이 auto 라서, 36.5)
             if not WORKFLOW_NAME_RE.match(workflow):
                 raise ApiError(400, f"워크플로 이름이 잘못되었습니다: {workflow}")
             overrides["workflow"] = workflow
         for key in ("implementer", "reviewer", "synth"):
             v = payload.get(key)
-            if v and "workflow" not in overrides:
+            if v and overrides.get("workflow", CLASSIC_WORKFLOW) == CLASSIC_WORKFLOW:
                 if v not in AGENT_NAMES:
                     raise ApiError(400, f"{key} 값이 잘못되었습니다: {v}")
                 overrides[key] = v
@@ -911,6 +911,9 @@ API_METHODS: dict[str, Any] = {
     "defaults": lambda d, a: d._defaults(None),
     "workflows": lambda d, a: d.workflows(a.get("project")),
     "list_dirs": lambda d, a: list_dirs(a.get("path")),
+    "events": lambda d, a: d.events(a.get("project"), a.get("run"), int(a.get("since") or 0)),
+    "mark_seen": lambda d, a: d.mark_seen(a.get("project"), a.get("run")),
+    "inbox": lambda d, a: d.inbox(),
 }
 
 

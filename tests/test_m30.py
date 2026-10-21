@@ -301,3 +301,48 @@ def test_prompt_fixes_from_benchmarks():
     review = prompts.load_template("review") if hasattr(prompts, "load_template") else \
         (Path(prompts.__file__).parent / "templates" / "review.md").read_text(encoding="utf-8")
     assert "과제에 적힌 요구(과제가 명시한 경계 사례 포함) 위반" in review and "요구 조항을 하나씩" in review
+
+
+def test_m30_apis_reachable_over_http(tmp_path: Path):
+    """events·runs/seen·inbox 가 HTTP 경로표(API_METHODS)에도 있어야 한다 (직접 부르는 테스트만으로는 놓쳤다)."""
+    import json as _json
+    from urllib.parse import quote
+
+    wd = tmp_path / "proj"
+    assert main(["run", "할일 CLI", "--workdir", str(wd), "--mock", "--debate-rounds", "0"]) == 0
+    dash = Dashboard()
+    dash.add_project(str(wd))
+    [rd] = list_run_dirs(wd)
+    srv = make_server("127.0.0.1", 0, dashboard=dash, token="t-http")
+    th = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.1}, daemon=True)
+    th.start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def call(path, method="GET", body=None):
+        req = urllib.request.Request(base + path, method=method, headers={"X-Tenure-Token": "t-http", "Content-Type": "application/json"},
+                                     data=_json.dumps(body).encode() if body is not None else None)
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return _json.loads(r.read())
+    try:
+        assert call(f"/api/events?project={quote(str(wd))}&run={rd.name}&since=0")["events"]
+        assert call("/api/inbox")["items"][0]["run_id"] == rd.name
+        assert call("/api/runs/seen", "POST", {"project": str(wd), "run": rd.name})["ok"]
+        assert call("/api/inbox")["items"] == []
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_ui_start_run_passes_classic_explicitly(tmp_path: Path, monkeypatch):
+    import tenure.ui.dashboard as dmod
+
+    seen = {}
+    monkeypatch.setattr(dmod, "spawn_detached", lambda argv, *a, **k: (seen.setdefault("argv", argv), type("P", (), {"pid": 1})())[1])
+    dash = Dashboard()
+    try:
+        dash.start_run({"task": "할일", "project": str(tmp_path / "w"), "workflow": "classic", "implementer": "codex", "reviewer": "claude", "mock": True})
+    except Exception:
+        pass
+    argv = seen.get("argv") or []
+    assert "--workflow" in argv and argv[argv.index("--workflow") + 1] == "classic"
+    assert "--implementer" in argv and argv[argv.index("--implementer") + 1] == "codex"
