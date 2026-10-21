@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_workdir(p_run)
     p_run.add_argument("--mock", action="store_true", help="실제 CLI 호출 없이 흐름만 테스트")
     p_run.add_argument("--workflow", metavar="NAME|@FILE",
-                       help="워크플로 템플릿 (기본: classic). 목록: tenure workflows")
+                       help="워크플로 (기본: auto = 자동 선택). 목록: tenure workflows")
     p_run.add_argument("--implementer", choices=["claude", "codex"], help="구현 담당 (기본: claude, classic 전용)")
     p_run.add_argument("--reviewer", choices=["claude", "codex"], help="리뷰 담당 (기본: codex)")
     p_run.add_argument("--synth", choices=["claude", "codex"], help="최종 설계 종합 담당 (기본: 리뷰어)")
@@ -305,6 +305,7 @@ def cmd_workflows(args: argparse.Namespace) -> int:
     except ConfigError as e:
         raise OrchestratorError(f"설정 오류: {e}") from e
     if args.action == "list":
+        print(f"  {'auto':<12} [기본] 자동 선택: 기존 프로젝트·요구가 분명한 일 → quick, 짧고 열린 새 과제 → classic (36.5)")
         for w in list_workflows(wd, cfg):
             if w["source"] == "error":
                 print(f"✗ {w['id']:<12} 오류: {w['error']}")

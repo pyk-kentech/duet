@@ -43,6 +43,8 @@ RENAMED_KEYS = {"prompt_arg_max_chars": "prompt_arg_max_bytes"}
 # 워크플로 템플릿 이름 (DESIGN.md 19.4). "@경로.toml" 로 파일을 직접 줄 수도 있다
 WORKFLOW_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 CLASSIC_WORKFLOW = "classic"
+AUTO_WORKFLOW = "auto"             # 자동 선택 (DESIGN.md 36.5)
+DEFAULT_WORKFLOW = AUTO_WORKFLOW   # 테스트는 conftest 에서 classic 으로 고정
 
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9._:\[\]/-]{0,80}$")
 EFFORT_SUGGESTIONS = {
@@ -137,7 +139,7 @@ def _default_codex() -> AgentConfig:
 
 @dataclass
 class Config:
-    workflow: str = CLASSIC_WORKFLOW   # 워크플로 템플릿 (DESIGN.md 19장)
+    workflow: str = field(default_factory=lambda: DEFAULT_WORKFLOW)   # 워크플로 템플릿 (19장), 기본 auto (36.5)
     implementer: str = "claude"
     reviewer: str = "codex"
     synth: str | None = None  # None이면 reviewer

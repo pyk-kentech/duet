@@ -17,6 +17,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Any, Callable, Mapping
 
+from tenure import router
+from tenure.config import AUTO_WORKFLOW
 from tenure import events
 from tenure.agents import (AgentAdapter, AgentNotAvailable, ClaudeCodeAdapter, CodexAdapter, MockAdapter,
                          make_agents, make_role_agents)
@@ -71,6 +73,9 @@ EXIT_UNAPPROVED = 1
 EXIT_STOPPED = 3
 EXIT_INTERRUPTED = 130
 
+
+TASK_DOC = "TASK.md"
+TASK_DOC_HEADER = "# 과제 (설계 단계 없이 과제 원문을 그대로 설계로 삼는다)\n\n"
 
 class OrchestratorError(Exception):
     """사용자에게 그대로 보여줄 오류."""
@@ -152,12 +157,19 @@ class Orchestrator:
         workdir.mkdir(parents=True, exist_ok=True)
 
         cfg = self._load_config(workdir, opts.overrides)
+        route = None
+        if cfg.workflow == AUTO_WORKFLOW:                        # 자동 선택 (DESIGN.md 36.5)
+            route = router.choose(opts.task, workdir, cfg, mock=opts.mock)
+            cfg = replace(cfg, workflow=route.workflow)
+            self.log(f"워크플로 자동 선택: {route.workflow} — {route.reason}"
+                     + (" (작은 모델 판단)" if route.source == "model" else ""))
         wf, cfg = self._resolve_workflow(workdir, cfg, opts)
         if opts.skip_design and not (workdir / DESIGN_FILENAME).is_file():
             raise OrchestratorError(f"--skip-design 인데 {workdir / DESIGN_FILENAME} 이 없습니다.")
         if opts.design_only and wf.first("debate") is None:
             raise OrchestratorError(f"워크플로 {wf.name} 에는 설계(debate) 단계가 없어 --design-only 를 쓸 수 없습니다.")
-        if wf.first("build") and not wf.first("debate") and not (workdir / DESIGN_FILENAME).is_file():
+        if wf.first("build") and not wf.first("debate") and wf.first("build").design != "task" \
+                and not (workdir / DESIGN_FILENAME).is_file():
             raise OrchestratorError(f"워크플로 {wf.name} 에는 설계 단계가 없어 {workdir / DESIGN_FILENAME} 이 필요합니다.")
         agents = self._make_agents(cfg, opts.mock, wf)
 
@@ -169,6 +181,13 @@ class Orchestrator:
             state = RunState(run_id=run_dir.name, task=opts.task, config=self._snapshot(cfg, opts),
                              workflow=None if wf.is_classic else wf.to_dict())
             state.attachments = attachments.copy_into(run_dir, attach)
+            if route is not None:
+                state.route = route.to_dict()
+            build = wf.first("build")
+            if build is not None and build.design == "task" and wf.first("debate") is None:
+                task_doc = run_dir / TASK_DOC                       # 과제 원문을 설계로 (DESIGN.md 36.5)
+                task_doc.write_text(TASK_DOC_HEADER + opts.task.strip() + "\n", encoding="utf-8")
+                state.design_doc = task_doc.relative_to(workdir).as_posix()
             debate = wf.first("debate")
             if debate is not None and debate.output == "change" and not opts.skip_design:
                 state.design_doc = f"{CHANGES_DIR}/{run_dir.name}.md"   # DESIGN.md 19.5

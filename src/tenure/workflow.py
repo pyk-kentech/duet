@@ -39,13 +39,13 @@ MAX_REVIEWERS = 3
 MAX_AUDITORS = 3
 PROJECT_DIR = Path(".tenure") / "workflows"
 
-SOURCE_LABELS = {"config": "기본", "builtin": "내장", "user": "내 템플릿", "project": "프로젝트", "file": "파일"}
+SOURCE_LABELS = {"config": "설정", "builtin": "내장", "user": "내 템플릿", "project": "프로젝트", "file": "파일"}
 
 _ROLE_KEYS = {"agent", "model", "effort", "step_effort", "step_model", "instructions", "templates"}
 _STEP_KEYS = {
     "explore": {"kind", "id", "role"},
     "debate": {"kind", "id", "proposers", "rounds", "synth", "output"},
-    "build": {"kind", "id", "implementer", "reviewers", "max_review", "arbiter"},
+    "build": {"kind", "id", "implementer", "reviewers", "max_review", "arbiter", "design"},
     "audit": {"kind", "id", "roles"},
 }
 _TOP_KEYS = {"name", "description", "roles", "steps"}
@@ -107,6 +107,7 @@ class Step:
     reviewers: list[str] = field(default_factory=list)
     max_review: int | None = None
     arbiter: str | None = None                               # 분쟁 중재자 역할 (DESIGN.md 23.2)
+    design: str | None = None                                # build: None/"doc" = DESIGN.md, "task" = 과제 원문을 설계로 (36.5)
     roles: list[str] = field(default_factory=list)           # audit
 
     def role_names(self) -> list[str]:
@@ -193,7 +194,7 @@ def classic(cfg: Config) -> Workflow:
         Step(kind="debate", id="debate", proposers=list(AGENT_NAMES), synth=cfg.synth_name),
         Step(kind="build", id="build", implementer=cfg.implementer, reviewers=[cfg.reviewer]),
     ]
-    return Workflow(CLASSIC_WORKFLOW, "설계 토론 → 구현 → 교차 리뷰 · 기본",
+    return Workflow(CLASSIC_WORKFLOW, "설계 토론 → 구현 → 교차 리뷰 · 큰 설계 결정이 있을 때",
                     roles, steps, source="config")
 
 
@@ -342,6 +343,10 @@ def _parse_step(i: int, sdata: Any, roles: Mapping[str, Role], err) -> Step:
             step.arbiter = _need_role(sdata.get("arbiter"), label, roles, err)
             if step.arbiter == lead:
                 raise err(f"{label}: 구현자({lead})는 중재자가 될 수 없습니다")
+        if sdata.get("design") is not None:
+            if sdata["design"] not in ("doc", "task"):
+                raise err(f"{label}: design 은 doc 또는 task 여야 합니다: {sdata['design']!r}")
+            step.design = sdata["design"]
     else:
         step.roles = _role_list(sdata, "roles", label, roles, err, lo=1, hi=MAX_AUDITORS)
     return step

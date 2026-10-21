@@ -18,6 +18,9 @@ def isolated_tenure_home(tmp_path_factory, monkeypatch) -> Path:
     """테스트가 사용자의 ~/.tenure/projects.json 을 건드리지 않게 한다."""
     home = tmp_path_factory.mktemp("tenure-home")
     monkeypatch.setenv("TENURE_HOME", str(home))
+    # 기본 워크플로는 auto(DESIGN.md 36.5)지만, 기존 테스트는 classic 흐름을 가정한다. auto 는 test_m30 이 따로 확인
+    import tenure.config as _config
+    monkeypatch.setattr(_config, "DEFAULT_WORKFLOW", _config.CLASSIC_WORKFLOW)
     if os.name == "nt":
         monkeypatch.setenv("PYTHONUTF8", "1")      # 테스트가 직접 띄우는 자식 파이썬도 UTF-8 (DESIGN.md 27.7)
     return home

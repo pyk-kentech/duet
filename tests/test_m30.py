@@ -182,3 +182,122 @@ def test_sse_stream_sends_events_then_end(tmp_path: Path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+# ====================================================================== 36.5 quick·auto, 프롬프트 고침
+import tenure.orchestrator as orch_mod
+from tenure import router
+from tenure.agents.mock import MockAdapter
+from tenure.prompts import render
+from tenure.workflow import WorkflowError, load_workflow
+
+
+def _capture_agents(monkeypatch) -> dict:
+    made: dict = {}
+
+    def factory(cfg, *, mock):
+        made["claude"] = MockAdapter(label="claude")
+        made["codex"] = MockAdapter(label="codex")
+        return dict(made)
+
+    monkeypatch.setattr(orch_mod, "make_agents", factory)
+    monkeypatch.setattr(orch_mod, "make_role_agents", lambda cfg, wf, *, mock: factory(cfg, mock=mock))
+    return made
+
+
+def test_quick_workflow_skips_design_and_uses_task_as_design(tmp_path: Path, monkeypatch):
+    made = _capture_agents(monkeypatch)
+    task = "할일 CLI 를 만든다. add·list·done 명령을 둔다."
+    assert main(["run", task, "--workdir", str(tmp_path), "--mock", "--workflow", "quick"]) == 0
+    [rd] = list_run_dirs(tmp_path)
+    st = RunState.load(rd)
+    assert st.status == "done_approved" and st.design_doc == f".tenure/runs/{rd.name}/TASK.md"
+    assert task in (rd / "TASK.md").read_text(encoding="utf-8")
+    steps = [c.step for c in made["claude"].calls + made["codex"].calls]
+    assert "propose" not in steps and "synthesize" not in steps and steps.count("implement") == 1
+    impl = next(c for c in made["claude"].calls if c.step == "implement")
+    assert st.design_doc in impl.prompt and task in impl.prompt
+    assert not (tmp_path / "DESIGN.md").exists()
+
+
+def test_build_design_option_validation(tmp_path: Path):
+    (tmp_path / ".tenure" / "workflows").mkdir(parents=True)
+    (tmp_path / ".tenure" / "workflows" / "bad.toml").write_text(
+        'name = "bad"\n[roles.a]\nagent = "claude"\n[roles.b]\nagent = "codex"\n'
+        '[[steps]]\nkind = "build"\nimplementer = "a"\nreviewers = ["b"]\ndesign = "nope"\n', encoding="utf-8")
+    with pytest.raises(WorkflowError, match="design"):
+        load_workflow("bad", tmp_path, load_config(tmp_path))
+    assert load_workflow("quick", tmp_path, load_config(tmp_path)).first("build").design == "task"
+
+
+def test_rule_route(tmp_path: Path):
+    empty = tmp_path / "new"
+    empty.mkdir()
+    assert router.rule_route("할일 앱 만들어 줘", empty).workflow == "classic"
+    assert router.rule_route("x" * 700, empty).workflow == "quick"
+    assert router.rule_route("목표\n- 하나 " + "a" * 80 + "\n- 둘 " + "b" * 80 + "\n- 셋 " + "c" * 40, empty).workflow == "quick"
+    assert router.rule_route("가" * 300, empty) is None                 # 애매함 → 모델
+    code = tmp_path / "old"
+    code.mkdir()
+    (code / "main.py").write_text("print(1)\n", encoding="utf-8")
+    assert router.rule_route("할일 앱 만들어 줘", code).workflow == "quick"
+
+
+def test_model_route_parses_and_falls_back(tmp_path: Path, monkeypatch):
+    import tenure.agents.claude_code as cc
+
+    answers = iter(['생각해 보니 {"route": "classic", "reason": "설계 결정이 큼"}', "모르겠음"])
+
+    class Fake:
+        def __init__(self, cfg, ac):
+            assert ac.model == router.ROUTER_MODEL
+
+        def ask(self, req):
+            return _res(text=next(answers))
+
+    monkeypatch.setattr(cc, "ClaudeCodeAdapter", Fake)
+    cfg = load_config(tmp_path)
+    r = router.model_route("가" * 300, tmp_path, cfg)
+    assert (r.workflow, r.source, r.reason) == ("classic", "model", "설계 결정이 큼")
+    assert router.model_route("가" * 300, tmp_path, cfg).to_dict() == {
+        "workflow": "quick", "reason": "분류에 실패해 기본값(quick)", "source": "fallback"}
+
+
+def test_auto_routes_short_new_task_to_classic_and_records(tmp_path: Path, monkeypatch, capsys):
+    made = _capture_agents(monkeypatch)
+    wd = tmp_path / "w"
+    assert main(["run", "할일 앱 만들어 줘", "--workdir", str(wd), "--mock", "--workflow", "auto",
+                 "--debate-rounds", "0"]) == 0
+    st = RunState.load(list_run_dirs(wd)[0])
+    assert st.route["workflow"] == "classic" and st.route["source"] == "rule"
+    assert any(c.step == "propose" for c in made["claude"].calls)
+    assert "워크플로 자동 선택: classic" in capsys.readouterr().out
+
+
+def test_auto_routes_existing_project_to_quick(tmp_path: Path, monkeypatch):
+    made = _capture_agents(monkeypatch)
+    wd = tmp_path / "w"
+    wd.mkdir()
+    (wd / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    assert main(["run", "출력을 hello 로 바꿔라", "--workdir", str(wd), "--mock", "--workflow", "auto"]) == 0
+    st = RunState.load(list_run_dirs(wd)[0])
+    assert st.route == {"workflow": "quick", "reason": "기존 프로젝트를 바꾸는 일", "source": "rule"}
+    assert not any(c.step == "propose" for c in made["claude"].calls)
+
+
+def test_default_workflow_is_auto_outside_tests(monkeypatch, tmp_path: Path):
+    import tenure.config as config
+
+    monkeypatch.setattr(config, "DEFAULT_WORKFLOW", config.AUTO_WORKFLOW)
+    assert load_config(tmp_path).workflow == "auto"
+
+
+def test_prompt_fixes_from_benchmarks():
+    impl = render("implement", task="T", design_doc="DESIGN.md", design_note="", test_hint="")
+    assert "과제 원문이 가장 우선" in impl
+    syn = render("synthesize", task="T", a_name="claude", a="A", b_name="codex", b="B", critiques="")
+    assert "명세에 없는 점" in syn and "줄이거나 바꾸지 말고" in syn
+    from tenure import prompts
+    review = prompts.load_template("review") if hasattr(prompts, "load_template") else \
+        (Path(prompts.__file__).parent / "templates" / "review.md").read_text(encoding="utf-8")
+    assert "과제에 적힌 요구(과제가 명시한 경계 사례 포함) 위반" in review and "요구 조항을 하나씩" in review

@@ -94,6 +94,7 @@ class RunState:
     attachments: list[str] = field(default_factory=list)              # 첨부 파일 (실행 폴더 기준, DESIGN.md 33.3)
     browser: dict = field(default_factory=dict)                       # 라운드 → 브라우저 확인 기록 (DESIGN.md 33.4)
     test_guard: dict[str, dict] = field(default_factory=dict)         # round → 테스트 변경 경고 (DESIGN.md 24.1)
+    route: dict | None = None                                         # auto 가 고른 워크플로와 이유 (36.5)
     seen_at: str | None = None                                        # 화면에서 끝난 실행을 연 시각 (36.3.1)
     limit_wait: dict | None = None                                    # 한도 대기 중이면 {agent, step, until, reason} (25.1)
     limit_waited_sec: float = 0.0                                     # 한도 대기에 쓴 시간 합

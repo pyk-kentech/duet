@@ -31,7 +31,7 @@ class Option:
 
 
 OPTIONS: tuple[Option, ...] = (
-    Option("workflow", "워크플로", "역할·단계 조합. classic 은 설정의 구현·리뷰 담당으로 만든다 (19장).", "choice", "run",
+    Option("workflow", "워크플로", "역할·단계 조합. 기본 auto 는 과제를 보고 quick(혼자 구현+짧은 리뷰) 또는 classic(설계 토론)을 고른다 (36.5). classic 은 설정의 구현·리뷰 담당으로 만든다 (19장).", "choice", "run",
            run_dialog=False),
     Option("timeout_sec", "호출 시간 제한(초)", "에이전트 호출 하나가 이보다 오래 걸리면 멈춘다.", "int", "limits", min=60, max=86400),
     Option("test_timeout_sec", "테스트 시간 제한(초)", "tenure 가 돌리는 테스트 명령의 시간 제한.", "int", "limits", min=10, max=86400),
@@ -153,7 +153,7 @@ def schema(cfg: Config | None = None, workflows: list[str] | None = None) -> lis
     for o in sorted(OPTIONS, key=lambda o: order.index(o.group)):     # 묶음 순서대로 (정렬은 안정적)
         d = asdict(o)
         if o.key == "workflow" and workflows:
-            d["choices"] = list(workflows)
+            d["choices"] = ["auto", *[w for w in workflows if w != "auto"]]
         d["effective"] = getattr(cfg, o.key)
         d["default"] = getattr(builtin, o.key)            # tenure 내장 기본값 (설정 화면의 '기본값으로')
         d["group_label"] = GROUPS[o.group]
