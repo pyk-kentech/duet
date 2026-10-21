@@ -1,0 +1,6 @@
+name = "booking-backlog"
+description = "기존 코워킹 예약 프로젝트(모듈 20개·약 2,200줄, 자체 테스트 64개)에 티켓 8개: 중복된 경로 찾기, 문서화된 동작 지키기, 팀 기능, 저장 형식 3, 성능"
+kind = "existing"
+max_review = 3
+timeout_sec = 3600
+hidden_tests = 151

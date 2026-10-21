@@ -1,0 +1,9 @@
+[project]
+name = "findex"
+version = "0.4.2"
+description = "작은 전문 검색 라이브러리와 CLI (표준 라이브러리만)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
