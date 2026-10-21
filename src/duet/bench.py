@@ -50,7 +50,13 @@ Printer = Callable[[str], None]
 STATUS = {DONE_APPROVED: "approved", DONE_UNAPPROVED: "unapproved", DONE_DESIGN: "design_only",
           STOPPED_RATE_LIMIT: "stopped", STOPPED_USER: "stopped", FAILED: "failed"}
 STATUS_KO = {"approved": "승인", "unapproved": "미승인", "design_only": "설계만", "stopped": "중단",
-             "failed": "실패", "error": "오류"}
+             "failed": "실패", "error": "오류", "solo": "혼자 완료"}
+
+# 단일 에이전트 기준선 (DESIGN.md 34장): 워크플로가 아니라 벤치마크 전용 이름
+SOLO_PREFIX = "solo-"
+SOLO_WORKFLOWS = (SOLO_PREFIX + "claude", SOLO_PREFIX + "codex")
+SOLO_INSTRUCTION = "이 작업 폴더에서 위 과제를 끝까지 구현하라. 테스트를 직접 돌려 확인한 뒤 끝내라."
+SOLO_DESIGN_NOTE = "작업 폴더의 DESIGN.md 에 정해 둔 설계가 있다. 그 설계를 따른다."
 
 
 class BenchError(Exception):
@@ -293,14 +299,108 @@ def _row(task: Task, workflow: str, rep: int, wd: Path, seconds: float, outcome:
     return row
 
 
+# ====================================================================== 혼자 (DESIGN.md 34장)
+def is_solo(workflow: str) -> bool:
+    return workflow in SOLO_WORKFLOWS
+
+
+def solo_prompt(task: Task, *, fixed_design: bool = False) -> str:
+    return task.prompt + "\n\n---\n" + (SOLO_DESIGN_NOTE + "\n" if fixed_design else "") + SOLO_INSTRUCTION
+
+
+@dataclass
+class SoloOutcome:
+    status: str                       # "solo" | "failed" | "stopped"
+    results: list                     # AgentResult (한도로 다시 보낸 것까지)
+    error: str | None = None
+    own_tests: str | None = None
+    limit_waited_sec: float = 0.0
+
+
+def run_solo(task: Task, agent: str, wd: Path, *, mock: bool, wait_on_limit: bool, fixed_design: bool,
+             printer: Printer) -> SoloOutcome:
+    """그 CLI 를 한 번 부른다: 구현 자리와 같은 모델·추론 강도·권한, 설계 토론·리뷰·duet 테스트 되먹임 없음."""
+    from duet import limits
+    from duet import orchestrator as orch
+    from duet.agents.base import AgentRequest, Mode
+    from duet.config import load_config
+    from duet.testing import resolve_command, run_tests
+
+    cfg = load_config(wd)
+    adapter = orch.make_agents(cfg, mock=mock)[agent]
+    req = AgentRequest(prompt=solo_prompt(task, fixed_design=fixed_design), cwd=wd, mode=Mode.WRITE,
+                       timeout_sec=task.timeout_sec or cfg.timeout_sec, step="implement", round=1)
+    results: list = []
+    waited = 0.0
+    while True:
+        res = adapter.ask(req)
+        results.append(res)
+        if not res.rate_limited:
+            break
+        budget = cfg.limit_wait_max_min * 60 - waited
+        if not wait_on_limit or budget <= 0:
+            return SoloOutcome("stopped", results, f"{agent} 한도 도달", limit_waited_sec=waited)
+        now = limits.now()
+        wait, why = limits.plan_wait((res.text, res.raw_stderr, res.raw_stdout[-4000:]), res.usage, len(results), now)
+        wait = min(wait, budget)
+        printer(f"⏳ {agent} 한도 도달. {dt.datetime.fromtimestamp(now + wait):%m-%d %H:%M} 까지 기다렸다가 다시 보냅니다 ({why})")
+        limits.sleep(wait)
+        waited += wait
+    log = wd / ".duet" / "solo"
+    log.mkdir(parents=True, exist_ok=True)
+    (log / "answer.md").write_text(res.text or "", encoding="utf-8")
+    (log / "call.json").write_text(json.dumps({"command": res.command, "exit_code": res.exit_code,
+                                               "duration_sec": res.duration_sec, "timed_out": res.timed_out,
+                                               "usage": res.usage, "session_id": res.session_id},
+                                              ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    if res.timed_out or res.exit_code != 0:
+        return SoloOutcome("failed", results, res.failure_reason(), limit_waited_sec=waited)
+    own = None
+    resolved = resolve_command(wd, cfg.test_command)
+    if resolved:
+        own = run_tests(wd, *resolved, cfg.test_timeout_sec, drop_env=env_drops(cfg.env_strip, cfg.env_keep)).status
+    return SoloOutcome("solo", results, own_tests=own, limit_waited_sec=waited)
+
+
+def _solo_usage(agent: str, results: list) -> dict[str, dict[str, int]]:
+    t = {"input": 0, "cached": 0, "output": 0, "calls": len(results)}
+    for r in results:
+        u = r.usage or {}
+        t["input"] += int(u.get("input_tokens") or 0)
+        t["cached"] += int(u.get("cached_input_tokens") or 0)
+        t["output"] += int(u.get("output_tokens") or 0)
+    return {agent: t}
+
+
+def solo_week_marks(agent: str, results: list) -> dict[str, tuple[float, float]]:
+    vals = [v for r in results for v in [_weekly_percent((r.usage or {}).get("rate_limits"))] if v is not None]
+    return {agent: (vals[0], vals[-1])} if vals else {}
+
+
+def _solo_row(task: Task, workflow: str, rep: int, wd: Path, seconds: float, so: SoloOutcome,
+              hidden: dict[str, Any] | None) -> dict[str, Any]:
+    agent = workflow[len(SOLO_PREFIX):]
+    usage = _solo_usage(agent, so.results)
+    row: dict[str, Any] = {"task": task.name, "kind": task.kind, "workflow": workflow, "rep": rep,
+                           "workdir": str(wd), "seconds": round(seconds, 1), "solo": True,
+                           "status": so.status, "approved": False, "arbiter": None, "stop_reason": None,
+                           "rounds": 0, "calls": len(so.results), "usage": usage,
+                           "cost_usd": round(sum(float((r.usage or {}).get("cost_usd") or 0) for r in so.results), 4),
+                           "run_dir": str(wd / ".duet" / "solo"), "own_tests": so.own_tests, "hidden": hidden,
+                           "error": so.error,
+                           "max_input": {agent: max((int((r.usage or {}).get("input_tokens") or 0) for r in so.results), default=0)},
+                           "codex_equiv": codex_limit_equiv(usage)}
+    if so.limit_waited_sec:
+        row["limit_wait_sec"] = round(so.limit_waited_sec, 1)
+    return row
+
+
 def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC_WORKFLOW,),
               task_names: Sequence[str] | None = None, repeat: int = 1, max_review: int | None = None,
               out_root: Path, mock: bool = False, printer: Printer = print, verbose: bool = False,
               pytest_cmd: Sequence[str] | None = None, now: dt.datetime | None = None,
               wait_on_limit: bool = False, fixed_design: bool = False) -> Path:
     """벤치마크를 돌리고 결과 폴더를 돌려준다. 한도 도달·사용자 중단이면 거기서 멈춘다."""
-    from duet.orchestrator import Orchestrator, OrchestratorError, RunOptions
-
     tasks = pick_tasks(load_suite(suite), task_names)
     if fixed_design:
         missing = [t.name for t in tasks if t.fixed_design is None]
@@ -321,28 +421,19 @@ def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC
         wd = result_dir / task.name / f"{workflow}-{rep}"
         printer(f"[{i}/{len(plan)}] {task.name} × {workflow} #{rep} 실행 중...")
         prepare_workdir(task, wd, fixed_design=fixed_design)
-        orch = Orchestrator(printer=printer if verbose else (lambda line: None))
-        overrides: dict[str, Any] = {"workflow": workflow}
-        if wait_on_limit:
-            overrides["wait_on_limit"] = True
-        if max_review or task.max_review:
-            overrides["max_review"] = max_review or task.max_review
-        if task.timeout_sec:
-            overrides["timeout_sec"] = task.timeout_sec
-        started = time.monotonic()
-        outcome, error = None, None
-        try:
-            outcome = orch.run(RunOptions(task=task.prompt, workdir=wd, mock=mock, overrides=overrides, register=False,
-                                          skip_design=fixed_design))
-        except OrchestratorError as e:
-            error = str(e)
-        seconds = time.monotonic() - started
-        hidden = None
-        if outcome is not None and outcome.state.status in (DONE_APPROVED, DONE_UNAPPROVED):
-            hidden = grade(task, wd, result_dir / "_grade" / task.name / f"{workflow}-{rep}", pytest_cmd=pytest_cmd)
-        row = _row(task, workflow, rep, wd, seconds, outcome, error, hidden)
-        if outcome is not None:
-            row["week_pct"] = week_delta(week_marks(outcome.state), prev_week)
+        if is_solo(workflow):
+            started = time.monotonic()
+            so = run_solo(task, workflow[len(SOLO_PREFIX):], wd, mock=mock, wait_on_limit=wait_on_limit,
+                          fixed_design=fixed_design, printer=printer)
+            seconds = time.monotonic() - started
+            hidden = (grade(task, wd, result_dir / "_grade" / task.name / f"{workflow}-{rep}", pytest_cmd=pytest_cmd)
+                      if so.status == "solo" else None)
+            row = _solo_row(task, workflow, rep, wd, seconds, so, hidden)
+            row["week_pct"] = week_delta(solo_week_marks(workflow[len(SOLO_PREFIX):], so.results), prev_week)
+        else:
+            row = _run_workflow(task, workflow, rep, wd, result_dir, mock=mock, verbose=verbose, printer=printer,
+                                max_review=max_review, wait_on_limit=wait_on_limit, fixed_design=fixed_design,
+                                pytest_cmd=pytest_cmd, prev_week=prev_week)
         rows.append(row)
         _save(result_dir, meta, rows)
         printer(f"[{i}/{len(plan)}] {task.name} × {workflow} #{rep}: {describe_row(row)}")
@@ -353,6 +444,37 @@ def run_bench(*, suite: str = BUILTIN_SUITE, workflows: Sequence[str] = (CLASSIC
     shutil.rmtree(result_dir / "_grade", ignore_errors=True)
     printer(f"요약: {result_dir / SUMMARY_MD}")
     return result_dir
+
+
+def _run_workflow(task: Task, workflow: str, rep: int, wd: Path, result_dir: Path, *, mock: bool, verbose: bool,
+                  printer: Printer, max_review: int | None, wait_on_limit: bool, fixed_design: bool,
+                  pytest_cmd: Sequence[str] | None, prev_week: dict[str, float]) -> dict[str, Any]:
+    """duet 워크플로 한 번 + 채점."""
+    from duet.orchestrator import Orchestrator, OrchestratorError, RunOptions
+
+    orch = Orchestrator(printer=printer if verbose else (lambda line: None))
+    overrides: dict[str, Any] = {"workflow": workflow}
+    if wait_on_limit:
+        overrides["wait_on_limit"] = True
+    if max_review or task.max_review:
+        overrides["max_review"] = max_review or task.max_review
+    if task.timeout_sec:
+        overrides["timeout_sec"] = task.timeout_sec
+    started = time.monotonic()
+    outcome, error = None, None
+    try:
+        outcome = orch.run(RunOptions(task=task.prompt, workdir=wd, mock=mock, overrides=overrides, register=False,
+                                      skip_design=fixed_design))
+    except OrchestratorError as e:
+        error = str(e)
+    seconds = time.monotonic() - started
+    hidden = None
+    if outcome is not None and outcome.state.status in (DONE_APPROVED, DONE_UNAPPROVED):
+        hidden = grade(task, wd, result_dir / "_grade" / task.name / f"{workflow}-{rep}", pytest_cmd=pytest_cmd)
+    row = _row(task, workflow, rep, wd, seconds, outcome, error, hidden)
+    if outcome is not None:
+        row["week_pct"] = week_delta(week_marks(outcome.state), prev_week)
+    return row
 
 
 def describe_row(row: dict[str, Any]) -> str:
@@ -430,7 +552,8 @@ def workflow_stats(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rs = [r for r in rows if r["workflow"] == w]
         graded = [r for r in rs if r.get("hidden") and r["hidden"].get("total")]
         out.append({
-            "workflow": w, "runs": len(rs), "approved": sum(1 for r in rs if r["approved"]),
+            "workflow": w, "runs": len(rs), "solo": all(r.get("solo") for r in rs),   # 혼자: 승인 칸이 없다
+            "approved": sum(1 for r in rs if r["approved"]),
             "arbiter": sum(1 for r in rs if r.get("arbiter") == "arbiter"),
             "hidden_rate": _mean([r["hidden"]["passed"] / r["hidden"]["total"] for r in graded]) * 100,
             "graded": len(graded), "all_passed": sum(1 for r in graded if r["hidden"]["all_passed"]),
@@ -465,9 +588,11 @@ def summarize(data: dict[str, Any]) -> str:
               "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     del workflows
     for s in workflow_stats(rows):
+        solo = s["solo"]
         lines.append(
-            f"| {s['workflow']} | {s['runs']} | {s['approved']}/{s['runs']} | {s['arbiter']} | "
-            f"{s['hidden_rate']:.0f}% ({s['graded']}개 채점) | {s['all_passed']}/{s['graded']} | {s['missed']} | "
+            f"| {s['workflow']} | {s['runs']} | {'-' if solo else str(s['approved']) + '/' + str(s['runs'])} | "
+            f"{'-' if solo else s['arbiter']} | "
+            f"{s['hidden_rate']:.0f}% ({s['graded']}개 채점) | {s['all_passed']}/{s['graded']} | {'-' if solo else s['missed']} | "
             f"{s['rounds']:.1f} | {_fmt_sec(s['seconds'])} | "
             f"{s['calls']:.1f} | {s['input']['claude']:,.0f} / {s['input']['codex']:,.0f} | {s['output']:,.0f} | "
             f"{s['codex_equiv']:,.0f} | {s['max_input']['claude']:,.0f} / {s['max_input']['codex']:,.0f} | "
@@ -481,7 +606,8 @@ def summarize(data: dict[str, Any]) -> str:
         lines.append(f"| {r['task']} | {r['workflow']} | {r['rep']} | {STATUS_KO.get(r['status'], r['status'])} | "
                      f"{r.get('rounds') or 0} | {hidden} | {r.get('own_tests') or '-'} | "
                      f"{_fmt_sec(r.get('seconds') or 0)} | {r.get('calls') or 0} | {tok:,} |")
-    lines += ["", "- 숨은 테스트: 에이전트가 보지 못한 수용 테스트. 승인·미승인으로 끝난 실행만 채점한다.",
+    lines += ["", "- 숨은 테스트: 에이전트가 보지 못한 수용 테스트. 승인·미승인(혼자는 정상 종료)으로 끝난 실행만 채점한다.",
+              "- solo-claude·solo-codex: 그 CLI 혼자 한 번 호출(구현 자리와 같은 모델·권한, 설계 토론·리뷰 없음). 비교 기준선.",
               "- Codex 한도 환산: 미캐시 입력 + 0.1×캐시 입력 + 5×출력 (요금표 비율). 주간 사용률 변화: 호출에 기록된 7일 창 "
               "사용률의 차이(앞 실행 마지막 값 기준, 같은 시간에 따로 쓴 양이 섞일 수 있음).",
               "- 승인했는데 실패: 리뷰가 승인했지만 숨은 테스트가 하나라도 실패한 실행 (리뷰가 놓친 결함)."]

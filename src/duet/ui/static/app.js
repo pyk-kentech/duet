@@ -1738,10 +1738,10 @@ class BenchView {
   renderResult(d, m) {
     const meta = d.meta || {};
     const stats = (d.stats || []).map(s => h('tr', null,
-      h('td', null, h('b', null, s.workflow)), h('td', { class: 'num' }, `${s.approved}/${s.runs}`),
-      h('td', { class: 'num' }, s.arbiter || '-'),
+      h('td', null, h('b', null, s.workflow)), h('td', { class: 'num' }, s.solo ? '-' : `${s.approved}/${s.runs}`),
+      h('td', { class: 'num' }, (!s.solo && s.arbiter) || '-'),
       h('td', { class: 'num' }, `${s.hidden_rate.toFixed(0)}%`), h('td', { class: 'num' }, `${s.all_passed}/${s.graded}`),
-      h('td', { class: 'num' + (s.missed ? ' bad' : '') }, s.missed),
+      h('td', { class: 'num' + (s.missed ? ' bad' : '') }, s.solo ? '-' : s.missed),
       h('td', { class: 'num' }, s.rounds.toFixed(1)), h('td', { class: 'num' }, fmtDur(s.seconds)),
       h('td', { class: 'num' }, s.calls.toFixed(1)),
       h('td', { class: 'num' }, `${fmtTok(s.input.claude)} / ${fmtTok(s.input.codex)}`), h('td', { class: 'num' }, fmtTok(s.output))));
@@ -1751,8 +1751,8 @@ class BenchView {
       const link = r.has_runs && run ? hrefRun(m, r.workdir, run) : null;
       return h('tr', null,
         h('td', null, link ? h('a', { href: link }, r.task) : r.task), h('td', null, r.workflow), h('td', { class: 'num' }, r.rep),
-        h('td', null, h('span', { class: `badge s-${r.approved ? 'done_approved' : r.status === 'unapproved' ? 'done_unapproved' : 'failed'}` },
-          ({ approved: '승인', unapproved: '미승인', stopped: '중단', failed: '실패', error: '오류', design_only: '설계만' }[r.status] || r.status)
+        h('td', null, h('span', { class: `badge s-${r.approved ? 'done_approved' : r.status === 'unapproved' ? 'done_unapproved' : r.status === 'solo' ? 'done_design' : 'failed'}` },
+          ({ approved: '승인', unapproved: '미승인', stopped: '중단', failed: '실패', error: '오류', design_only: '설계만', solo: '혼자 완료' }[r.status] || r.status)
           + (r.arbiter === 'arbiter' ? ' (중재)' : ''))),
         h('td', { class: 'num' }, r.rounds || 0),
         h('td', { class: 'num' + (hd && !hd.all_passed ? ' bad' : '') }, hd ? `${hd.passed}/${hd.total}` : '-'),

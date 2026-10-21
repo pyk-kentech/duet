@@ -105,7 +105,8 @@ def build_parser() -> argparse.ArgumentParser:
     b_run = bsub.add_parser("run", help="벤치마크 실행 (실제 실행은 --yes 필요)")
     b_run.add_argument("--suite", default="basic", help="과제 묶음: 내장 이름(basic) 또는 폴더 경로")
     b_run.add_argument("--workflow", action="append", metavar="NAME",
-                       help="비교할 워크플로 (여러 번 지정 가능, 기본: classic)")
+                       help="비교할 워크플로 (여러 번 지정 가능, 기본: classic). "
+                            "혼자 기준선: solo-claude, solo-codex (DESIGN.md 34장)")
     b_run.add_argument("--task", action="append", metavar="NAME", help="일부 과제만 (여러 번 지정 가능)")
     b_run.add_argument("--repeat", type=int, default=1, help="같은 조합 반복 횟수 (기본 1)")
     b_run.add_argument("--max-review", type=int, help="구현-리뷰 최대 반복 (기본: 과제·설정 값)")

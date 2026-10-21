@@ -477,6 +477,10 @@ env_keep = ["CLAUDE_CODE_OAUTH_TOKEN"]
 - 권한 수준(`access`, 기본 full), 웹 검색·문서 읽기, 패키지 최신 버전 조회 명령, 과제 첨부 파일(CLI·UI), 웹 화면이 있는 프로젝트의 브라우저 확인(필요할 때만) (33장)
 - ✅ 권한 수준·단계·설정별로 CLI 인자에 붙는 도구·플래그(`--permission-mode`, `--dangerously-bypass-approvals-and-sandbox`, `--allowedTools`·`--disallowedTools`, `--search`, `-i`, `--mcp-config`·`-c mcp_servers`), 첨부 복사·프롬프트·크기 제한·UI 업로드, 웹 앱 감지와 앱 띄우기·정리(가짜 서버), 설정·순서도 표시. 실제 모델로는 아직 확인하지 않음
 
+### M28. 혼자 기준선 (2026-10-20 사용자 요청으로 추가)
+- 벤치마크에 `solo-claude`·`solo-codex`(그 CLI 혼자 한 번 호출)를 비교 기준선으로 둔다 (34장)
+- ✅ 혼자 실행의 호출(구현 자리와 같은 설정·쓰기 모드·과제의 시간 제한)·채점·자체 테스트·한도 처리(멈춤·기다렸다 다시)·요약표의 '-' 칸, classic 과 한 벤치마크에서 함께, mock 전 과정
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -1234,3 +1238,14 @@ duet 의 목적은 에이전트 하나보다 나은 최종 결과물이다. 그�
 - `standard`: 지금까지의 권한(Claude 읽기 Read·Glob·Grep, 쓰기 acceptEdits + Read·Edit·Write·Glob·Grep·Bash, Codex read-only·workspace-write 샌드박스) + 33.1·33.2 의 추가분.
 - 설정 화면·새 실행 창의 고급 설정에서 고르고, 실행 상세의 칩과 시작 로그에 보인다.
 
+
+## 34. 혼자 기준선 (2026-10-20 사용자 요청)
+
+duet 를 만드는 이유는 "에이전트 하나보다 나은 최종 결과"다(33.5). 그러니 벤치마크의 비교 기준에 에이전트 혼자를 둔다. 첫 비교(`large/issuetrack` 1회, 2026-10-20): Claude 혼자 130/131(6분 35초, 입력 103만 토큰), classic 129/131(29분 34초, 입력 334만 토큰, 리뷰 1회차 승인). 둘 다 `update(1, id=5)` 함정에 걸렸고, classic 은 설계 토론에서 모호한 CSV 라벨 규칙을 더 엄격하게 정해 하나 더 틀렸다. 표본이 하나라 더 돌려 본다(사용자: 실효성 테스트이므로 토큰을 아끼지 않는다).
+
+### 34.1 `solo-claude`, `solo-codex`
+- `duet bench run --workflow solo-claude --workflow solo-codex --workflow classic ...`. 워크플로가 아니라 **벤치마크 전용 이름**이다(`duet run` 에서는 못 쓴다).
+- 그 CLI 를 한 번 부른다: 프롬프트는 과제(`task.md`) + "이 작업 폴더에서 위 과제를 끝까지 구현하라. 테스트를 직접 돌려 확인한 뒤 끝내라." 쓰기 모드, 단계 `implement`(구현 자리와 같은 모델·추론 강도·권한·도구), 시간 제한은 과제의 `timeout_sec`. 설계 토론·리뷰·duet 테스트 되먹임은 없다. 고정 설계(31.2)면 "작업 폴더의 DESIGN.md 설계를 따른다"를 한 줄 더한다.
+- 끝나면 duet 테스트 명령(19장 감지 규칙)을 한 번 돌려 '자체 테스트'로 기록하고, 숨은 테스트로 채점한다(20.3). 응답과 호출 정보는 작업 폴더의 `.duet/solo/`(채점 복사에서 빠짐).
+- 상태: 정상 끝 `solo`(표시 '혼자 완료'), 실패·시간 초과 `failed`(채점 안 함, classic 의 실패와 같게), 한도 `stopped`(벤치마크를 멈춤). `--wait-on-limit` 면 25.1 처럼 재개 시각까지 기다렸다가 같은 호출을 다시 보낸다(대기 예산 `limit_wait_max_min`).
+- 요약표·UI: 승인·중재·승인했는데 실패 칸은 `-`. 통과율·시간·호출·토큰·Codex 한도 환산·주간 사용률은 같은 방식으로 센다.
