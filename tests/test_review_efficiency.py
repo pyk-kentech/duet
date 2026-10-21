@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from duet.activity import call_start_epoch, claude_activity, claude_project_dir, codex_activity
-from duet.agents.mock import MockAdapter
-from duet.phases.build import BuildPhase
-from duet.repro import parse_repros
-from duet.workspace import Workspace
+from tenure.activity import call_start_epoch, claude_activity, claude_project_dir, codex_activity
+from tenure.agents.mock import MockAdapter
+from tenure.phases.build import BuildPhase
+from tenure.repro import parse_repros
+from tenure.workspace import Workspace
 from tests.helpers import file_names, make_ctx, py_cmd
 
 # 재현 테스트(파이썬 스크립트)를 모두 돌리는 테스트 명령. sh·cmd.exe 어디서나 돈다 (DESIGN.md 27.7)
@@ -35,7 +35,7 @@ def test_x():
 </repro>
 <repro path="../evil_test.py">x</repro>
 <repro path="/etc/test_abs.py">x</repro>
-<repro path=".duet/test_x.py">x</repro>
+<repro path=".tenure/test_x.py">x</repro>
 <repro path="tests/test_existing.py">x</repro>
 <repro path="src/main.py">x</repro>
 <repro path='spec/repro_case.sh'>exit 1</repro>
@@ -96,7 +96,7 @@ def test_repro_flow_end_to_end(tmp_path: Path):
     # 다음 라운드 테스트는 재현 테스트까지 돌려 통과
     assert st.tests["2"]["status"] == "passed"
     log = Workspace(tmp_path).git("log", "--format=%s")
-    assert "duet: repro tests from review 1" in log
+    assert "tenure: repro tests from review 1" in log
     assert st.is_done("repro:1")
 
 
@@ -124,7 +124,7 @@ def test_repro_rejected_and_disabled(tmp_path: Path):
 
 
 def test_incremental_diff_falls_back_to_commit_message(tmp_path: Path):
-    """예전 실행(리뷰 시점 커밋 기록 없음)도 'duet: impl round N' 커밋으로 증분 diff 기준을 찾는다."""
+    """예전 실행(리뷰 시점 커밋 기록 없음)도 'tenure: impl round N' 커밋으로 증분 diff 기준을 찾는다."""
     prompts = []
 
     def impl(req, n):

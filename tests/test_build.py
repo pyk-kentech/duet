@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from duet.agents.mock import MockAdapter
-from duet.phases.build import BuildPhase, truncate_diff
-from duet.phases.common import AgentFailed
-from duet.state import DONE_APPROVED, DONE_UNAPPROVED, FAILED, RUNNING, RunState
-from duet.workspace import Workspace
+from tenure.agents.mock import MockAdapter
+from tenure.phases.build import BuildPhase, truncate_diff
+from tenure.phases.common import AgentFailed
+from tenure.state import DONE_APPROVED, DONE_UNAPPROVED, FAILED, RUNNING, RunState
+from tenure.workspace import Workspace
 from tests.helpers import file_names, make_ctx
 
 
@@ -27,7 +27,7 @@ def test_approved_on_second_review(tmp_path: Path):
     ws = Workspace(tmp_path)
     assert ws.commit_count() == 3  # design + impl1 + impl2
     assert not ws.dirty()
-    assert (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()[0] == ".duet/"
+    assert (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()[0] == ".tenure/"
     assert (tmp_path / "main.py").read_text(encoding="utf-8") == "print('hi')\n# fix\n"
     assert [c.step for c in agents["claude"].calls] == ["implement", "fix"]
     assert [c.step for c in agents["codex"].calls] == ["review", "review"]
@@ -108,7 +108,7 @@ def test_reviewer_changes_are_reverted(tmp_path: Path):
     assert not (tmp_path / "extra.txt").exists()
     assert not Workspace(tmp_path).dirty()
     assert any("경고: 리뷰어가 파일을 변경함" in m and "main.py" in m for m in ctx.logs)
-    # 기록(.duet)은 살아 있다
+    # 기록(.tenure)은 살아 있다
     assert len(file_names(ctx.run_dir)) == 2
 
 

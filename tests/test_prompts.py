@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from duet.prompts import TEMPLATE_NAMES, TemplateError, load_template, render, render_text
+from tenure.prompts import TEMPLATE_NAMES, TemplateError, load_template, render, render_text
 
 
 def test_all_builtin_templates_load():
@@ -16,7 +16,7 @@ def test_render_task():
 
 
 def test_review_template_has_verdict_block():
-    from duet.review_json import output_instruction
+    from tenure.review_json import output_instruction
 
     values = dict(task="t", diff="d", implementer_name="claude", tests="T", previous_review="P",
                   diff_title="구현 전체 diff", test_instruction="I", repro_instruction="REPRO-HERE",
@@ -43,7 +43,7 @@ def test_unknown_template():
 
 
 def test_user_override(tmp_path: Path):
-    d = tmp_path / ".duet" / "templates"
+    d = tmp_path / ".tenure" / "templates"
     d.mkdir(parents=True)
     (d / "propose.md").write_text("내 템플릿: {task}", encoding="utf-8")
     assert render("propose", tmp_path, task="T") == "내 템플릿: T"

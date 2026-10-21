@@ -11,21 +11,21 @@ from pathlib import Path
 
 import pytest
 
-from duet.agents.base import AgentRequest, Mode
-from duet.agents.claude_code import ClaudeCodeAdapter
-from duet.agents.codex import CodexAdapter
-from duet.cli import main
-from duet.config import ConfigError, load_config
-from duet.doctor import ACTIONS, ready, run_checks
-from duet.settings import SettingsError, load_settings, save_settings
-from duet.state import RunState, list_run_dirs
-from duet.ui.terminal import TermJob, clean
-from duet.usage import claude_call_usage, claude_local_usage, codex_call_usage, codex_rate_limits
+from tenure.agents.base import AgentRequest, Mode
+from tenure.agents.claude_code import ClaudeCodeAdapter
+from tenure.agents.codex import CodexAdapter
+from tenure.cli import main
+from tenure.config import ConfigError, load_config
+from tenure.doctor import ACTIONS, ready, run_checks
+from tenure.settings import SettingsError, load_settings, save_settings
+from tenure.state import RunState, list_run_dirs
+from tenure.ui.terminal import TermJob, clean
+from tenure.usage import claude_call_usage, claude_local_usage, codex_call_usage, codex_rate_limits
 from tests.conftest import read_dump
 
 
 # ====================================================================== 설정
-def test_settings_roundtrip_and_validation(isolated_duet_home):
+def test_settings_roundtrip_and_validation(isolated_tenure_home):
     assert load_settings() == {"workspace_roots": [], "defaults": {}, "machines": []}
     data = {"workspace_roots": ["~/projects", "/srv/work"],
             "defaults": {"debate_rounds": 2, "claude": {"model": "opus", "effort": "high"}},
@@ -46,24 +46,24 @@ def test_settings_roundtrip_and_validation(isolated_duet_home):
             save_settings(b)
 
 
-def test_config_layers_precedence(isolated_duet_home, tmp_path: Path):
+def test_config_layers_precedence(isolated_tenure_home, tmp_path: Path):
     save_settings({"defaults": {"debate_rounds": 2, "max_review": 4, "claude": {"model": "sonnet"}}})
     assert load_config(None).debate_rounds == 2 and load_config(None).claude.model == "sonnet"
-    (tmp_path / "duet.toml").write_text("max_review = 5\n[claude]\neffort = \"low\"\n", encoding="utf-8")
+    (tmp_path / "tenure.toml").write_text("max_review = 5\n[claude]\neffort = \"low\"\n", encoding="utf-8")
     cfg = load_config(tmp_path, {"claude.model": "opus", "debate_rounds": None})
     assert (cfg.debate_rounds, cfg.max_review, cfg.claude.model, cfg.claude.effort) == (2, 5, "opus", "low")
     with pytest.raises(ConfigError):
         load_config(None, {"codex.effort": "a b"})
 
 
-def test_broken_settings_file_does_not_break_runs(isolated_duet_home):
-    (isolated_duet_home / "settings.json").write_text("{not json", encoding="utf-8")
+def test_broken_settings_file_does_not_break_runs(isolated_tenure_home):
+    (isolated_tenure_home / "settings.json").write_text("{not json", encoding="utf-8")
     assert load_config(None).implementer == "claude"
 
 
 # ====================================================================== 모델 플래그
 def test_model_and_effort_flags(fake_cfg, tmp_path: Path, dump_path, monkeypatch):
-    monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+    monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
     cfg = load_config(None, {"claude": {"bin": fake_cfg.claude.bin, "model": "opus", "effort": "high"},
                              "codex": {"bin": fake_cfg.codex.bin, "model": "gpt-6.1-sol", "effort": "xhigh"}})
     req = AgentRequest("안녕", tmp_path, Mode.READ, 20, "propose")
@@ -80,9 +80,9 @@ def test_model_and_effort_flags(fake_cfg, tmp_path: Path, dump_path, monkeypatch
     assert "-m" not in CodexAdapter(fake_cfg).build_command(req, Path("/tmp/x"))[0]
 
 
-def test_models_saved_in_run_and_reused_on_resume(isolated_duet_home, tmp_path: Path, monkeypatch, capsys):
-    import duet.orchestrator as orch_mod
-    from duet.agents.mock import MockAdapter
+def test_models_saved_in_run_and_reused_on_resume(isolated_tenure_home, tmp_path: Path, monkeypatch, capsys):
+    import tenure.orchestrator as orch_mod
+    from tenure.agents.mock import MockAdapter
 
     wd = tmp_path / "x"
     seen = []
@@ -128,10 +128,10 @@ def test_codex_usage_from_session_log(fake_cfg, tmp_path: Path, monkeypatch):
     assert lim["primary"]["used_percent"] == 42.5 and lim["plan_type"] == "pro" and lim["as_of"]
 
 
-def test_usage_recorded_in_transcript_and_state(fake_bin, tmp_path: Path, monkeypatch, isolated_duet_home):
+def test_usage_recorded_in_transcript_and_state(fake_bin, tmp_path: Path, monkeypatch, isolated_tenure_home):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
-    monkeypatch.setenv("DUET_FAKE_TEXT", "## 결정 사항\n내용")
-    (tmp_path / "duet.toml").write_text(
+    monkeypatch.setenv("TENURE_FAKE_TEXT", "## 결정 사항\n내용")
+    (tmp_path / "tenure.toml").write_text(
         f"[claude]\nbin = '{fake_bin / 'claude'}'\n[codex]\nbin = '{fake_bin / 'codex'}'\n", encoding="utf-8")
     assert main(["run", "t", "--workdir", str(tmp_path), "--design-only", "--debate-rounds", "0", "--force"]) == 0
     st = RunState.load(list_run_dirs(tmp_path)[-1])
@@ -168,7 +168,7 @@ def test_doctor_with_fake_clis(fake_bin, monkeypatch):
     assert checks["codex"]["status"] == "ok" and "login_codex" not in checks["codex"]["actions"]
     assert checks["git"]["status"] == "ok"
     assert ready(list(checks.values()))
-    monkeypatch.setenv("DUET_FAKE_LOGGED", "0")
+    monkeypatch.setenv("TENURE_FAKE_LOGGED", "0")
     checks = {c["id"]: c for c in run_checks()}
     assert checks["claude"]["status"] == "warn" and checks["claude"]["actions"][0] == "login_claude"
     assert checks["codex"]["status"] == "warn" and checks["codex"]["actions"][0] == "login_codex"

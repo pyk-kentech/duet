@@ -13,12 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from duet.cli import main
-from duet.lock import read_lock
-from duet.registry import Registry
-from duet.state import DONE_APPROVED, DONE_UNAPPROVED, STOPPED_USER, RunState, list_run_dirs
-from duet.ui.dashboard import current_call
-from duet.ui.server import make_server
+from tenure.cli import main
+from tenure.lock import read_lock
+from tenure.registry import Registry
+from tenure.state import DONE_APPROVED, DONE_UNAPPROVED, STOPPED_USER, RunState, list_run_dirs
+from tenure.ui.dashboard import current_call
+from tenure.ui.server import make_server
 
 TOKEN = "test-token-123"
 
@@ -45,7 +45,7 @@ def call(srv, method, path, *, body=None, token=TOKEN, host=None, ctype="applica
     data = None
     headers = {}
     if token is not None:
-        headers["X-Duet-Token"] = token
+        headers["X-Tenure-Token"] = token
     if host is not None:
         headers["Host"] = host
     if body is not None:
@@ -93,7 +93,7 @@ def test_index_requires_token_and_sets_security_headers(server):
     s, body, headers = call(server, "GET", f"/?t={TOKEN}", token=None, raw=True)
     assert s == 200
     html = body.decode()
-    assert f'content="{TOKEN}"' in html and "__DUET_TOKEN__" not in html
+    assert f'content="{TOKEN}"' in html and "__TENURE_TOKEN__" not in html
     assert "script-src 'self'" in headers["Content-Security-Policy"]
     assert headers["X-Frame-Options"] == "DENY" and headers["Cache-Control"] == "no-store"
     assert "<script>" not in html  # 인라인 스크립트 없음
@@ -171,7 +171,7 @@ def test_run_detail_entries_console_design(server, tmp_path: Path):
 
     s, entry, _ = call(server, "GET", f"/api/entry?{q}&file=05_synthesize_codex.md")
     assert s == 200 and "## 결정 사항" in entry["body"] and entry["meta"]["agent"] == "codex"
-    assert "<!-- duet" not in entry["body"]
+    assert "<!-- tenure" not in entry["body"]
 
     s, con, _ = call(server, "GET", f"/api/console?{q}")
     assert "실행 시작" in con["text"] and con["offset"] == con["size"] > 0
@@ -211,7 +211,7 @@ def test_commits_and_diff(server, tmp_path: Path):
     rd = mock_run(wd)
     q = f"project={wd.resolve()}&run={rd.name}"
     s, c, _ = call(server, "GET", f"/api/commits?{q}")
-    assert [x["subject"] for x in c["commits"]] == ["duet: design", "duet: impl round 1", "duet: impl round 2"]
+    assert [x["subject"] for x in c["commits"]] == ["tenure: design", "tenure: impl round 1", "tenure: impl round 2"]
     s, d, _ = call(server, "GET", f"/api/diff?{q}")
     assert d["text"].startswith("[변경 파일 요약]") and "main.py" in d["text"]
     assert "DESIGN.md" not in d["text"] and d["truncated"] is False
@@ -263,13 +263,13 @@ def test_start_run_mock_end_to_end(server, tmp_path: Path):
     st = RunState.load(list_run_dirs(wd)[-1])
     assert st.status == DONE_APPROVED and st.task == "할일 CLI\n여러 줄 과제" and st.config["max_review"] == 2
     assert Registry().contains(wd)
-    # 과제 파일과 작업 로그가 .duet/ui 아래에 있고 git 에는 안 들어감
-    assert list((wd / ".duet" / "ui" / "tasks").glob("*.md"))
-    assert ".duet/" in (wd / ".gitignore").read_text(encoding="utf-8")
+    # 과제 파일과 작업 로그가 .tenure/ui 아래에 있고 git 에는 안 들어감
+    assert list((wd / ".tenure" / "ui" / "tasks").glob("*.md"))
+    assert ".tenure/" in (wd / ".gitignore").read_text(encoding="utf-8")
 
 
 def test_stop_then_resume_via_ui(server, tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("DUET_MOCK_DELAY", "0.6")
+    monkeypatch.setenv("TENURE_MOCK_DELAY", "0.6")
     wd = tmp_path / "slow"
     s, job, _ = call(server, "POST", "/api/actions/run", body={
         "project": str(wd), "task": "t", "mock": True, "debate_rounds": 1})
@@ -295,7 +295,7 @@ def test_stop_then_resume_via_ui(server, tmp_path: Path, monkeypatch):
     assert st.status == STOPPED_USER
     assert call(server, "POST", "/api/actions/stop", body={"project": project})[0] == 409
 
-    monkeypatch.setenv("DUET_MOCK_DELAY", "0")
+    monkeypatch.setenv("TENURE_MOCK_DELAY", "0")
     s, job2, _ = call(server, "POST", "/api/actions/resume", body={"project": project, "run": info.run_id})
     assert s == 200 and job2["kind"] == "resume"
     j2 = wait_for(lambda: (lambda x: x if not x["running"] else None)(_job(server, job2["id"])))
@@ -368,7 +368,7 @@ def test_server_info_and_restart(server):
 
 
 def test_restart_refused_while_terminal_job_runs(server):
-    from duet.ui.terminal import TermJob
+    from tenure.ui.terminal import TermJob
     job = TermJob(id="t", title="Claude 로그인", argv=[sys.executable, "-c", "import time; time.sleep(30)"]).start()
     server.terms["t"] = job
     server.restart_fn = lambda srv: (_ for _ in ()).throw(AssertionError("다시 시작하면 안 됨"))
@@ -378,7 +378,7 @@ def test_restart_refused_while_terminal_job_runs(server):
 
 
 def test_serve_reuses_token_and_port_after_restart(monkeypatch, tmp_path):
-    import duet.ui.server as srv_mod
+    import tenure.ui.server as srv_mod
     seen = {}
 
     class Fake:
@@ -392,19 +392,19 @@ def test_serve_reuses_token_and_port_after_restart(monkeypatch, tmp_path):
         return Fake()
 
     monkeypatch.setattr(srv_mod, "make_server", fake_make)
-    monkeypatch.setenv("DUET_UI_TOKEN", "keep-me")
-    monkeypatch.setenv("DUET_UI_EXACT_PORT", "1")
+    monkeypatch.setenv("TENURE_UI_TOKEN", "keep-me")
+    monkeypatch.setenv("TENURE_UI_EXACT_PORT", "1")
     srv_mod.serve("127.0.0.1", 8799, open_browser=False, printer=lambda line: None)
     assert seen == {"token": "keep-me", "port": 8799, "tries": 1}
     import os
-    assert "DUET_UI_TOKEN" not in os.environ   # 자식 프로세스로 새지 않게 지움
+    assert "TENURE_UI_TOKEN" not in os.environ   # 자식 프로세스로 새지 않게 지움
 
 
 def test_post_without_body_is_accepted(server):
     """본문 없는 POST(예: 다시 시작 버튼)는 Content-Type 없이도 받는다. 본문이 있으면 JSON 이어야 한다."""
     server.restart_fn = lambda srv: None
     url = f"http://127.0.0.1:{server.port}/api/server/restart"
-    req = urllib.request.Request(url, data=b"", method="POST", headers={"X-Duet-Token": TOKEN})
+    req = urllib.request.Request(url, data=b"", method="POST", headers={"X-Tenure-Token": TOKEN})
     with urllib.request.urlopen(req, timeout=10) as r:
         assert r.status == 200
 
@@ -413,7 +413,7 @@ def test_every_help_key_has_text():
     """index.html 의 data-help 키와 app.js 의 help()/withTip() 키가 모두 TIPS 에 있어야 한다(설명 누락 방지)."""
     import re
     from importlib import resources
-    static = resources.files("duet.ui").joinpath("static")
+    static = resources.files("tenure.ui").joinpath("static")
     html = static.joinpath("index.html").read_text(encoding="utf-8")
     js = static.joinpath("app.js").read_text(encoding="utf-8")
     tips_block = js[js.index("const TIPS = {"): js.index("};", js.index("const TIPS = {"))]
@@ -429,7 +429,7 @@ def test_every_help_key_has_text():
 
 
 def test_activity_api_during_live_run(server, tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("DUET_MOCK_DELAY", "0.8")
+    monkeypatch.setenv("TENURE_MOCK_DELAY", "0.8")
     wd = tmp_path / "live"
     s, job, _ = call(server, "POST", "/api/actions/run", body={"project": str(wd), "task": "t", "mock": True, "debate_rounds": 0})
     info = wait_for(lambda: (lambda i: i if i and i.run_id else None)(read_lock(wd)))

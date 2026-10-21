@@ -1,10 +1,10 @@
 """가짜 claude/codex 실행 파일 공통부. 표준 라이브러리만, Python 3.8+ 호환.
 
 환경변수:
-  DUET_FAKE_DUMP      받은 argv/stdin/cwd를 JSON으로 쓸 파일 경로
-  DUET_FAKE_SCENARIO  ok(기본) | fail | rate_limit | hang | garbage | empty
-  DUET_FAKE_TEXT      응답 본문 (기본 "fake response")
-  DUET_FAKE_SLEEP     hang 시나리오에서 잠들 초 (기본 30)
+  TENURE_FAKE_DUMP      받은 argv/stdin/cwd를 JSON으로 쓸 파일 경로
+  TENURE_FAKE_SCENARIO  ok(기본) | fail | rate_limit | hang | garbage | empty
+  TENURE_FAKE_TEXT      응답 본문 (기본 "fake response")
+  TENURE_FAKE_SLEEP     hang 시나리오에서 잠들 초 (기본 30)
 """
 import json
 import os
@@ -13,7 +13,7 @@ import time
 
 
 def dump(argv, stdin_text):
-    path = os.environ.get("DUET_FAKE_DUMP")
+    path = os.environ.get("TENURE_FAKE_DUMP")
     if not path:
         return
     with open(path, "w", encoding="utf-8") as f:
@@ -31,11 +31,11 @@ def read_stdin_if_piped():
 
 
 def scenario():
-    return os.environ.get("DUET_FAKE_SCENARIO", "ok")
+    return os.environ.get("TENURE_FAKE_SCENARIO", "ok")
 
 
 def text():
-    return os.environ.get("DUET_FAKE_TEXT", "fake response")
+    return os.environ.get("TENURE_FAKE_TEXT", "fake response")
 
 
 def handle_common_failures():
@@ -48,7 +48,7 @@ def handle_common_failures():
         sys.stderr.write("Error: You've hit your usage limit. Try again later.\n")
         sys.exit(1)
     if s == "hang":
-        time.sleep(float(os.environ.get("DUET_FAKE_SLEEP", "30")))
+        time.sleep(float(os.environ.get("TENURE_FAKE_SLEEP", "30")))
         sys.exit(0)
 
 
@@ -75,7 +75,7 @@ def write_rollout(argv):
                     "total_token_usage": {"input_tokens": 2600, "cached_input_tokens": 1900, "output_tokens": 350,
                                           "reasoning_output_tokens": 130}}}}) + "\n")
         return
-    sid = os.environ.get("DUET_FAKE_CODEX_SESSION", f"fake-codex-{os.getpid()}")
+    sid = os.environ.get("TENURE_FAKE_CODEX_SESSION", f"fake-codex-{os.getpid()}")
     path = os.path.join(folder, f"rollout-{now:%Y-%m-%dT%H-%M-%S}-{sid}.jsonl")
     events = [
         {"timestamp": ts, "type": "session_meta", "payload": {"id": sid, "cwd": os.path.realpath(cwd), "originator": "codex_exec", "timestamp": ts}},

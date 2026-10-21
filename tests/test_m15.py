@@ -7,20 +7,20 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet.agents.base import AgentRequest, Mode
-from duet.agents.claude_code import ClaudeCodeAdapter
-from duet.agents.codex import CodexAdapter
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.config import Config, ConfigError, load_config
-from duet.packet import call_sites, changed_symbols
-from duet.review_json import REVIEW_SCHEMA, output_instruction, render_review
-from duet.state import RunState, list_run_dirs
-from duet.transcript import Transcript
-from duet.usage import codex_resumed_usage
-from duet.verdict import parse_verdict
-from duet.workspace import Workspace
+import tenure.orchestrator as orch_mod
+from tenure.agents.base import AgentRequest, Mode
+from tenure.agents.claude_code import ClaudeCodeAdapter
+from tenure.agents.codex import CodexAdapter
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.config import Config, ConfigError, load_config
+from tenure.packet import call_sites, changed_symbols
+from tenure.review_json import REVIEW_SCHEMA, output_instruction, render_review
+from tenure.state import RunState, list_run_dirs
+from tenure.transcript import Transcript
+from tenure.usage import codex_resumed_usage
+from tenure.verdict import parse_verdict
+from tenure.workspace import Workspace
 from tests.conftest import read_dump
 
 
@@ -52,13 +52,13 @@ def test_call_sites(tmp_path: Path):
     (tmp_path / "b.py").write_text("from a import parse_line\nx = parse_line('1')\n", encoding="utf-8")
     (tmp_path / "c.py").write_text("\n".join(f"parse_line({i})" for i in range(9)) + "\n", encoding="utf-8")
     (tmp_path / "DESIGN.md").write_text("parse_line 를 쓴다\n", encoding="utf-8")
-    (tmp_path / ".duet").mkdir()
-    (tmp_path / ".duet" / "x.py").write_text("parse_line()\n", encoding="utf-8")
+    (tmp_path / ".tenure").mkdir()
+    (tmp_path / ".tenure" / "x.py").write_text("parse_line()\n", encoding="utf-8")
     ws.commit_all("init")
     out = call_sites(ws, ["parse_line", "nothing_here"], exclude=("DESIGN.md",))
     lines = out.splitlines()
     assert lines[0] == "parse_line:" and len(lines) == 1 + 5          # 이름당 5줄
-    assert "a.py:1" not in out and "DESIGN.md" not in out and ".duet" not in out
+    assert "a.py:1" not in out and "DESIGN.md" not in out and ".tenure" not in out
     assert "b.py:1: from a import parse_line" in out
     assert call_sites(ws, ["nothing_here"]) == ""
 
@@ -125,19 +125,19 @@ def test_claude_flags(fake_cfg: Config, tmp_path: Path):
 
 def test_claude_structured_and_session(fake_cfg: Config, tmp_path: Path, monkeypatch):
     data = {"status": "APPROVED", "summary": "s", "findings": [], "repro": []}
-    monkeypatch.setenv("DUET_FAKE_STRUCTURED", json.dumps(data))
-    monkeypatch.setenv("DUET_FAKE_SESSION", "sess-abc")
+    monkeypatch.setenv("TENURE_FAKE_STRUCTURED", json.dumps(data))
+    monkeypatch.setenv("TENURE_FAKE_SESSION", "sess-abc")
     r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path, output_schema=REVIEW_SCHEMA))
     assert r.ok and r.structured == data and r.session_id == "sess-abc" and not r.resumed
-    monkeypatch.delenv("DUET_FAKE_STRUCTURED")
-    monkeypatch.setenv("DUET_FAKE_TEXT", json.dumps(data))
+    monkeypatch.delenv("TENURE_FAKE_STRUCTURED")
+    monkeypatch.setenv("TENURE_FAKE_TEXT", json.dumps(data))
     r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path, output_schema=REVIEW_SCHEMA, resume_session="sess-abc"))
     assert r.structured == data and r.session_id == "sess-abc" and r.resumed
 
 
 def test_claude_resume_failure_falls_back(fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
-    monkeypatch.setenv("DUET_FAKE_SCENARIO", "fail_resume")
-    monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+    monkeypatch.setenv("TENURE_FAKE_SCENARIO", "fail_resume")
+    monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
     r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path, resume_session="gone", fallback_prompt="전체 프롬프트"))
     assert r.ok and not r.resumed and r.session_id == "fake-session-new"
     argv = read_dump(dump_path)["argv"]
@@ -145,7 +145,7 @@ def test_claude_resume_failure_falls_back(fake_cfg: Config, tmp_path: Path, dump
 
 
 def test_claude_no_fallback_on_rate_limit(fake_cfg: Config, tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("DUET_FAKE_SCENARIO", "rate_limit")
+    monkeypatch.setenv("TENURE_FAKE_SCENARIO", "rate_limit")
     r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path, resume_session="s", fallback_prompt="x"))
     assert r.rate_limited
 
@@ -182,9 +182,9 @@ def test_codex_resume_long_prompt_uses_stdin(tmp_path: Path, fake_bin: Path):
 def test_codex_structured_session_and_resumed_usage(fake_cfg: Config, tmp_path: Path, monkeypatch):
     home = tmp_path / "codex-home"
     monkeypatch.setenv("CODEX_HOME", str(home))
-    monkeypatch.setenv("DUET_FAKE_CODEX_SESSION", "cx-1")
+    monkeypatch.setenv("TENURE_FAKE_CODEX_SESSION", "cx-1")
     data = {"status": "CHANGES_REQUESTED", "summary": "", "findings": [], "repro": []}
-    monkeypatch.setenv("DUET_FAKE_TEXT", json.dumps(data))
+    monkeypatch.setenv("TENURE_FAKE_TEXT", json.dumps(data))
     a = CodexAdapter(fake_cfg)
     r = a.ask(req(tmp_path, output_schema=REVIEW_SCHEMA))
     assert r.ok and r.structured == data and r.session_id == "cx-1" and not r.resumed
@@ -195,8 +195,8 @@ def test_codex_structured_session_and_resumed_usage(fake_cfg: Config, tmp_path: 
 
 
 def test_codex_resume_failure_falls_back(fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
-    monkeypatch.setenv("DUET_FAKE_SCENARIO", "fail_resume")
-    monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+    monkeypatch.setenv("TENURE_FAKE_SCENARIO", "fail_resume")
+    monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
     r = CodexAdapter(fake_cfg).ask(req(tmp_path, resume_session="gone", fallback_prompt="전체"))
     assert r.ok and not r.resumed
     argv = read_dump(dump_path)["argv"]
@@ -232,7 +232,7 @@ def run_mock(tmp_path: Path, monkeypatch, *extra: str, approve: int = 3, reuse: 
     seen: dict = {}
     if reuse:
         (tmp_path / "w").mkdir(exist_ok=True)
-        (tmp_path / "w" / "duet.toml").write_text('review_session = "reuse"\n', encoding="utf-8")
+        (tmp_path / "w" / "tenure.toml").write_text('review_session = "reuse"\n', encoding="utf-8")
 
     def factory(cfg, *, mock):
         seen["claude"] = MockAdapter(label="claude")
@@ -285,7 +285,7 @@ def test_session_rounds_cap(tmp_path: Path, monkeypatch):
 def test_fresh_and_text_mode_via_toml(tmp_path: Path, monkeypatch):
     wd = tmp_path / "w"
     wd.mkdir()
-    (wd / "duet.toml").write_text('review_session = "fresh"\nreview_json = false\nreview_packet = false\n',
+    (wd / "tenure.toml").write_text('review_session = "fresh"\nreview_json = false\nreview_packet = false\n',
                                   encoding="utf-8")
     _, seen, st, rd = run_mock(tmp_path, monkeypatch, approve=2)
     rv = reviews(seen)
@@ -328,7 +328,7 @@ def test_multi_reviewers_each_resume_own_session(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(orch_mod, "make_role_agents", factory)
     (tmp_path / "w").mkdir()
-    (tmp_path / "w" / "duet.toml").write_text('review_session = "reuse"\n', encoding="utf-8")
+    (tmp_path / "w" / "tenure.toml").write_text('review_session = "reuse"\n', encoding="utf-8")
     assert main(["run", "t", "--workdir", str(tmp_path / "w"), "--mock", "--workflow", "secure",
                  "--debate-rounds", "0"]) == 0
     a = store["a"]
@@ -347,8 +347,8 @@ def test_default_is_fresh_sessions(tmp_path: Path, monkeypatch):
 
 def test_custom_review_template_without_output_instruction_uses_text(tmp_path: Path, monkeypatch):
     wd = tmp_path / "w"
-    (wd / ".duet" / "templates").mkdir(parents=True)
-    (wd / ".duet" / "templates" / "review.md").write_text(
+    (wd / ".tenure" / "templates").mkdir(parents=True)
+    (wd / ".tenure" / "templates" / "review.md").write_text(
         "내 리뷰 {task}\n{diff}\n{repro_instruction}\n<verdict>\n", encoding="utf-8")
     _, seen, _, _ = run_mock(tmp_path, monkeypatch, approve=1)
     rv = reviews(seen)

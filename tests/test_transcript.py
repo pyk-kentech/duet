@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from duet.transcript import Transcript, read_header, render_header, split_header
+from tenure.transcript import Transcript, read_header, render_header, split_header
 
 
 def test_save_numbering_and_header(tmp_path: Path):
@@ -11,7 +11,7 @@ def test_save_numbering_and_header(tmp_path: Path):
     assert p1.name == "01_propose_claude.md"
     assert p2.name == "02_propose_codex.md"
     content = p1.read_text(encoding="utf-8")
-    assert content.startswith("<!-- duet\n")
+    assert content.startswith("<!-- tenure\n")
     meta, body = split_header(content)
     assert meta["agent"] == "claude" and meta["duration_sec"] == "41.2"
     assert meta["exit_code"] == "0" and meta["rate_limited"] == "false"
@@ -42,7 +42,7 @@ def test_resume_continues_numbering(tmp_path: Path):
 
 def test_split_header_without_header():
     assert split_header("plain text") == ({}, "plain text")
-    assert split_header("<!-- duet\nno end") == ({}, "<!-- duet\nno end")
+    assert split_header("<!-- tenure\nno end") == ({}, "<!-- tenure\nno end")
 
 
 def test_render_header_escapes_newlines():

@@ -9,28 +9,28 @@ from pathlib import Path
 
 import pytest
 
-from duet.agents.base import AgentRequest, Mode
-from duet.agents.claude_code import ClaudeCodeAdapter
-from duet.agents.codex import CodexAdapter
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.config import Config, load_config
-from duet.phases.build import BuildPhase, build_review_diff
-from duet.phases.debate import DebatePhase, is_success
-from duet.runner import run_process
-from duet.state import DONE_APPROVED, FAILED, RUNNING, RunState, list_run_dirs
-from duet.transcript import Transcript
-from duet.verdict import Status, parse_verdict
-from duet.workspace import Workspace
+from tenure.agents.base import AgentRequest, Mode
+from tenure.agents.claude_code import ClaudeCodeAdapter
+from tenure.agents.codex import CodexAdapter
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.config import Config, load_config
+from tenure.phases.build import BuildPhase, build_review_diff
+from tenure.phases.debate import DebatePhase, is_success
+from tenure.runner import run_process
+from tenure.state import DONE_APPROVED, FAILED, RUNNING, RunState, list_run_dirs
+from tenure.transcript import Transcript
+from tenure.verdict import Status, parse_verdict
+from tenure.workspace import Workspace
 from tests.conftest import read_dump
 from tests.helpers import file_names, make_ctx
-import duet.orchestrator as orch_mod
+import tenure.orchestrator as orch_mod
 
 
 # ---------------------------------------------------------------- 1. 긴 한글 프롬프트 (E2BIG)
 @pytest.mark.parametrize("adapter_cls", [ClaudeCodeAdapter, CodexAdapter])
 def test_long_korean_prompt_goes_to_stdin(adapter_cls, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
-    monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+    monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
     prompt = "가" * 60_000            # 6만 자 = 18만 바이트 > Linux 인자 한도 128KiB
     assert len(prompt) < fake_cfg.prompt_arg_max_bytes   # 글자 수로만 재면 인자로 넘길 뻔함
     r = adapter_cls(fake_cfg).ask(AgentRequest(prompt, tmp_path, Mode.READ, 20, "critique"))
@@ -39,7 +39,7 @@ def test_long_korean_prompt_goes_to_stdin(adapter_cls, fake_cfg: Config, tmp_pat
 
 
 def test_old_config_key_still_accepted(tmp_path: Path):
-    (tmp_path / "duet.toml").write_text("prompt_arg_max_chars = 5000\n", encoding="utf-8")
+    (tmp_path / "tenure.toml").write_text("prompt_arg_max_chars = 5000\n", encoding="utf-8")
     assert load_config(tmp_path).prompt_arg_max_bytes == 5000
 
 
@@ -50,7 +50,7 @@ def test_exec_error_becomes_failed_state(tmp_path: Path):
 
     ctx = make_ctx(tmp_path, agents={"claude": Boom(label="claude"), "codex": MockAdapter(label="codex")},
                    overrides={"debate_rounds": 0})
-    from duet.phases.common import AgentFailed
+    from tenure.phases.common import AgentFailed
     with pytest.raises(AgentFailed, match="실행 불가"):
         DebatePhase(ctx).run()
     assert RunState.load(ctx.run_dir).status == FAILED
@@ -223,7 +223,7 @@ def test_build_prompt_uses_new_diff(tmp_path: Path):
 
 # ---------------------------------------------------------------- 8. codex '-' 로 시작하는 프롬프트
 def test_codex_prompt_starting_with_dash(fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
-    monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+    monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
     r = CodexAdapter(fake_cfg).ask(AgentRequest("- 목록으로 시작하는 프롬프트", tmp_path, Mode.READ, 20, "review"))
     assert r.ok
     assert read_dump(dump_path)["argv"][-2:] == ["--", "- 목록으로 시작하는 프롬프트"]

@@ -5,11 +5,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from duet.agents.mock import MockAdapter
-from duet.config import load_config
-from duet.phases.common import PhaseContext
-from duet.state import RunState, create_run_dir
-from duet.transcript import Transcript
+from tenure.agents.mock import MockAdapter
+from tenure.config import load_config
+from tenure.phases.common import PhaseContext
+from tenure.state import RunState, create_run_dir
+from tenure.transcript import Transcript
 
 
 def make_ctx(workdir: Path, agents: dict[str, MockAdapter] | None = None,
@@ -19,7 +19,7 @@ def make_ctx(workdir: Path, agents: dict[str, MockAdapter] | None = None,
     cfg = load_config(workdir, {"timeout_sec": 5, **(overrides or {})})
     if agents is None:
         agents = {n: MockAdapter(label=n) for n in ("claude", "codex")}
-    run_dir = workdir / ".duet" / "runs" / run_id
+    run_dir = workdir / ".tenure" / "runs" / run_id
     if state is None:
         if not run_dir.exists():
             run_dir = create_run_dir(workdir, run_id)

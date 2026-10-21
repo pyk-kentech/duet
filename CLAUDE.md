@@ -21,9 +21,9 @@
 - Anthropic/OpenAI API SDK를 추가하지 않는다(구독 CLI 만 쓴다).
 - `prototype/agent_team.py`를 수정하지 않는다. 참고만 한다.
 
-## 명령어 (이름 바꾸기(M30) 전까지는 duet)
-- 설치: `pip install -e ".[dev]"`
+## 명령어
+- 설치: `pip install -e ".[dev]"` (옛 `duet` 명령도 같은 동작의 별칭으로 남아 있다)
 - 테스트: `pytest -q`
-- 수동 확인: `duet run "할일 CLI" --workdir /tmp/duet-try --mock`
-- 관리자 UI: `duet ui` (느린 mock 으로 화면 확인: `DUET_MOCK_DELAY=1 duet ui`)
-- UI 테스트는 `tests/test_ui.py`(HTTP 수준). 테스트는 `DUET_HOME` 을 임시 폴더로 바꿔 사용자의 `~/.duet` 을 건드리지 않는다.
+- 수동 확인: `tenure run "할일 CLI" --workdir /tmp/tenure-try --mock`
+- 관리자 UI: `tenure ui` (느린 mock 으로 화면 확인: `TENURE_MOCK_DELAY=1 tenure ui`)
+- UI 테스트는 `tests/test_ui.py`(HTTP 수준). 테스트는 `TENURE_HOME` 을 임시 폴더로 바꿔 사용자의 `~/.tenure` 을 건드리지 않는다.

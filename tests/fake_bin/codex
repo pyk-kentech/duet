@@ -11,7 +11,7 @@ if argv == ["--version"]:
     print("codex-cli 0.0.0-fake")
     sys.exit(0)
 if argv[:2] == ["login", "status"]:
-    if os.environ.get("DUET_FAKE_LOGGED", "1") == "1":
+    if os.environ.get("TENURE_FAKE_LOGGED", "1") == "1":
         print("Logged in using ChatGPT")
         sys.exit(0)
     print("Not logged in")

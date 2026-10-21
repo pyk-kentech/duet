@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="tenure-token" content="__TENURE_TOKEN__">
+  <title>tenure 관리자</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <a class="brand" href="#/">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span></span>
+        <span class="brand-name">tenure</span>
+        <span class="brand-sub">관리자</span>
+      </a>
+      <button type="button" class="btn btn-primary btn-block" id="sidebar-new-run" data-tip="두 AI 에게 새 과제를 맡깁니다. 설계 토론 → 구현 → 서로 리뷰 순서로 알아서 진행됩니다.">새 실행</button>
+      <div id="update-banner" class="update-banner" hidden>
+        <b>tenure 가 업데이트됐습니다</b>
+        <span>UI 를 다시 시작해야 새 기능이 보입니다. 진행 중인 실행은 그대로 돕니다.</span>
+        <button type="button" class="btn btn-sm btn-primary" id="restart-btn" data-tip="UI 서버를 다시 켭니다. 같은 주소로 다시 뜨고, 진행 중인 실행은 영향이 없습니다.">UI 다시 시작</button>
+      </div>
+      <nav class="side-links" aria-label="메뉴">
+        <a href="#/" data-nav="home">프로젝트</a>
+        <a href="#/setup" data-nav="setup">환경·로그인</a>
+        <a href="#/bench" data-nav="bench">벤치마크</a>
+        <a href="#/usage" data-nav="usage">사용량</a>
+        <a href="#/settings" data-nav="settings">설정</a>
+      </nav>
+      <nav class="side-nav" aria-label="프로젝트">
+        <div id="side-projects" class="side-projects"></div>
+      </nav>
+      <div class="side-foot" id="side-foot">연결 중…</div>
+    </aside>
+    <main id="main" class="main" tabindex="-1"></main>
+  </div>
+
+  <dialog id="run-dialog" class="dialog" aria-labelledby="run-dialog-title">
+    <form id="run-form" method="dialog" novalidate>
+      <header class="dialog-head">
+        <h2 id="run-dialog-title">새 실행</h2>
+        <button type="button" class="icon-btn" data-close aria-label="닫기">×</button>
+      </header>
+      <div class="dialog-body">
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label" data-help="machine">머신</span>
+            <select name="machine"></select>
+          </label>
+          <label class="field" id="root-field">
+            <span class="field-label" data-help="root">작업 폴더 위치</span>
+            <select name="root"></select>
+          </label>
+          <label class="field" id="name-field">
+            <span class="field-label" data-help="name">폴더 이름</span>
+            <input name="name" type="text" placeholder="memo-cli" autocomplete="off" spellcheck="false">
+          </label>
+        </div>
+        <label class="field" id="custom-field">
+          <span class="field-label" data-help="project">작업 폴더 <em>절대 경로</em></span>
+          <input name="project" type="text" placeholder="/home/me/memo-cli" autocomplete="off" spellcheck="false">
+        </label>
+        <p class="hint" id="path-preview"></p>
+        <label class="field">
+          <span class="field-label" data-help="task">과제</span>
+          <textarea name="task" rows="5" required placeholder="프롬프트를 입력하세요"></textarea>
+        </label>
+        <div class="field" id="attach-field">
+          <span class="field-label" data-help="attach">첨부 <em>선택 · 10개 · 합 20MB</em></span>
+          <div class="attach-row">
+            <label class="btn btn-sm attach-btn">파일 고르기<input type="file" id="attach-input" multiple hidden></label>
+            <span class="muted small" id="attach-sum">화면 시안·참고 문서·스크린샷을 붙이면 설계·구현 모델이 함께 봅니다.</span>
+          </div>
+          <ul class="attach-list" id="attach-list"></ul>
+        </div>
+        <label class="field">
+          <span class="field-label" data-help="workflow">워크플로</span>
+          <select name="workflow"></select>
+        </label>
+        <p class="hint" id="workflow-preview"></p>
+        <div class="field-row" id="classic-roles">
+          <label class="field">
+            <span class="field-label" data-help="implementer">구현</span>
+            <select name="implementer"><option value="claude">claude</option><option value="codex">codex</option></select>
+          </label>
+          <label class="field">
+            <span class="field-label" data-help="reviewer">리뷰</span>
+            <select name="reviewer"><option value="codex">codex</option><option value="claude">claude</option></select>
+          </label>
+          <label class="field">
+            <span class="field-label" data-help="synth">설계 종합</span>
+            <select name="synth"><option value="">리뷰 담당</option><option value="claude">claude</option><option value="codex">codex</option></select>
+          </label>
+        </div>
+        <!-- 모델·추론 강도: 바로 아래 순서도에 즉시 반영된다 -->
+        <div class="agent-cards">
+          <div class="agent-card ac-claude">
+            <div class="ac-head"><span class="ac-logo" data-logo="claude"></span><b>Claude</b><span class="ac-sub" id="ac-sub-claude"></span></div>
+            <div class="ac-fields">
+              <div class="field">
+                <span class="field-label" data-help="claude_model">모델</span>
+                <div class="model-picker" data-agent="claude"><input type="hidden" name="claude_model"></div>
+              </div>
+              <div class="field">
+                <span class="field-label" data-help="effort">추론 강도</span>
+                <select name="claude_effort"></select>
+              </div>
+            </div>
+          </div>
+          <div class="agent-card ac-codex">
+            <div class="ac-head"><span class="ac-logo" data-logo="codex"></span><b>Codex</b><span class="ac-sub" id="ac-sub-codex"></span></div>
+            <div class="ac-fields">
+              <div class="field">
+                <span class="field-label" data-help="codex_model">모델</span>
+                <div class="model-picker" data-agent="codex"><input type="hidden" name="codex_model"></div>
+              </div>
+              <div class="field">
+                <span class="field-label" data-help="effort">추론 강도</span>
+                <select name="codex_effort"></select>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="wf-diagram" id="workflow-diagram" aria-live="polite"></div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label" data-help="debate_rounds">토론 라운드 <em>0–5</em></span>
+            <input name="debate_rounds" type="number" min="0" max="5" value="1">
+          </label>
+          <label class="field">
+            <span class="field-label" data-help="max_review">리뷰 최대 <em>1–10</em></span>
+            <input name="max_review" type="number" min="1" max="10" value="3">
+          </label>
+          <label class="field">
+            <span class="field-label" data-help="stall_rounds">수렴 판단 <em>0=끔</em></span>
+            <input name="stall_rounds" type="number" min="0" max="10" value="2">
+          </label>
+          <label class="field">
+            <span class="field-label" data-help="block_severity">반려 기준</span>
+            <select name="block_severity">
+              <option value="P1">P1 만</option>
+              <option value="P2">P1·P2</option>
+              <option value="P3">P1·P2·P3</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span class="field-label" data-help="test_command">테스트 명령 <em>비우면 설정값(기본: 자동 감지) · none 이면 끔</em></span>
+          <input name="test_command" type="text" placeholder="자동 감지 (예: python3 -m pytest -q)" autocomplete="off" spellcheck="false">
+        </label>
+        <details class="advanced" id="run-advanced">
+          <summary>고급 설정 <small>비워 두면 설정값을 따릅니다</small></summary>
+          <div id="run-advanced-body"></div>
+        </details>
+        <fieldset class="checks">
+          <label data-help="design_only"><input type="checkbox" name="design_only"> 설계만 <small>토론 후 DESIGN.md만 만들고 끝냄</small></label>
+          <label data-help="skip_design"><input type="checkbox" name="skip_design"> 설계 생략 <small>기존 DESIGN.md로 바로 구현</small></label>
+          <label data-help="mock"><input type="checkbox" name="mock"> mock <small>실제 CLI 없이 흐름만 확인</small></label>
+          <label data-help="force"><input type="checkbox" name="force"> 커밋 안 된 변경 무시</label>
+        </fieldset>
+        <p class="note" id="run-cost-note">실제 실행은 Claude·ChatGPT 구독 사용량을 씁니다. 처음이면 ‘설계만’으로 시작해 보세요.</p>
+        <p class="form-error" id="run-form-error" role="alert" hidden></p>
+      </div>
+      <footer class="dialog-foot">
+        <button type="button" class="btn" data-close>취소</button>
+        <button type="submit" class="btn btn-primary" id="run-submit">시작</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div id="restart-overlay" class="restart-overlay" hidden><div class="card card-pad"><span class="spinner"></span> UI 를 다시 시작하는 중…</div></div>
+</body>
+</html>

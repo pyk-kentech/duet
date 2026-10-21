@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet import arbiter as arb
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.config import Config
-from duet.state import RunState, list_run_dirs
-from duet.workflow import WorkflowError, parse_workflow
+import tenure.orchestrator as orch_mod
+from tenure import arbiter as arb
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.config import Config
+from tenure.state import RunState, list_run_dirs
+from tenure.workflow import WorkflowError, parse_workflow
 from tests.helpers import FAIL_CMD, file_names
 
 
@@ -116,7 +116,7 @@ def run(tmp_path, monkeypatch, responder, *extra, toml=""):
     wd = tmp_path / "w"
     if toml:
         wd.mkdir(parents=True)
-        (wd / "duet.toml").write_text(toml, encoding="utf-8")
+        (wd / "tenure.toml").write_text(toml, encoding="utf-8")
     rc = main(["run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", *extra])
     [rd] = list_run_dirs(wd)
     return rc, seen, RunState.load(rd), rd
@@ -209,8 +209,8 @@ def test_no_arbiter_flag_and_no_ledger(tmp_path, monkeypatch):
 
 def test_workflow_explicit_arbiter_role(tmp_path, monkeypatch):
     wd = tmp_path / "w"
-    (wd / ".duet" / "workflows").mkdir(parents=True)
-    (wd / ".duet" / "workflows" / "j.toml").write_text(
+    (wd / ".tenure" / "workflows").mkdir(parents=True)
+    (wd / ".tenure" / "workflows" / "j.toml").write_text(
         '[roles.dev]\nagent = "claude"\n[roles.rev]\nagent = "codex"\n[roles.judge]\nagent = "claude"\n'
         '[[steps]]\nkind = "debate"\nproposers = ["dev"]\n'
         '[[steps]]\nkind = "build"\nimplementer = "dev"\nreviewers = ["rev"]\narbiter = "judge"\n', encoding="utf-8")
@@ -232,7 +232,7 @@ def test_workflow_explicit_arbiter_role(tmp_path, monkeypatch):
 
 
 def test_bench_summary_counts_arbiter():
-    from duet.bench import summarize
+    from tenure.bench import summarize
 
     rows = [{"task": "x", "workflow": "classic", "rep": 1, "status": "approved", "approved": True, "arbiter": "arbiter",
              "rounds": 3, "calls": 9, "usage": {}, "hidden": {"passed": 2, "total": 2, "all_passed": True}, "seconds": 5}]

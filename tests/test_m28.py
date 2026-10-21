@@ -6,11 +6,11 @@ import json
 import sys
 from pathlib import Path
 
-import duet.orchestrator as orch_mod
-from duet import limits
-from duet.agents.base import Mode
-from duet.agents.mock import MockAdapter
-from duet.bench import (
+import tenure.orchestrator as orch_mod
+from tenure import limits
+from tenure.agents.base import Mode
+from tenure.agents.mock import MockAdapter
+from tenure.bench import (
     RESULTS_JSON,
     SOLO_DESIGN_NOTE,
     SOLO_INSTRUCTION,
@@ -21,7 +21,7 @@ from duet.bench import (
     solo_prompt,
     workflow_stats,
 )
-from duet.cli import main
+from tenure.cli import main
 from tests.test_bench import make_suite
 
 PYTEST = [sys.executable, "-m", "pytest"]
@@ -53,9 +53,9 @@ def test_solo_and_classic_in_one_bench(tmp_path: Path, monkeypatch):
     assert rows["classic"]["status"] == "approved" and not rows["classic"].get("solo")
     # 그 CLI 를 구현 자리처럼 한 번: 쓰기 모드, implement 단계, 과제 + 지시
     wd = Path(solo["workdir"])
-    assert (wd / ".duet" / "solo" / "answer.md").is_file()
-    assert json.loads((wd / ".duet" / "solo" / "call.json").read_text(encoding="utf-8"))["exit_code"] == 0
-    assert not (wd / ".duet" / "runs").exists()                              # duet 실행이 아니다
+    assert (wd / ".tenure" / "solo" / "answer.md").is_file()
+    assert json.loads((wd / ".tenure" / "solo" / "call.json").read_text(encoding="utf-8"))["exit_code"] == 0
+    assert not (wd / ".tenure" / "runs").exists()                              # tenure 실행이 아니다
     summary = (rd / SUMMARY_MD).read_text(encoding="utf-8")
     assert "| solo-claude | 1 | - | - | 100% (1개 채점) | 1/1 | - |" in summary
     assert "| classic | 1 | 1/1 |" in summary

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """가짜 ssh: 옵션을 건너뛰고 '--' 뒤의 대상 다음 명령을 로컬 sh 로 실행한다.
 
-원격처럼 보이게 HOME 을 $DUET_FAKE_REMOTE_HOME 으로 바꾸고 DUET_HOME 은 지운다.
+원격처럼 보이게 HOME 을 $TENURE_FAKE_REMOTE_HOME 으로 바꾸고 TENURE_HOME 은 지운다.
 대상 이름이 'unreachable' 로 시작하면 연결 실패(exit 255)를 흉내 낸다.
 """
 import os
@@ -17,17 +17,17 @@ target, cmd = argv[i + 1], argv[i + 2:]
 if target.startswith("unreachable"):
     sys.stderr.write(f"ssh: connect to host {target} port 22: Connection refused\n")
     sys.exit(255)
-home = os.environ.get("DUET_FAKE_REMOTE_HOME")
+home = os.environ.get("TENURE_FAKE_REMOTE_HOME")
 if not home:
-    sys.stderr.write("fake ssh: DUET_FAKE_REMOTE_HOME 이 필요합니다\n")
+    sys.stderr.write("fake ssh: TENURE_FAKE_REMOTE_HOME 이 필요합니다\n")
     sys.exit(255)
 env = dict(os.environ)
 env["HOME"] = home
-env.pop("DUET_HOME", None)
+env.pop("TENURE_HOME", None)
 # 원격에도 Python 3.11+ 가 있다고 치고, 테스트를 돌리는 인터프리터 폴더를 PATH 앞에 둔다
 pybin = os.path.dirname(os.path.realpath(sys.executable))
-extra = os.environ.get("DUET_FAKE_REMOTE_PATH", "")
-env["PATH"] = os.pathsep.join(p for p in (extra, os.environ.get("DUET_FAKE_PY_DIR", ""), env.get("PATH", "")) if p)
+extra = os.environ.get("TENURE_FAKE_REMOTE_PATH", "")
+env["PATH"] = os.pathsep.join(p for p in (extra, os.environ.get("TENURE_FAKE_PY_DIR", ""), env.get("PATH", "")) if p)
 os.makedirs(home, exist_ok=True)
 r = subprocess.run(["sh", "-c", " ".join(cmd)], env=env, cwd=home)
 sys.exit(r.returncode)

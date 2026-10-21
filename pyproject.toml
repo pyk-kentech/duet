@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "duet"
+name = "tenure"
 version = "0.1.0"
 description = "Claude Code와 Codex CLI가 설계를 토론하고 서로의 코드를 교차 리뷰하는 로컬 CLI 도구"
 readme = "README.md"
@@ -15,7 +15,8 @@ dependencies = []
 dev = ["pytest>=8"]
 
 [project.scripts]
-duet = "duet.cli:main"
+tenure = "tenure.cli:main"
+duet = "tenure.cli:main"     # 옛 이름 별칭 (DESIGN.md 36.11)
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -24,9 +25,11 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-duet = ["templates/*.md", "workflows/*.toml", "bench_suites/**/*"]
-"duet.ui" = ["static/*", "static/fonts/*", "static/logos/*"]
+tenure = ["templates/*.md", "workflows/*.toml", "bench_suites/**/*"]
+"tenure.ui" = ["static/*", "static/fonts/*", "static/logos/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# 벤치마크 참조 구현 안의 테스트(과제의 일부)는 모으지 않는다
+norecursedirs = ["bench_refs", "fake_bin", ".*", "__pycache__"]

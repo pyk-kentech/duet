@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from duet.agents.base import AgentRequest, Mode
-from duet.agents.claude_code import ClaudeCodeAdapter
-from duet.agents.codex import CodexAdapter
-from duet.cli import main
-from duet.config import (
+from tenure.agents.base import AgentRequest, Mode
+from tenure.agents.claude_code import ClaudeCodeAdapter
+from tenure.agents.codex import CodexAdapter
+from tenure.cli import main
+from tenure.config import (
     AgentConfig,
     Config,
     ConfigError,
@@ -20,10 +20,10 @@ from duet.config import (
     load_config,
     parse_step_effort,
 )
-from duet.orchestrator import CONFIG_KEYS
-from duet.runner import env_drops, run_process
-from duet.state import latest_run_dir
-from duet.testing import run_tests
+from tenure.orchestrator import CONFIG_KEYS
+from tenure.runner import env_drops, run_process
+from tenure.state import latest_run_dir
+from tenure.testing import run_tests
 from tests.conftest import read_dump
 from tests.test_ui import server  # noqa: F401 - pytest 픽스처
 from tests.helpers import py_cmd
@@ -88,10 +88,10 @@ class TestStepEffortConfig:
         assert cfg.codex.effort == "medium" and cfg.codex.step_effort == {"fix": "low"}
 
     def test_layers_toml_and_global(self, tmp_path: Path):
-        (tmp_path / "duet.toml").write_text('[codex]\neffort = "high"\n', encoding="utf-8")
+        (tmp_path / "tenure.toml").write_text('[codex]\neffort = "high"\n', encoding="utf-8")
         cfg = load_config(tmp_path, global_defaults={"codex": {"step_effort": {"fix": "low"}}})
         assert cfg.codex.effort == "high" and cfg.codex.step_effort == {}
-        (tmp_path / "duet.toml").write_text('[codex.step_effort]\nreview = "xhigh"\n', encoding="utf-8")
+        (tmp_path / "tenure.toml").write_text('[codex.step_effort]\nreview = "xhigh"\n', encoding="utf-8")
         cfg = load_config(tmp_path, global_defaults={"codex": {"effort": "low"}})
         assert cfg.codex.effort == "low" and cfg.codex.step_effort == {"review": "xhigh"}
 
@@ -137,7 +137,7 @@ class TestStepEffortAdapters:
         assert claude_effort_arg(a.build_command(req(tmp_path, "propose"))[0]) is None
 
     def test_codex_ask_sends_step_effort(self, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+        monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
         CodexAdapter(fake_cfg).ask(req(tmp_path, "review", 3))
         assert codex_effort_arg(read_dump(dump_path)["argv"]) == "medium"
 
@@ -198,28 +198,28 @@ def test_env_config_validation():
 
 
 def test_run_process_drop_env(tmp_path: Path, monkeypatch):
-    monkeypatch.setenv("DUET_T_SECRET", "s")
-    r = run_process([sys.executable, "-c", "import os; print(os.environ.get('DUET_T_SECRET', 'unset'), "
-                     "os.environ.get('DUET_T_GIVEN', 'unset'))"], tmp_path,
-                    env={"DUET_T_GIVEN": "g"}, drop_env=["DUET_T_SECRET", "DUET_T_GIVEN"])
+    monkeypatch.setenv("TENURE_T_SECRET", "s")
+    r = run_process([sys.executable, "-c", "import os; print(os.environ.get('TENURE_T_SECRET', 'unset'), "
+                     "os.environ.get('TENURE_T_GIVEN', 'unset'))"], tmp_path,
+                    env={"TENURE_T_GIVEN": "g"}, drop_env=["TENURE_T_SECRET", "TENURE_T_GIVEN"])
     assert r.stdout.strip() == "unset g"  # 직접 준 값은 남는다
 
 
 @pytest.mark.parametrize("adapter_cls,key", [(ClaudeCodeAdapter, "ANTHROPIC_API_KEY"),
                                              (CodexAdapter, "OPENAI_API_KEY")])
 def test_adapters_strip_secrets(adapter_cls, key, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
-    monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+    monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
     monkeypatch.setenv(key, "sk-test")
     monkeypatch.setenv("GH_TOKEN", "ghp-test")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-test")
     adapter_cls(fake_cfg).ask(req(tmp_path, "propose"))
     env = read_dump(dump_path)["env"]
     assert key not in env and "GH_TOKEN" not in env
-    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-test" and env["DUET_FAKE_DUMP"] == str(dump_path)
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-test" and env["TENURE_FAKE_DUMP"] == str(dump_path)
 
 
 def test_adapter_env_strip_empty_inherits(fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
-    monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+    monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     cfg = load_config(None, {"claude": {"bin": fake_cfg.claude.bin}, "env_strip": []}, global_defaults={})
     ClaudeCodeAdapter(cfg).ask(req(tmp_path, "propose"))
@@ -236,7 +236,7 @@ def test_run_tests_drop_env(tmp_path: Path, monkeypatch):
 
 
 def test_doctor_api_key_check(monkeypatch):
-    from duet import doctor
+    from tenure import doctor
 
     for k in doctor.API_KEY_VARS:
         monkeypatch.delenv(k, raising=False)
@@ -245,6 +245,6 @@ def test_doctor_api_key_check(monkeypatch):
     c = doctor._api_key_check()
     assert c.status == "warn" and c.extra == {"present": ["ANTHROPIC_API_KEY"], "passed": []}
     assert "빼고 넘기지만" in c.detail
-    monkeypatch.setattr("duet.config.load_config", lambda *a, **k: Config(env_strip=[]))
+    monkeypatch.setattr("tenure.config.load_config", lambda *a, **k: Config(env_strip=[]))
     c = doctor._api_key_check()
     assert c.extra["passed"] == ["ANTHROPIC_API_KEY"] and "과금될 수 있습니다" in c.detail

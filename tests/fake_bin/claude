@@ -20,7 +20,7 @@ if argv[:2] == ["auth", "login"]:
     print("Login successful." if code else "No code.")
     sys.exit(0 if code else 1)
 if argv[:2] == ["auth", "status"]:
-    logged = os.environ.get("DUET_FAKE_LOGGED", "1") == "1"
+    logged = os.environ.get("TENURE_FAKE_LOGGED", "1") == "1"
     print(json.dumps({"loggedIn": logged, "authMethod": "claude.ai" if logged else "none",
                       "subscriptionType": "max" if logged else None}))
     sys.exit(0 if logged else 1)
@@ -86,14 +86,14 @@ out = {
               "output_tokens": 50, "output_tokens_details": {"thinking_tokens": 7}},
     "total_cost_usd": 0.0123,
     "modelUsage": {"claude-opus-5-5": {}},
-    "session_id": argv[argv.index("--resume") + 1] if "--resume" in argv else os.environ.get("DUET_FAKE_SESSION", "fake-session-new"),
+    "session_id": argv[argv.index("--resume") + 1] if "--resume" in argv else os.environ.get("TENURE_FAKE_SESSION", "fake-session-new"),
 }
-if "--json-schema" in argv and os.environ.get("DUET_FAKE_STRUCTURED"):
-    out["structured_output"] = json.loads(os.environ["DUET_FAKE_STRUCTURED"])
+if "--json-schema" in argv and os.environ.get("TENURE_FAKE_STRUCTURED"):
+    out["structured_output"] = json.loads(os.environ["TENURE_FAKE_STRUCTURED"])
 if "stream-json" in argv:
-    # 실제 스트림처럼: 시작 이벤트, 사용률 이벤트(DUET_FAKE_RATE=none 이면 없음), 마지막에 result
+    # 실제 스트림처럼: 시작 이벤트, 사용률 이벤트(TENURE_FAKE_RATE=none 이면 없음), 마지막에 result
     print(json.dumps({"type": "system", "subtype": "init", "session_id": out["session_id"]}))
-    rate = os.environ.get("DUET_FAKE_RATE")
+    rate = os.environ.get("TENURE_FAKE_RATE")
     if rate != "none":
         info = json.loads(rate) if rate else {
             "status": "allowed", "resetsAt": 1792224000, "rateLimitType": "five_hour",

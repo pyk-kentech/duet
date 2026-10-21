@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.state import DONE_APPROVED, DONE_DESIGN, DONE_UNAPPROVED, FAILED, STOPPED_RATE_LIMIT, RunState, list_run_dirs
-from duet.workspace import Workspace
+import tenure.orchestrator as orch_mod
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.state import DONE_APPROVED, DONE_DESIGN, DONE_UNAPPROVED, FAILED, STOPPED_RATE_LIMIT, RunState, list_run_dirs
+from tenure.workspace import Workspace
 from tests.helpers import file_names
 
 
@@ -43,7 +43,7 @@ def test_full_run_approved(tmp_path: Path, capsys):
     ws = Workspace(wd)
     assert ws.commit_count() == 3 and not ws.dirty()
     assert (wd / "DESIGN.md").exists() and (wd / "main.py").exists()
-    assert ".duet/" in (wd / ".gitignore").read_text(encoding="utf-8")
+    assert ".tenure/" in (wd / ".gitignore").read_text(encoding="utf-8")
     out = capsys.readouterr().out
     assert "설계안 작성: claude" in out and "판정: APPROVED" in out and "✅" in out
     assert "실행 시작:" in out and "mock" in out
@@ -79,7 +79,7 @@ def test_skip_design(tmp_path: Path):
 def test_roles_and_toml_precedence(tmp_path: Path):
     wd = tmp_path / "x"
     wd.mkdir()
-    (wd / "duet.toml").write_text('implementer = "codex"\nreviewer = "claude"\nmax_review = 1\n', encoding="utf-8")
+    (wd / "tenure.toml").write_text('implementer = "codex"\nreviewer = "claude"\nmax_review = 1\n', encoding="utf-8")
     assert run_cli("run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", "--max-review", "2") == 0
     run_dir = only_run(wd)
     st = RunState.load(run_dir)
@@ -190,7 +190,7 @@ def test_log_command(tmp_path: Path, capsys):
 
 def test_console_entrypoint_subprocess(tmp_path: Path):
     wd = tmp_path / "x"
-    r = subprocess.run([sys.executable, "-m", "duet", "run", "t", "--workdir", str(wd), "--mock",
+    r = subprocess.run([sys.executable, "-m", "tenure", "run", "t", "--workdir", str(wd), "--mock",
                         "--design-only", "--debate-rounds", "0"], capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, r.stderr
     assert "설계만 완료" in r.stdout

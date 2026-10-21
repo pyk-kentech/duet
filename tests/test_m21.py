@@ -10,15 +10,15 @@ from pathlib import Path
 
 import pytest
 
-import duet.ui.server as srv_mod
-from duet import doctor, limits, procs, stopflag
-from duet.agents.base import prompt_via_stdin
-from duet.doctor import ACTIONS
-from duet.lock import RunLock, read_lock
-from duet.remote import Remote
-from duet.runner import pid_alive, run_process
-from duet.testing import run_tests
-from duet.workspace import Workspace
+import tenure.ui.server as srv_mod
+from tenure import doctor, limits, procs, stopflag
+from tenure.agents.base import prompt_via_stdin
+from tenure.doctor import ACTIONS
+from tenure.lock import RunLock, read_lock
+from tenure.remote import Remote
+from tenure.runner import pid_alive, run_process
+from tenure.testing import run_tests
+from tenure.workspace import Workspace
 from tests.helpers import py_cmd
 
 WIN = os.name == "nt"
@@ -213,7 +213,7 @@ def test_local_action_argv(monkeypatch):
 
 
 def test_term_job_pipe_mode():
-    from duet.ui.terminal import TermJob
+    from tenure.ui.terminal import TermJob
     script = "import sys; print('ask?', flush=True); print('got:' + sys.stdin.readline().strip(), flush=True)"
     job = TermJob(id="p", title="pipe", argv=[sys.executable, "-c", script], mode="pipe").start()
     assert wait_until(lambda: "ask?" in job.snapshot()["text"])

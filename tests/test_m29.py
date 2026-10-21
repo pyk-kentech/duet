@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from duet.bench import grade, load_suite, prepare_workdir
+from tenure.bench import grade, load_suite, prepare_workdir
 
 REFS = Path(__file__).parent / "bench_refs"
 PYTEST = [sys.executable, "-m", "pytest"]
@@ -73,7 +73,7 @@ def test_backlog_setup_keeps_regressions_and_fails_tickets(name, tmp_path: Path)
     """시작 코드는 기존 동작 회귀 테스트·보이는 테스트는 통과하고, 티켓 테스트는 파일마다 실패가 있어야 한다."""
     import subprocess
 
-    from duet.bench import Task
+    from tenure.bench import Task
 
     task = _backlog(name)
     wd = tmp_path / "wd"

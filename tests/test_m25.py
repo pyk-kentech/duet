@@ -11,12 +11,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from duet.bench import (
+from tenure.bench import (
     FIXED_DESIGN_HEADING, RESULTS_JSON, SUMMARY_MD, BenchError, codex_limit_equiv, grade, load_suite,
     prepare_workdir, run_bench, summarize, week_delta, week_marks,
 )
-from duet.cli import main
-from duet.workspace import Workspace, check_workdir
+from tenure.cli import main
+from tenure.workspace import Workspace, check_workdir
 from tests.test_bench import PYTEST, REFS, make_suite
 
 LARGE = ["issuetrack", "stock-warehouses"]

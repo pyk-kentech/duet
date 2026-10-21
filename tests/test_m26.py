@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.config import Config, ConfigError, load_config
-from duet.options import BY_KEY
-from duet.report import REPORT_ROLE
-from duet.state import RunState, list_run_dirs
-from duet.transcript import Transcript
-from duet.ui.dashboard import ApiError, Dashboard
+import tenure.orchestrator as orch_mod
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.config import Config, ConfigError, load_config
+from tenure.options import BY_KEY
+from tenure.report import REPORT_ROLE
+from tenure.state import RunState, list_run_dirs
+from tenure.transcript import Transcript
+from tenure.ui.dashboard import ApiError, Dashboard
 
 
 def run(tmp_path: Path, *extra: str, name: str = "w") -> tuple[int, RunState, Path]:
@@ -106,7 +106,7 @@ def test_dashboard_make_report(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv: seen.update(kind=kind, argv=argv) or {"id": "j"})
     d = Dashboard(extra_projects=[str(tmp_path / "w")]) if "extra_projects" in Dashboard.__init__.__code__.co_varnames \
         else Dashboard()
-    from duet.registry import Registry
+    from tenure.registry import Registry
 
     Registry().add(tmp_path / "w")
     d.make_report({"project": str(tmp_path / "w"), "run": rd.name})
