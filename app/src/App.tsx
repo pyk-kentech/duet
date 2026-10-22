@@ -1,127 +1,102 @@
-import { lazy, Suspense, useState } from "react";
-import { Group, useGroups, useInbox } from "./data";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useGroups } from "./data";
+import { Icon } from "./icons";
 import { LOCAL } from "./lib/api";
-import { baseName } from "./lib/format";
-import { hrefProject, Route, useRoute } from "./lib/router";
-import { hrefSession, SESSION_STATE, SessionInfo, sessionDot, useSessions } from "./sessions";
-import { AgentTag, StateDot, UiProvider } from "./ui";
+import { Route, useRoute } from "./lib/router";
+import { useSessions } from "./sessions";
+import { UiProvider } from "./ui";
+import { BenchView } from "./views/Bench";
 import Home from "./views/Home";
 import NewRun, { NewRunInit } from "./views/NewRun";
+import Palette from "./views/Palette";
 import ProjectView from "./views/Project";
 import RunView from "./views/Run";
-import { BenchView } from "./views/Bench";
 import { SettingsView } from "./views/Settings";
 import { SetupView } from "./views/Setup";
 import { UsageView } from "./views/Usage";
+import WorkList from "./views/WorkList";
+import { buildFolders, countStates, useWorks } from "./works";
 
-// 터미널(xterm)은 무거워서 세션 화면을 열 때만 불러온다
+// 터미널(xterm)·섬은 무거워 그 화면을 열 때만 불러온다
 const SessionView = lazy(() => import("./views/Session"));
+const Island = lazy(() => import("./views/Island"));
 
 export default function App() {
+  const route = useRoute();
+  if (route.name === "island") {                 // 데스크톱 앱의 섬 창 (36.21)
+    return <UiProvider><Suspense fallback={null}><Island /></Suspense></UiProvider>;
+  }
   return (
     <UiProvider>
-      <Shell />
+      <Shell route={route} />
     </UiProvider>
   );
 }
 
-function Shell() {
-  const route = useRoute();
+const RAIL: [string, string, string, (r: Route) => boolean][] = [
+  ["#/", "work", "작업", (r) => r.name === "home" || r.name === "run" || r.name === "project" || r.name === "session"],
+  ["#/usage", "gauge", "사용량", (r) => r.name === "usage"],
+  ["#/bench", "flask", "벤치마크", (r) => r.name === "bench"],
+  ["#/setup", "plug", "환경·로그인", (r) => r.name === "setup"],
+  ["#/settings", "cog", "설정", (r) => r.name === "settings"],
+];
+
+/** 작업대 (36.21): 왼쪽 레일 · 작업 목록 · 본문. */
+function Shell({ route }: { route: Route }) {
   const { groups, error, reload } = useGroups();
-  const { items, reload: reloadInbox } = useInbox(groups);
+  const { works, reload: reloadWorks } = useWorks(groups);
   const { sessions, reload: reloadSessions } = useSessions();
+  const folders = useMemo(() => buildFolders(works, sessions), [works, sessions]);
+  const counts = useMemo(() => countStates(folders), [folders]);
   const [newRun, setNewRun] = useState<NewRunInit | null>(null);
-  const waiting = items.filter((i) => i.activity.state === "blocked").length
-    + sessions.filter((s) => s.status.attention === "blocked").length;
-  const openNew = (init: NewRunInit = {}) => setNewRun(init);
+  const [palette, setPalette] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const refresh = useCallback(() => { reload(); reloadWorks(); reloadSessions(); }, [reload, reloadWorks, reloadSessions]);
+  const openNew = useCallback((init: NewRunInit = {}) => setNewRun(init), []);
+  const waiting = (counts.blocked || 0) + (counts.failed || 0);
+
+  useEffect(() => { document.title = waiting ? `(${waiting}) tenure` : "tenure"; }, [waiting]);
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPalette((x) => !x); return; }
+      const t = e.target as HTMLElement;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable || t.closest(".xterm"))) return;
+      if (e.key === "n" && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); openNew({}); }
+      if (e.key === "Escape" && (route.name === "run" || route.name === "session")) location.hash = "#/";
+    };
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, [openNew, route.name]);
 
   return (
-    <div className="shell">
-      <aside className="side" aria-label="탐색">
-        <div className="side-top">
-          <div className="brand"><span className="brand-mark">t</span>tenure</div>
-          <button className="btn btn-primary btn-block" type="button" onClick={() => openNew({})}>새 실행</button>
-        </div>
-        <nav className="nav">
-          <NavLink href="#/" active={route.name === "home"} label="받은편지함" count={waiting || undefined} />
-          <NavLink href="#/usage" active={route.name === "usage"} label="사용량" />
-          <NavLink href="#/bench" active={route.name === "bench"} label="벤치마크" />
-          <NavLink href="#/setup" active={route.name === "setup"} label="환경·로그인" />
-          <NavLink href="#/settings" active={route.name === "settings"} label="설정" />
-        </nav>
-        <SideSessions sessions={sessions} route={route} />
-        <SideProjects groups={groups} route={route} inboxStates={Object.fromEntries(items.map((i) => [`${i.machine}|${i.project}`, i.activity.state]))} />
-      </aside>
+    <div className="wb">
+      <nav className="rail" aria-label="화면">
+        <a className="rail-brand" href="#/" title="tenure">t</a>
+        {RAIL.map(([href, icon, label, on]) => (
+          <a key={href} href={href} className={`rail-btn${on(route) ? " on" : ""}`} title={label} aria-label={label} aria-current={on(route) ? "page" : undefined}>
+            <Icon name={icon} />
+            {icon === "work" && waiting ? <span className="rail-badge">{waiting}</span> : null}
+          </a>
+        ))}
+        <span className="spacer" />
+        <button type="button" className="rail-btn" title="명령 (Ctrl+K)" aria-label="명령 팔레트" onClick={() => setPalette(true)}><Icon name="search" /></button>
+      </nav>
+      <WorkList folders={folders} route={route} searchRef={searchRef} onChanged={refresh}
+                onNew={(project, machine) => openNew(project ? { project, machine: machine || LOCAL } : {})} />
       <main className="main">
-        {route.name === "home" && <Home groups={groups} error={error} inbox={items} sessions={sessions} onNewRun={openNew}
-                                         onChanged={() => { reload(); reloadInbox(); reloadSessions(); }} />}
+        {route.name === "home" && <Home groups={groups} error={error} folders={folders} onNewRun={openNew} onChanged={refresh} />}
         {route.name === "project" && <ProjectView route={route} onNewRun={openNew} onChanged={reload} onSession={reloadSessions} />}
+        {route.name === "run" && <RunView key={`${route.machine}|${route.project}|${route.run}`} route={route} onSeen={reloadWorks} onSession={reloadSessions} />}
         {route.name === "session" && <Suspense fallback={<div className="empty"><span className="spinner" /></div>}>
           <SessionView key={route.id} id={route.id} sessions={sessions} onChanged={reloadSessions} /></Suspense>}
-        {route.name === "run" && <RunView key={`${route.machine}|${route.project}|${route.run}`} route={route} onSeen={reloadInbox} onSession={reloadSessions} />}
         {route.name === "usage" && <UsageView machine={route.machine} groups={groups} />}
         {route.name === "setup" && <SetupView machine={route.machine} groups={groups} />}
         {route.name === "settings" && <SettingsView />}
         {route.name === "bench" && <BenchView dir={route.dir} />}
       </main>
       {newRun && <NewRun init={newRun} groups={groups} onClose={() => setNewRun(null)}
-                         onStarted={() => { setNewRun(null); reload(); reloadInbox(); }} />}
+                         onStarted={() => { setNewRun(null); refresh(); }} />}
+      {palette && <Palette folders={folders} onClose={() => setPalette(false)} onNew={() => openNew({})} />}
     </div>
-  );
-}
-
-function NavLink({ href, label, active, count }: { href: string; label: string; active: boolean; count?: number }) {
-  return (
-    <a href={href} className={active ? "active" : undefined} aria-current={active ? "page" : undefined}>
-      {label}{count ? <span className="count" aria-label={`${count}개`}>{count}</span> : null}
-    </a>
-  );
-}
-
-/** 대화형 세션 (36.19): 열려 있는 것과 최근 끝난 것. */
-function SideSessions({ sessions, route }: { sessions: SessionInfo[]; route: Route }) {
-  const shown = sessions.filter((s) => s.live || s.status.attention).slice(0, 8);
-  if (!shown.length) return null;
-  return (
-    <>
-      <div className="side-section">세션</div>
-      <div className="side-list" style={{ flex: "none" }}>
-        {shown.map((s) => (
-          <a key={s.id} className={`side-proj${route.name === "session" && route.id === s.id ? " active" : ""}`} href={hrefSession(s.id)}
-             title={`${SESSION_STATE[s.status.state]} · ${s.status.reason}\n${s.cwd}`}>
-            <StateDot state={sessionDot(s)} />
-            <AgentTag name={s.agent} />
-            <span className="ellipsis">{s.title || baseName(s.cwd)}</span>
-          </a>
-        ))}
-      </div>
-    </>
-  );
-}
-
-function SideProjects({ groups, route, inboxStates }: { groups: Group[] | null; route: Route; inboxStates: Record<string, string> }) {
-  if (!groups) return null;
-  const current = route.name === "project" || route.name === "run" ? `${route.machine}|${route.project}` : "";
-  return (
-    <>
-      {groups.map((g) => (
-        <div key={g.id} style={{ display: "contents" }}>
-          <div className="side-section">{g.local ? "이 머신" : g.name}{g.error ? <span className="badge bad" style={{ marginLeft: 6 }}>연결 안 됨</span> : null}</div>
-          <div className="side-list" style={{ flex: "none" }}>
-            {g.projects.filter((p) => p.exists && !p.bench).map((p) => {
-              const key = `${g.id}|${p.path}`;
-              const state = p.live ? "working" : inboxStates[key] || p.latest?.activity?.state || "idle";
-              return (
-                <a key={key} className={`side-proj${current === key ? " active" : ""}`} href={hrefProject(g.id || LOCAL, p.path)} title={p.path}>
-                  <StateDot state={state} />
-                  <span className="ellipsis">{p.display || p.name || baseName(p.path)}</span>
-                </a>
-              );
-            })}
-            {!g.projects.some((p) => p.exists && !p.bench) && <div className="faint small" style={{ padding: "4px 8px" }}>프로젝트 없음</div>}
-          </div>
-        </div>
-      ))}
-    </>
   );
 }

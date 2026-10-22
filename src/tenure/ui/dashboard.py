@@ -872,8 +872,30 @@ class Dashboard:
         tree = self._tree(wd, b["run_id"]) if b["worktree"] else None
         out = {k: b[k] for k in SUMMARY_KEYS}
         out.update(live=is_live, stale=b["status"] == RUNNING and not is_live, activity=self._activity(rd, b, is_live),
-                   worktree={"branch": tree.branch, "status": tree.status, "base_branch": tree.base_branch} if tree else None)
+                   worktree={"branch": tree.branch, "status": tree.status, "base_branch": tree.base_branch} if tree else None,
+                   tokens=sum(int(u.get("input_tokens") or 0) for u in b["usage"].values()), race=b["race"])
+        if is_live:                              # 지금 하는 일 (작업대의 두 번째 줄, 36.21)
+            ev = self._last_event(rd) or {}
+            out["doing"] = {k: ev.get(k) for k in ("kind", "agent", "role", "step", "round", "text", "ts") if ev.get(k) is not None}
         return out
+
+    def works(self, per_project: int = 15) -> dict[str, Any]:
+        """작업대의 목록 (36.21): 프로젝트마다 최근 실행 요약과 상태별 개수. 벤치마크 결과 폴더는 뺀다."""
+        groups: list[dict[str, Any]] = []
+        counts: dict[str, int] = {}
+        for path in self.registry.list():
+            wd = Path(path)
+            if not wd.is_dir() or bench_root_of(wd) is not None:
+                continue
+            items = [self._run_summary(wd, rd) for rd in list(reversed(self._run_dirs(wd)))[:per_project]]
+            items = [it for it in items if (it.get("worktree") or {}).get("status") != worktree.DISCARDED]
+            for it in items:
+                st = (it.get("activity") or {}).get("state")
+                if st:
+                    counts[st] = counts.get(st, 0) + 1
+            groups.append({"path": str(wd), "name": wd.name or str(wd), "items": items})
+        groups.sort(key=lambda g: max([str(i.get("updated_at") or "") for i in g["items"]] or [""]), reverse=True)
+        return {"groups": groups, "counts": counts, "now": dt.datetime.now().isoformat(timespec="seconds")}
 
     def _activity(self, rd: Path, st: RunState | dict, is_live: bool) -> dict[str, Any]:
         """화면이 정렬·표시할 활동 상태 (DESIGN.md 36.3.1)."""
@@ -892,7 +914,7 @@ class Dashboard:
                     "calls": len(st.calls), "total_sec": round(sum(c.sec for c in st.calls), 1),
                     "last_verdict": st.last_verdict, "config": st.config, "error": st.error,
                     "seen_at": st.seen_at, "limit_wait": st.limit_wait, "worktree": bool(st.worktree),
-                    "usage": st.usage_totals()}
+                    "usage": st.usage_totals(), "race": bool(st.race)}
         return self._bases.get(rd / "run.json", load)
 
     # ---------------------------------------------------------------- 읽기 캐시 (36.18)
@@ -1153,6 +1175,7 @@ API_METHODS: dict[str, Any] = {
     "events": lambda d, a: d.events(a.get("project"), a.get("run"), int(a.get("since") or 0)),
     "mark_seen": lambda d, a: d.mark_seen(a.get("project"), a.get("run")),
     "inbox": lambda d, a: d.inbox(),
+    "works": lambda d, a: d.works(),
     "merge_check": lambda d, a: d.merge_check(a.get("project"), a.get("run")),
     "merge": lambda d, a: d.merge(a),
     "discard": lambda d, a: d.discard(a),

@@ -1,20 +1,34 @@
-import { FormEvent, useState } from "react";
-import { Group, InboxItem } from "../data";
-import { hrefSession, SESSION_STATE, SessionInfo, sessionDot } from "../sessions";
-import { api } from "../lib/api";
-import { baseName, fmtWhen, oneLine } from "../lib/format";
-import { ACTIVITY, PHASE, STEP } from "../lib/labels";
-import { hrefProject, hrefRun } from "../lib/router";
-import { AgentTag, ErrorBox, StateDot, StatusBadge, useUi, Verdict } from "../ui";
+import { FormEvent, useMemo, useState } from "react";
+import type { Group } from "../data";
+import { api, LOCAL } from "../lib/api";
+import { baseName, fmtWhen } from "../lib/format";
+import { hrefProject } from "../lib/router";
+import { ErrorBox, useUi } from "../ui";
+import { itemDoing, itemTitle, WorkFolder, WorkItem } from "../works";
 import type { NewRunInit } from "./NewRun";
+import { itemHref, Shape, STATE_LABEL } from "./WorkList";
 
-const ORDER = ["blocked", "done-unseen", "working", "unverifiable", "failed"];
-
-export default function Home({ groups, error, inbox, sessions, onNewRun, onChanged }: {
-  groups: Group[] | null; error: unknown; inbox: InboxItem[]; sessions: SessionInfo[]; onNewRun: (i?: NewRunInit) => void; onChanged: () => void;
+/** 오늘 (36.21): 아무것도 고르지 않았을 때. 바로 시작 · 나를 기다리는 것 · 최근 끝난 것 · 프로젝트. */
+export default function Home({ groups, error, folders, onNewRun, onChanged }: {
+  groups: Group[] | null; error: unknown; folders: WorkFolder[]; onNewRun: (i?: NewRunInit) => void; onChanged: () => void;
 }) {
   const { toast } = useUi();
+  const [task, setTask] = useState("");
+  const local = (groups || []).find((g) => g.local);
+  const projects = (local?.projects || []).filter((p) => p.exists && !p.bench);
+  const [project, setProject] = useState("");
   const [path, setPath] = useState("");
+  const all = useMemo(() => folders.flatMap((f) => f.items), [folders]);
+  const attention = all.filter((i) => i.rank >= 4).slice(0, 8);
+  const working = all.filter((i) => i.state === "working").slice(0, 6);
+  const recent = all.filter((i) => i.rank < 4 && i.state !== "working")
+    .sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, 6);
+
+  const start = (ev: FormEvent) => {
+    ev.preventDefault();
+    onNewRun({ task: task.trim(), project: project || undefined, machine: LOCAL });
+    setTask("");
+  };
   const add = async (ev: FormEvent) => {
     ev.preventDefault();
     try {
@@ -24,118 +38,75 @@ export default function Home({ groups, error, inbox, sessions, onNewRun, onChang
       onChanged();
     } catch (e) { toast((e as Error).message, true); }
   };
-  const byState = ORDER.map((s) => [s, inbox.filter((i) => i.activity.state === s)] as const).filter(([, xs]) => xs.length);
-  const asking = sessions.filter((s) => s.status.attention);   // 승인·질문 카드 (36.19)
-  const answer = async (s: SessionInfo, approve: boolean) => {
-    try {
-      await api("/api/session/answer", { method: "POST", body: { id: s.id, approve } });
-      toast(approve ? "승인을 보냈습니다." : "거절을 보냈습니다.");
-      onChanged();
-    } catch (e) { toast((e as Error).message, true); }
-  };
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <div>
-          <h1>받은편지함</h1>
-          <div className="muted">나를 기다리는 것부터. 끝난 실행은 열어 보면 여기서 빠집니다.</div>
-        </div>
-        <span className="spacer" />
-        <button className="btn btn-primary" type="button" onClick={() => onNewRun({})}>새 실행</button>
-      </div>
+    <div className="page today">
       {error ? <ErrorBox error={error} /> : null}
-
-      {asking.length ? (
-        <section className="card">
-          <div className="section-head" style={{ padding: "10px 14px 0" }}><b>세션</b><span className="faint small">{asking.length}</span></div>
-          {asking.map((s) => (
-            <div key={s.id} className="inbox-item session-card">
-              <StateDot state={sessionDot(s)} />
-              <div style={{ minWidth: 0 }}>
-                <div className="title ellipsis"><AgentTag name={s.agent} /> {s.status.attention === "blocked" ? SESSION_STATE.blocked : "턴이 끝남 · 안 봄"}</div>
-                <div className="reason ellipsis" title={s.status.reason}>{baseName(s.cwd)} · {s.status.reason}</div>
-              </div>
-              <div className="row" style={{ gap: 6 }}>
-                {s.status.attention === "blocked" ? <>
-                  <button className="btn btn-sm btn-primary" type="button" onClick={() => answer(s, true)}>승인</button>
-                  <button className="btn btn-sm" type="button" onClick={() => answer(s, false)}>거절</button>
-                </> : null}
-                <a className="btn btn-sm" href={hrefSession(s.id)}>터미널 열기</a>
-              </div>
-            </div>
-          ))}
-        </section>
-      ) : null}
-
-      <section className="card">
-        {byState.length === 0 ? (
-          <div className="empty">기다리는 일이 없습니다. 진행 중이거나 새로 끝난 실행이 생기면 여기에 보입니다.</div>
-        ) : byState.map(([state, xs]) => (
-          <div key={state} className="inbox-group">
-            <div className="section-head" style={{ padding: "10px 14px 0" }}>
-              <StateDot state={state} /><b>{ACTIVITY[state]}</b><span className="faint small">{xs.length}</span>
-            </div>
-            {xs.map((it) => (
-              <a key={`${it.machine}|${it.project}|${it.run_id}`} className="inbox-item" href={hrefRun(it.machine, it.project, it.run_id)}>
-                <StateDot state={it.activity.state} />
-                <div style={{ minWidth: 0 }}>
-                  <div className="title ellipsis">{oneLine(it.task, 120) || it.run_id}</div>
-                  <div className="reason ellipsis">{baseName(it.project)} · {it.activity.reason || ACTIVITY[it.activity.state]}</div>
-                </div>
-                <span className="faint small nowrap">{fmtWhen(it.updated_at)}</span>
-              </a>
-            ))}
-          </div>
-        ))}
-      </section>
-
-      {(groups || []).map((g) => {
-        const projects = g.projects.filter((p) => !p.bench);
-        return (
-          <section key={g.id} className="col">
-            <div className="section-head">
-              <h2>{g.local ? "프로젝트" : `${g.name} 의 프로젝트`}</h2>
-              {g.ssh ? <span className="mono faint">{g.ssh}</span> : null}
-              {g.error ? <span className="badge bad">연결 안 됨</span> : null}
-              <span className="spacer" />
-              <button className="btn btn-sm" type="button" onClick={() => onNewRun({ machine: g.id })}>이 머신에서 새 실행</button>
-            </div>
-            {g.error ? <div className="alert alert-warn"><span>{g.error}</span></div> : null}
-            {projects.length === 0 && !g.error ? <div className="card empty">아직 프로젝트가 없습니다. ‘새 실행’으로 시작하세요.</div> : (
-              <div className="grid">
-                {projects.map((p) => {
-                  const l = p.latest;
-                  return (
-                    <a key={p.path} className="card proj-card" href={hrefProject(g.id, p.path)}>
-                      <div className="row">
-                        <h3 className="ellipsis">{p.display || p.name}</h3>
-                        <span className="spacer" />
-                        {p.live ? <StatusBadge status="running" live /> : l ? <StatusBadge status={l.status} stale={l.stale} /> : <span className="badge">기록 없음</span>}
-                      </div>
-                      <div className="path">{p.path}</div>
-                      {l ? <div className="ellipsis small">{oneLine(l.task, 140)}</div> : null}
-                      <div className="row faint small" style={{ flexWrap: "wrap" }}>
-                        <span>실행 {p.run_count}개</span>
-                        {l ? <span>{PHASE[l.phase] || l.phase} · {STEP[l.step] || l.step || "-"}</span> : null}
-                        {l?.last_verdict ? <Verdict v={{ status: l.last_verdict }} /> : null}
-                        {l ? <span>{fmtWhen(l.updated_at)}</span> : null}
-                        {!p.exists ? <span className="badge bad">폴더 없음</span> : null}
-                      </div>
-                    </a>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-        );
-      })}
-
-      <form className="row" onSubmit={add}>
-        <input type="text" value={path} onChange={(e) => setPath(e.target.value)} spellCheck={false} autoComplete="off"
-               placeholder="기존 작업 폴더를 목록에 추가 (절대 경로)" aria-label="추가할 폴더 경로" />
-        <button className="btn" type="submit" disabled={!path.trim()}>추가</button>
+      <form className="composer" onSubmit={start}>
+        <textarea value={task} onChange={(e) => setTask(e.target.value)} rows={3} placeholder="무엇을 만들거나 고칠까요? 과제를 적고 시작하면 새 작업 창이 채워져 열립니다."
+                  onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) start(e); }} aria-label="과제" />
+        <div className="row">
+          <select value={project} onChange={(e) => setProject(e.target.value)} aria-label="폴더">
+            <option value="">새 폴더 또는 고르기…</option>
+            {projects.map((p) => <option key={p.path} value={p.path}>{p.display || p.name}</option>)}
+          </select>
+          <span className="faint small">Ctrl+Enter</span>
+          <span className="spacer" />
+          <button className="btn btn-primary" type="submit">시작</button>
+        </div>
       </form>
+
+      {attention.length ? (
+        <Section title="나를 기다림 · 안 봄" items={attention} />
+      ) : null}
+      {working.length ? <Section title="진행 중" items={working} /> : null}
+      {!attention.length && !working.length ? (
+        <div className="calm">기다리는 일이 없습니다. 진행 중이거나 새로 끝난 작업이 생기면 왼쪽 목록과 여기에 보입니다.</div>
+      ) : null}
+      {recent.length ? <Section title="최근 끝난 작업" items={recent} /> : null}
+
+      <section className="col" style={{ gap: 8 }}>
+        <div className="sec-title">프로젝트</div>
+        <div className="proj-chips">
+          {projects.map((p) => (
+            <a key={p.path} className="proj-chip" href={hrefProject(LOCAL, p.path)} title={p.path}>
+              <Shape state={p.live ? "working" : p.latest?.activity?.state || "idle"} />
+              <span className="ellipsis">{p.display || p.name || baseName(p.path)}</span>
+              <span className="faint small">{p.run_count}</span>
+            </a>
+          ))}
+          {(groups || []).filter((g) => !g.local).map((g) => g.projects.filter((p) => !p.bench).map((p) => (
+            <a key={`${g.id}|${p.path}`} className="proj-chip" href={hrefProject(g.id, p.path)} title={`${g.name} · ${p.path}`}>
+              <Shape state={p.latest?.activity?.state || "idle"} /><span className="ellipsis">{p.name}</span><span className="machine">{g.name}</span>
+            </a>
+          )))}
+        </div>
+        <form className="row" onSubmit={add}>
+          <input type="text" value={path} onChange={(e) => setPath(e.target.value)} spellCheck={false} autoComplete="off"
+                 placeholder="기존 폴더를 목록에 추가 (절대 경로)" aria-label="추가할 폴더 경로" />
+          <button className="btn" type="submit" disabled={!path.trim()}>추가</button>
+        </form>
+      </section>
     </div>
+  );
+}
+
+function Section({ title, items }: { title: string; items: WorkItem[] }) {
+  return (
+    <section className="col" style={{ gap: 6 }}>
+      <div className="sec-title">{title}</div>
+      <div className="card list-card">
+        {items.map((it) => (
+          <a key={it.key} className="today-row" href={itemHref(it)}>
+            <Shape state={it.state} />
+            <span className="wrow-main">
+              <span className="wrow-t1">{itemTitle(it)}</span>
+              <span className="wrow-t2">{baseName(it.project)} · {it.state === "blocked" || it.state === "done-unseen" ? STATE_LABEL[it.state] + " · " : ""}{itemDoing(it)}</span>
+            </span>
+            <span className="wrow-when">{fmtWhen(it.updated)}</span>
+          </a>
+        ))}
+      </div>
+    </section>
   );
 }

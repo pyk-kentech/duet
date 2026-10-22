@@ -6,7 +6,10 @@ import { Diff, Markdown } from "../lib/markdown";
 import { ACTIVITY, OUTCOME, PHASE, STATUS, STEP } from "../lib/labels";
 import { hrefProject, hrefRun } from "../lib/router";
 import { AgentTag, ErrorBox, Modal, StateDot, StatusBadge, TestTag, useUi, Verdict } from "../ui";
+import { Icon } from "../icons";
+import AgentConfigView from "./AgentConfig";
 import { DraftsPanel } from "./Drafts";
+import { Shape } from "./WorkList";
 import { TerminalButtons } from "./Project";
 import { MergePanel, Tree, TREE_STATUS } from "./Merge";
 import { Note, NotedDiff } from "./NotedDiff";
@@ -20,7 +23,6 @@ interface RunData {
   code_dir?: string; worktree?: Tree | null; notes_open?: number;
 }
 const LIVE = "__live__";
-const TABS: [string, string][] = [["talk", "대화"], ["drafts", "초안 비교"], ["issues", "지적"], ["console", "콘솔"], ["changes", "변경 사항"], ["design", "설계 문서"]];
 
 export default function RunView({ route, onSeen, onSession }: { route: { machine: string; project: string; run: string; tab: string }; onSeen: () => void; onSession?: () => void }) {
   const m = route.machine;
@@ -72,28 +74,40 @@ export default function RunView({ route, onSeen, onSession }: { route: { machine
     try { await api("/api/actions/stop", { method: "POST", body: { project: data.project, run: st.run_id }, machine: m }); toast("중지 요청을 보냈습니다."); }
     catch (e) { toast((e as Error).message, true); }
   };
+  // 오른쪽 얇은 아이콘 사이드바 (NotchCrew 1.12, 36.21): 누르면 그 판, 다시 누르면 대화로
+  const panels: [string, string, string, number | string | null][] = [
+    ["talk", "talk", "대화", data.entries.length || null],
+    ["changes", "diff", "변경 사항", data.notes_open ? `${data.notes_open}` : null],
+    ...(data.worktree ? [["merge", "merge", "병합", data.worktree.status === "open" ? "!" : null] as [string, string, string, string | null]] : []),
+    ...(st.race ? [["drafts", "drafts", "초안 비교", Object.keys(st.race.drafts || {}).length || null] as [string, string, string, number | null]] : []),
+    ...(hasFindings(st) ? [["issues", "issue", "지적", (st.issues || []).length || null] as [string, string, string, number | null]] : []),
+    ["console", "console", "콘솔", null],
+    ["design", "doc", "설계 문서", null],
+    ...(m === "local" ? [["agents", "robot", "에이전트 설정", null] as [string, string, string, null]] : []),
+  ];
+  const panelHref = (k: string) => hrefRun(m, route.project, route.run, tab === k && k !== "talk" ? "talk" : k);
   return (
-    <div className="page">
-      <Crumbs m={m} project={route.project} run={route.run} />
-      {error ? <ErrorBox error={error} /> : null}
-      <Head data={data} m={m} onStop={stop} onReload={load} onSession={onSession} />
-      <ResultCard data={data} m={m} q={q} onReload={load} />
-      {data.worktree ? <MergePanel m={m} q={q} tree={data.worktree} st={st} live={data.live} onReload={load} /> : null}
-      <nav className="tabs">
-        {TABS.filter(([k]) => (k !== "issues" || hasFindings(st)) && (k !== "drafts" || st.race)).map(([k, label]) => (
-          <a key={k} href={hrefRun(m, route.project, route.run, k)} className={tab === k ? "active" : undefined}>
-            {label}{k === "talk" ? <span className="count">{data.entries.length}</span> : k === "issues" && (st.issues || []).length ? <span className="count">{st.issues.length}</span>
-              : k === "changes" && data.notes_open ? <span className="count" title="보내지 않은 줄 메모">메모 {data.notes_open}</span> : null}
+    <div className="run-layout">
+      <div className="page">
+        {error ? <ErrorBox error={error} /> : null}
+        <Head data={data} m={m} onStop={stop} onReload={load} onSession={onSession} />
+        {tab === "drafts" && st.race ? <DraftsPanel m={m} q={q} race={st.race} roles={roleAgents(st)} onReload={load}
+                                                    canPick={!data.live && ["done_approved", "done_unapproved"].includes(st.status) && (!data.worktree || data.worktree.status === "open")} />
+          : tab === "merge" && data.worktree ? <MergePanel m={m} q={q} tree={data.worktree} st={st} live={data.live} onReload={load} />
+          : tab === "issues" ? <Issues st={st} /> : tab === "console" ? <ConsolePanel m={m} q={q} live={data.live} />
+          : tab === "changes" ? <Changes m={m} q={q} live={data.live} finished={["done_approved", "done_unapproved", "done_design"].includes(st.status)}
+                                         editable={!data.worktree || data.worktree.status === "open"} onReload={load} />
+          : tab === "design" ? <DesignPanel m={m} q={q} />
+          : tab === "agents" && m === "local" ? <AgentConfigView project={data.code_dir || data.project} />
+          : <><ResultCard data={data} m={m} q={q} onReload={load} /><Talk data={data} m={m} q={q} events={events} /></>}
+      </div>
+      <nav className="side-icons" aria-label="작업 판">
+        {panels.map(([k, icon, label, n]) => (
+          <a key={k} href={panelHref(k)} className={`side-icon${tab === k ? " on" : ""}`} title={label} aria-label={label} aria-current={tab === k ? "page" : undefined}>
+            <Icon name={icon} />{n ? <span className="n">{n}</span> : null}
           </a>
         ))}
       </nav>
-      {tab === "drafts" && st.race ? <DraftsPanel m={m} q={q} race={st.race} roles={roleAgents(st)} onReload={load}
-                                                  canPick={!data.live && ["done_approved", "done_unapproved"].includes(st.status) && (!data.worktree || data.worktree.status === "open")} />
-        : tab === "issues" ? <Issues st={st} /> : tab === "console" ? <ConsolePanel m={m} q={q} live={data.live} />
-        : tab === "changes" ? <Changes m={m} q={q} live={data.live} finished={["done_approved", "done_unapproved", "done_design"].includes(st.status)}
-                                       editable={!data.worktree || data.worktree.status === "open"} onReload={load} />
-        : tab === "design" ? <DesignPanel m={m} q={q} />
-        : <Talk data={data} m={m} q={q} events={events} />}
     </div>
   );
 }
@@ -147,15 +161,30 @@ function Head({ data, m, onStop, onReload, onSession }: { data: RunData; m: stri
   const guards = Object.entries(st.test_guard || {}).filter(([, g]: any) => (g.signals || []).length);
   if (guards.length) alerts.push(<div key="tg" className="alert alert-warn"><b>테스트 변경 감지</b><span>구현자가 테스트를 지우거나 약하게 바꾼 흔적이 있어 리뷰어에게 경고로 전달했습니다.</span></div>);
 
+  const tokensIn = Object.values(totals).reduce((a, t) => a + t.i, 0);
+  const sub = [
+    <a key="p" href={hrefProject(m, data.project)}>{baseName(data.project)}</a>,
+    <span key="id" className="mono">{st.run_id}</span>,
+    wf ? wf.name : "classic",
+    pos,
+    !wf ? `구현 ${c.implementer} · 리뷰 ${c.reviewer}` : null,
+    `호출 ${(st.calls || []).length}회 · ${fmtDur(totalSec)}`,
+    tokensIn ? `입력 ${fmtTok(tokensIn)}` : null,
+    c.access === "full" ? "권한 full" : null,
+    c.mock ? "mock" : null,
+    m !== "local" ? `머신 ${m}` : null,
+  ].filter(Boolean);
   return (
-    <section className="card card-pad col" style={{ gap: 10 }}>
-      <div className="row" style={{ flexWrap: "wrap" }}>
-        <StateDot state={data.live ? "working" : data.activity?.state} />
-        <h1 className="mono" style={{ fontSize: 18 }}>{st.run_id}</h1>
+    <section className="col run-head" style={{ gap: 8 }}>
+      <div className="row" style={{ alignItems: "flex-start" }}>
+        <Shape state={data.live ? "working" : data.activity?.state || "idle"} />
+        <div className="col" style={{ gap: 3, minWidth: 0, flex: 1 }}>
+          <h1 className="run-title ellipsis" title={st.task}>{oneLine(st.task, 140) || st.run_id}</h1>
+          <div className="run-sub row" style={{ flexWrap: "wrap", gap: 4 }}>
+            {sub.map((x, i) => <span key={i} className="row" style={{ gap: 4 }}>{i ? <span className="faint">·</span> : null}{x}</span>)}
+          </div>
+        </div>
         <StatusBadge status={st.status} live={data.live} stale={data.stale} />
-        <span className="muted">{pos}</span>
-        {data.activity?.reason ? <span className="faint small">· {data.activity.reason}</span> : null}
-        <span className="spacer" />
         {m === "local" && !data.live && (!data.worktree || data.worktree.status === "open")
           ? <TerminalButtons project={data.project} run={st.run_id} onOpened={onSession} /> : null}
         {data.live ? <button className="btn btn-danger" type="button" onClick={onStop}>중지</button> : data.resume?.possible ? (
@@ -169,26 +198,21 @@ function Head({ data, m, onStop, onReload, onSession }: { data: RunData; m: stri
           </div>
         ) : null}
       </div>
-      <div className="chips">
-        {m !== "local" ? <span className="chip">머신 <b>{m}</b></span> : null}
-        {wf ? <span className="chip">워크플로 <b>{wf.name}</b></span> : <span className="chip">워크플로 <b>classic</b></span>}
-        {st.route ? <span className="chip" title={st.route.reason}>자동 선택 · {st.route.source === "model" ? "모델 판단" : "규칙"}</span> : null}
-        {!wf ? <span className="chip">구현 <b>{c.implementer}</b> · 리뷰 <b>{c.reviewer}</b> · 최대 {c.max_review}회</span> : null}
-        {c.access ? <span className={`chip${c.access === "full" ? " warn" : ""}`}>권한 <b>{c.access}</b></span> : null}
-        {c.web_search === "on" ? <span className="chip">웹 검색</span> : null}
-        {(st.attachments || []).length ? <span className="chip" title={st.attachments.join("\n")}>첨부 {st.attachments.length}개</span> : null}
-        {c.mock ? <span className="chip">mock</span> : null}
-        {data.worktree ? <span className="chip" title={data.code_dir}>브랜치 <b className="mono">{data.worktree.branch}</b>
-          <span className={`badge ${TREE_STATUS[data.worktree.status].cls}`} style={{ height: 18 }}>{TREE_STATUS[data.worktree.status].text}</span></span> : null}
-        {st.base_commit ? <span className="chip">기준 <b className="mono">{st.base_commit}</b></span> : null}
-        <span className="chip">호출 {(st.calls || []).length}회 · {fmtDur(totalSec)}</span>
-        {Object.entries(totals).map(([a, t]) => (
-          <span key={a} className="chip"><AgentTag name={a} /> 입력 {fmtTok(t.i)} · 출력 {fmtTok(t.o)}</span>
-        ))}
-      </div>
+      {data.activity?.reason || data.worktree || st.route || (st.attachments || []).length ? (
+        <div className="chips">
+          {data.activity?.reason ? <span className="chip">{data.activity.reason}</span> : null}
+          {data.worktree ? <a className="chip" href={hrefRun(m, data.project, st.run_id, "merge")} title={data.code_dir}>브랜치 <b className="mono">{data.worktree.branch}</b>
+            <span className={`badge ${TREE_STATUS[data.worktree.status].cls}`} style={{ height: 18 }}>{TREE_STATUS[data.worktree.status].text}</span></a> : null}
+          {st.route ? <span className="chip" title={st.route.reason}>자동 선택 · {st.route.source === "model" ? "모델 판단" : "규칙"}</span> : null}
+          {(st.attachments || []).length ? <span className="chip" title={st.attachments.join("\n")}>첨부 {st.attachments.length}개</span> : null}
+          {Object.entries(totals).map(([a, t]) => (
+            <span key={a} className="chip"><AgentTag name={a} /> 입력 {fmtTok(t.i)} · 출력 {fmtTok(t.o)}</span>
+          ))}
+        </div>
+      ) : null}
       <Rounds data={data} />
-      {st.task.length > 240
-        ? <details><summary className="muted small">과제: {oneLine(st.task, 110)}</summary><div className="task-box">{st.task}</div></details>
+      {st.task.trim() === oneLine(st.task, 140) ? null : st.task.length > 240
+        ? <details><summary className="muted small">과제 전체 보기</summary><div className="task-box">{st.task}</div></details>
         : <div className="task-box">{st.task}</div>}
       {alerts}
     </section>

@@ -771,6 +771,7 @@ class Handler(BaseHTTPRequestHandler):
         ("GET", "/api/events"): "events",
         ("POST", "/api/runs/seen"): "mark_seen",
         ("GET", "/api/inbox"): "inbox",
+        ("GET", "/api/works"): "works",
         ("GET", "/api/merge/check"): "merge_check",
         ("POST", "/api/actions/merge"): "merge",
         ("POST", "/api/actions/discard"): "discard",

@@ -7,7 +7,7 @@ import { hrefProject, hrefRun } from "../lib/router";
 import { Modal, useUi } from "../ui";
 import { FolderButton } from "./FolderPicker";
 
-export interface NewRunInit { machine?: string; project?: string; defaults?: Record<string, any>; hasDesign?: boolean }
+export interface NewRunInit { machine?: string; project?: string; defaults?: Record<string, any>; hasDesign?: boolean; task?: string }
 
 interface OptionDef { key: string; label: string; help: string; kind: "bool" | "int" | "choice" | "text"; group: string; group_label: string;
   choices: string[]; min: number | null; max: number | null; run_dialog: boolean; effective: any; default: any }
@@ -37,7 +37,7 @@ export default function NewRun({ init, groups, onClose, onStarted }: {
   const fixed = !!init.project;
   const [machine, setMachine] = useState(init.machine || LOCAL);
   const [project, setProject] = useState(init.project || "");
-  const [task, setTask] = useState("");
+  const [task, setTask] = useState(init.task || "");
   const [files, setFiles] = useState<File[]>([]);
   const [workflow, setWorkflow] = useState("auto");
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);

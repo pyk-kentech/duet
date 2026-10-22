@@ -34,6 +34,7 @@ export async function setNotify(on: boolean): Promise<boolean> {
 /** 세션 목록. 상태가 '나를 기다림'·'턴 끝(안 봄)'으로 바뀌면 브라우저 알림 (지금 보고 있는 세션은 빼고). */
 export function useSessions(intervalMs = 2000) {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const prev = useRef<Record<string, string | null>>({});
   const load = useCallback(async () => {
     try {
@@ -52,6 +53,7 @@ export function useSessions(intervalMs = 2000) {
         prev.current[s.id] = now;
       }
       setSessions(r.sessions);
+      setLoaded(true);
     } catch { /* 서버가 잠깐 안 될 때 */ }
   }, []);
   useEffect(() => {
@@ -59,7 +61,7 @@ export function useSessions(intervalMs = 2000) {
     const id = window.setInterval(() => { if (!document.hidden || notifyEnabled()) load(); }, intervalMs);
     return () => window.clearInterval(id);
   }, [load, intervalMs]);
-  return { sessions, reload: load };
+  return { sessions, loaded, reload: load };
 }
 
 export async function openSession(agent: string, project: string, run?: string, title?: string): Promise<SessionInfo> {
