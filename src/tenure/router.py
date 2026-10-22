@@ -67,8 +67,11 @@ def model_route(task: str, workdir: Path, cfg) -> Route:
 
     try:
         adapter = ClaudeCodeAdapter(cfg, replace(cfg.claude, model=ROUTER_MODEL))
-        res = adapter.ask(AgentRequest(prompt=PROMPT.format(task=task.strip()[:6000]), cwd=Path(workdir),
-                                       mode=Mode.READ, timeout_sec=120, step="route", effort="low"))
+        from tenure import slots
+
+        with slots.agent_slot(cfg.max_agents, what="워크플로 자동 선택"):
+            res = adapter.ask(AgentRequest(prompt=PROMPT.format(task=task.strip()[:6000]), cwd=Path(workdir),
+                                           mode=Mode.READ, timeout_sec=120, step="route", effort="low"))
         m = re.search(r"\{.*\}", res.text or "", re.S)
         data = json.loads(m.group(0)) if (res.ok and m) else {}
         route = str(data.get("route", "")).strip().lower()

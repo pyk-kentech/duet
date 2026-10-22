@@ -175,6 +175,7 @@ class Config:
     spec_gate: bool = True              # 지적의 근거 종류·요구 인용 관문 (DESIGN.md 25.2)
     wait_on_limit: bool = False         # 한도에 걸리면 재개 시각까지 기다렸다가 같은 호출을 다시 (DESIGN.md 25.1)
     limit_wait_max_min: int = 360       # 한 실행에서 한도 대기에 쓸 수 있는 최대 시간(분)
+    max_agents: int = 0                 # 이 머신에서 동시에 띄우는 에이전트 CLI 수 상한. 0 = 자동(코어 절반, 2~8) (36.18)
     # 재제기·되돌림 방지 (DESIGN.md 26장). 확인자는 코드를 읽지 않는 짧은 분류라 작은 모델로 충분하다
     dedup: bool = True
     dedup_agent: str = "claude"
@@ -249,6 +250,8 @@ class Config:
                     "spec_gate", "wait_on_limit", "dedup", "report", "package_lookup"):
             if not isinstance(getattr(self, key), bool):
                 raise ConfigError(f"{key} 는 true/false 여야 합니다")
+        if not isinstance(self.max_agents, int) or isinstance(self.max_agents, bool) or not 0 <= self.max_agents <= 64:
+            raise ConfigError(f"max_agents 는 0~64 사이 정수여야 합니다 (0 = 자동): {self.max_agents!r}")
         if (not isinstance(self.limit_wait_max_min, int) or isinstance(self.limit_wait_max_min, bool)
                 or not 1 <= self.limit_wait_max_min <= 7 * 24 * 60):
             raise ConfigError(f"limit_wait_max_min 은 1~10080(분) 사이여야 합니다: {self.limit_wait_max_min}")

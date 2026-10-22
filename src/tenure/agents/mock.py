@@ -34,6 +34,7 @@ class MockAdapter:
     calls: list[AgentRequest] = field(default_factory=list)
     reviews: int = 0
     sessions: int = 0                          # 새로 만든 세션 수 (이어가면 늘지 않음)
+    uses_slot = False                          # 프로세스를 띄우지 않으니 동시 실행 상한에 세지 않는다 (36.18)
 
     def __post_init__(self) -> None:
         self.name = f"mock-{self.label}"

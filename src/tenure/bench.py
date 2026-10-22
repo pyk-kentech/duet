@@ -334,8 +334,14 @@ def run_solo(task: Task, agent: str, wd: Path, *, mock: bool, wait_on_limit: boo
                        timeout_sec=task.timeout_sec or cfg.timeout_sec, step="implement", round=1)
     results: list = []
     waited = 0.0
+    from tenure import slots
+
     while True:
-        res = adapter.ask(req)
+        if getattr(adapter, "uses_slot", True):         # 동시 에이전트 상한 (DESIGN.md 36.18)
+            with slots.agent_slot(cfg.max_agents, log=printer, what=f"{task.name} {agent}"):
+                res = adapter.ask(req)
+        else:
+            res = adapter.ask(req)
         results.append(res)
         if not res.rate_limited:
             break

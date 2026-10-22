@@ -67,6 +67,9 @@ OPTIONS: tuple[Option, ...] = (
     Option("claude_sandbox", "Claude 샌드박스", "Claude 구현자의 명령을 OS 샌드박스에서 돌린다. Linux 는 bubblewrap·socat 필요 (24.3).",
            "bool", "safety"),
     Option("wait_on_limit", "한도 대기 후 재개", "구독 한도에 걸리면 멈추지 않고 재개 시각까지 기다렸다가 이어간다 (25.1).", "bool", "limits"),
+    Option("max_agents", "동시 에이전트 상한", "이 머신의 모든 tenure 실행을 합쳐 동시에 띄우는 Claude·Codex CLI 수. "
+           "넘으면 자리가 날 때까지 기다린다. 0 = 자동(논리 코어 절반, 2~8). CPU·메모리·온도를 줄인다 (36.18).",
+           "int", "limits", min=0, max=64),
     Option("limit_wait_max_min", "최대 대기(분)", "한 실행에서 한도 대기에 쓸 수 있는 시간 합.", "int", "limits", min=1, max=10080),
 )
 BY_KEY = {o.key: o for o in OPTIONS}

@@ -25,10 +25,11 @@ from tenure import merge as mergelib
 from tenure import notes as notelib
 from tenure import procs, stopflag, worktree
 from tenure.phases.race import DRAFTS_DIR as race_drafts_dir
+from tenure.ui.cache import RunDirs, StatCache, TtlCache
 from tenure.activity import agent_activity, call_start_epoch
 from tenure.workflow import WorkflowError, list_workflows, load_workflow, role_agent_map
 from tenure.config import AGENT_NAMES, CLASSIC_WORKFLOW, WORKFLOW_NAME_RE, ConfigError, MAX_DEBATE_ROUNDS, MAX_REVIEW_ROUNDS, describe_effort, load_config
-from tenure.lock import read_lock
+from tenure.lock import lock_path, read_lock
 from tenure.orchestrator import CONSOLE_LOG
 from tenure.phases.build import build_review_diff
 from tenure.phases.debate import BACKUP_FILENAME, DESIGN_FILENAME
@@ -42,6 +43,9 @@ from tenure.transcript import Transcript, split_header
 from tenure.verdict import parse_verdict
 from tenure.workspace import GitError, Workspace, WorkdirRefused, check_workdir
 
+MAX_VERDICT_CACHE = 2048
+SUMMARY_KEYS = ("run_id", "status", "phase", "step", "round", "task", "created_at", "updated_at", "calls", "total_sec",
+                "last_verdict", "config", "error")
 RUN_ID_RE = re.compile(r"^\d{8}-\d{6}(?:-\d+)?$")
 ENTRY_RE = re.compile(r"^(?:drafts/[a-z0-9][a-z0-9_-]{0,31}/)?\d{2,}_[\w.\-]+\.md$")   # 초안 기록 포함 (36.15)
 COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
@@ -101,6 +105,14 @@ class Dashboard:
     _jobs_lock: threading.Lock = field(default_factory=threading.Lock)
     _verdict_cache: dict[tuple[str, float], dict] = field(default_factory=dict)
     _reserved: set[str] = field(default_factory=set)      # 이 프로세스가 미리 정한 실행 id (36.14)
+    # 읽기 캐시 (36.18): 파일이 그대로면 다시 읽지 않는다
+    _states: StatCache = field(default_factory=lambda: StatCache(64))     # 실행 화면용 전체 상태 (최근 것만)
+    _bases: StatCache = field(default_factory=StatCache)                   # 목록·사용량용 작은 요약
+    _events: StatCache = field(default_factory=StatCache)
+    _indexes: StatCache = field(default_factory=lambda: StatCache(512))
+    _dirs: RunDirs = field(default_factory=RunDirs)
+    _locks: StatCache = field(default_factory=lambda: StatCache(1024))
+    _lock_paths: TtlCache = field(default_factory=lambda: TtlCache(ttl=30.0))   # project_dir(옛 .duet 옮기기 확인) 결과
 
     # ================================================================ validation
     def project(self, path: str | None) -> Path:
@@ -117,7 +129,7 @@ class Dashboard:
     def run_dir(self, project: Path, run_id: str | None) -> Path:
         if not run_id or not RUN_ID_RE.match(run_id):
             raise ApiError(400, "run 형식이 잘못되었습니다.")
-        for d in worktree.all_run_dirs(project):       # worktree 실행 포함 (36.14)
+        for d in self._run_dirs(project):              # worktree 실행 포함 (36.14)
             if d.name == run_id:
                 return d
         raise ApiError(404, f"실행을 찾을 수 없습니다: {run_id}")
@@ -146,7 +158,7 @@ class Dashboard:
     def _project_live(self, project: Path) -> dict[str, Any] | None:
         """프로젝트에서 도는 실행 하나(프로젝트 폴더 먼저, 다음은 열린 worktree)와 그 수."""
         found = [x for x in [self._live(project)] if x]
-        for t in worktree.load_index(project):
+        for t in self._trees(project):
             if t.status == worktree.OPEN:
                 x = self._live(Path(t.path))
                 if x:
@@ -159,7 +171,7 @@ class Dashboard:
         out = []
         for p in self.registry.list():
             path = Path(p)
-            runs = worktree.all_run_dirs(path) if path.is_dir() else []
+            runs = self._run_dirs(path) if path.is_dir() else []
             latest = self._run_summary(path, runs[-1]) if runs else None
             bench = bench_root_of(path)
             out.append({"path": p, "name": path.name or p, "exists": path.is_dir(),
@@ -233,14 +245,14 @@ class Dashboard:
     # ================================================================ runs
     def runs(self, project: str | None) -> dict[str, Any]:
         wd = self.project(project)
-        runs = [self._run_summary(wd, d) for d in reversed(worktree.all_run_dirs(wd))]
+        runs = [self._run_summary(wd, d) for d in reversed(self._run_dirs(wd))]
         return {"project": str(wd), "live": self._project_live(wd), "runs": runs,
                 "has_design": (wd / DESIGN_FILENAME).is_file(), "defaults": self._defaults(wd)}
 
     def run(self, project: str | None, run_id: str | None) -> dict[str, Any]:
         wd = self.project(project)
         rd = self.run_dir(wd, run_id)
-        st = RunState.load(rd)
+        st = self._state(rd)
         code = self.code_dir(rd)
         live = self._live(code)
         entries = []
@@ -270,7 +282,7 @@ class Dashboard:
             "notes_open": sum(1 for n in notelib.load(rd) if n.get("status") == notelib.OPEN),
             "now": dt.datetime.now().isoformat(timespec="seconds"),
             "activity": self._activity(rd, st, bool(live and live.get("run_id") == st.run_id)),
-            "last_seq": (last_event(rd) or {}).get("seq", 0),
+            "last_seq": (self._last_event(rd) or {}).get("seq", 0),
         }
 
     def events(self, project: str | None, run_id: str | None, since: int = 0) -> dict[str, Any]:
@@ -294,12 +306,11 @@ class Dashboard:
     def inbox(self, limit: int = 50, per_project: int = 20) -> dict[str, Any]:
         """프로젝트를 가로질러 주의 순으로: 나를 기다림 > 끝났는데 안 봄 > 진행 중 (DESIGN.md 36.7 받은편지함)."""
         items: list[dict[str, Any]] = []
-        for proj in self.projects():
-            path = proj.get("path") if isinstance(proj, dict) else None
-            if not path or not proj.get("exists", True):
-                continue
+        for path in self.registry.list():          # projects() 를 다시 부르지 않는다 (36.18)
             wd = Path(path)
-            for rd in list(reversed(worktree.all_run_dirs(wd)))[:per_project]:
+            if not wd.is_dir():
+                continue
+            for rd in list(reversed(self._run_dirs(wd)))[:per_project]:
                 summary = self._run_summary(wd, rd)
                 if (summary.get("worktree") or {}).get("status") == worktree.DISCARDED:
                     continue                                   # 버린 작업은 더 볼 일이 없다 (36.14)
@@ -843,32 +854,76 @@ class Dashboard:
                 raise ApiError(409, "이 작업 폴더에서 UI 가 시작한 실행이 아직 끝나지 않았습니다.")
 
     def _live(self, wd: Path) -> dict[str, Any] | None:
-        info = read_lock(wd)
-        if info is None:
-            return None
-        return {"pid": info.pid, "run_id": info.run_id, "started_at": info.started_at}
+        """잠금 파일 내용은 (수정 시각, 크기)로 기억하고, 프로세스가 살아 있는지는 매번 본다(멈춤·시작이 바로 보이게)."""
+        def parse(path: Path) -> dict[str, Any] | None:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None
+            pid = data.get("pid") if isinstance(data, dict) else None
+            return {"pid": pid, "run_id": data.get("run_id"), "started_at": data.get("started_at")}                 if isinstance(pid, int) and not isinstance(pid, bool) else None
+        path = self._lock_paths.get(str(wd), lambda: lock_path(wd))
+        info = self._locks.get(path, parse)
+        return dict(info) if info is not None and pid_alive(info["pid"]) else None
 
     def _run_summary(self, wd: Path, rd: Path) -> dict[str, Any]:
         try:
-            st = RunState.load(rd)
+            b = self._base(rd)
         except (OSError, ValueError, TypeError) as e:
             return {"run_id": rd.name, "status": "broken", "error": str(e)}
         is_live = self._run_live(rd) is not None
-        tree = st.worktree and worktree.find(wd, st.run_id)
-        return {
-            "run_id": st.run_id, "status": st.status, "phase": st.phase, "step": st.step, "round": st.round,
-            "task": st.task[:300], "created_at": st.created_at, "updated_at": st.updated_at,
-            "calls": len(st.calls), "total_sec": round(sum(c.sec for c in st.calls), 1),
-            "last_verdict": st.last_verdict, "config": st.config, "error": st.error,
-            "live": is_live, "stale": st.status == RUNNING and not is_live,
-            "activity": self._activity(rd, st, is_live),
-            "worktree": {"branch": tree.branch, "status": tree.status, "base_branch": tree.base_branch} if tree else None,
-        }
+        tree = self._tree(wd, b["run_id"]) if b["worktree"] else None
+        out = {k: b[k] for k in SUMMARY_KEYS}
+        out.update(live=is_live, stale=b["status"] == RUNNING and not is_live, activity=self._activity(rd, b, is_live),
+                   worktree={"branch": tree.branch, "status": tree.status, "base_branch": tree.base_branch} if tree else None)
+        return out
 
-    def _activity(self, rd: Path, st: RunState, is_live: bool) -> dict[str, Any]:
+    def _activity(self, rd: Path, st: RunState | dict, is_live: bool) -> dict[str, Any]:
         """화면이 정렬·표시할 활동 상태 (DESIGN.md 36.3.1)."""
-        ev = last_event(rd)
-        return run_activity(st.to_dict(), live=is_live, last_ts=(ev or {}).get("ts") or st.updated_at, legacy=ev is None)
+        ev = self._last_event(rd)
+        # 활동 판단에 필요한 칸만 넘긴다 (전체 to_dict 는 호출 기록까지 깊은 복사라 느렸다, 36.18)
+        g = st.get if isinstance(st, dict) else (lambda k: getattr(st, k))
+        light = {"status": g("status"), "seen_at": g("seen_at"), "limit_wait": g("limit_wait"), "error": g("error")}
+        return run_activity(light, live=is_live, last_ts=(ev or {}).get("ts") or g("updated_at"), legacy=ev is None)
+
+    def _base(self, rd: Path) -> dict[str, Any]:
+        """목록·받은편지함·사용량이 쓰는 실행 요약. 전체 상태(호출 기록 등)는 기억하지 않는다."""
+        def load(_p: Path) -> dict[str, Any]:
+            st = RunState.load(rd)
+            return {"run_id": st.run_id, "status": st.status, "phase": st.phase, "step": st.step, "round": st.round,
+                    "task": st.task[:300], "created_at": st.created_at, "updated_at": st.updated_at,
+                    "calls": len(st.calls), "total_sec": round(sum(c.sec for c in st.calls), 1),
+                    "last_verdict": st.last_verdict, "config": st.config, "error": st.error,
+                    "seen_at": st.seen_at, "limit_wait": st.limit_wait, "worktree": bool(st.worktree),
+                    "usage": st.usage_totals()}
+        return self._bases.get(rd / "run.json", load)
+
+    # ---------------------------------------------------------------- 읽기 캐시 (36.18)
+    def _state(self, rd: Path) -> RunState:
+        """run.json 이 그대로면 기억한 RunState. 읽기 전용으로 쓴다(고쳐서 저장할 때는 RunState.load)."""
+        return self._states.get(rd / "run.json", lambda _p: RunState.load(rd))
+
+    def _last_event(self, rd: Path) -> dict[str, Any] | None:
+        return self._events.get(rd / "events.jsonl", lambda _p: last_event(rd))
+
+    def _run_dirs(self, project: Path) -> list[Path]:
+        """worktree.all_run_dirs 와 같은 결과를 폴더 목록 캐시로."""
+        dirs = list(self._dirs.list(project))
+        seen = {d.name for d in dirs}
+        for t in self._trees(project):
+            if t.run_id in seen:
+                continue
+            for d in self._dirs.list(Path(t.path)):
+                if d.name == t.run_id:
+                    dirs.append(d)
+                    seen.add(d.name)
+        return sorted(dirs, key=lambda d: d.name)
+
+    def _trees(self, project: Path) -> list:
+        return self._indexes.get(project_dir(project) / worktree.INDEX_FILE, lambda _p: worktree.load_index(project))
+
+    def _tree(self, project: Path, run_id: str):
+        return next((t for t in self._trees(project) if t.run_id == run_id), None)
 
     def _resume_hint(self, st: RunState, wd: Path) -> dict[str, Any]:
         cur = int(st.config.get("max_review") or 0)
@@ -924,13 +979,13 @@ class Dashboard:
             if not wd.is_dir():
                 continue
             proj_total: dict[str, dict] = {}
-            for rd in worktree.all_run_dirs(wd):
+            for rd in self._run_dirs(wd):
                 try:
-                    st = RunState.load(rd)
+                    b = self._base(rd)
                 except (OSError, ValueError, TypeError):
                     continue
-                day = (st.created_at or "")[:10]
-                for agent, u in st.usage_totals().items():
+                day = (b["created_at"] or "")[:10]
+                for agent, u in b["usage"].items():
                     for bucket in (proj_total.setdefault(agent, {}), by_agent.setdefault(agent, {}),
                                    by_day.setdefault(day, {}).setdefault(agent, {})):
                         for k, v in u.items():
@@ -952,6 +1007,8 @@ class Dashboard:
     def _verdict(self, path: Path) -> dict[str, Any]:
         key = (str(path), path.stat().st_mtime)
         if key not in self._verdict_cache:
+            if len(self._verdict_cache) >= MAX_VERDICT_CACHE:     # 크기 상한 (36.18)
+                self._verdict_cache.clear()
             v = parse_verdict(split_header(path.read_text(encoding="utf-8", errors="replace"))[1])
             self._verdict_cache[key] = {"status": v.status.value, "must_fix": v.must_fix, "source": v.source,
                                         "parse_failed": v.parse_failed, "contradiction": v.contradiction}

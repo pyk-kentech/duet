@@ -58,6 +58,7 @@ def claude_local_usage(now: dt.datetime | None = None, home: Path | None = None)
     totals = {name: {"input_tokens": 0, "output_tokens": 0, "messages": 0} for name, _ in CLAUDE_WINDOWS}
     by_model: dict[str, int] = {}
     files = 0
+    visited: set[str] = set()
     if root.is_dir():
         for path in root.glob("*/*.jsonl"):
             try:
@@ -67,6 +68,7 @@ def claude_local_usage(now: dt.datetime | None = None, home: Path | None = None)
             if stat.st_mtime < horizon:
                 continue
             files += 1
+            visited.add(str(path))
             for key, ts_epoch, inp, outp, model in _claude_records(path, stat):
                 if key in seen or ts_epoch < horizon:
                     continue
@@ -79,6 +81,10 @@ def claude_local_usage(now: dt.datetime | None = None, home: Path | None = None)
                         totals[name]["messages"] += 1
                 if model and age <= CLAUDE_WINDOWS[-1][1]:
                     by_model[model] = by_model.get(model, 0) + outp
+    prefix = str(root)
+    with _RECORDS_LOCK:                          # 7일이 지났거나 지운 파일의 기억은 버린다
+        for k in [k for k in _RECORDS if k.startswith(prefix) and k not in visited]:
+            del _RECORDS[k]
     return {"windows": totals, "output_by_model_7d": by_model, "files": files,
             "as_of": now.isoformat(timespec="seconds")}
 

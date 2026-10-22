@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Mapping
 
-from tenure import events
+from tenure import events, slots
 from tenure.outcome import step_outcome
 from tenure.attachments import ATTACH_STEPS, is_image, prompt_note as attachments_note
 from tenure.agents.base import AgentAdapter, AgentRequest, AgentResult, Mode
@@ -246,7 +246,11 @@ class PhaseContext:
             events.for_run(self.run_dir).emit(events.STEP_START, agent=self.cli_of(agent_name), role=agent_name,
                                               step=step, round=round_, attempt=attempt)
             try:
-                result = agent.ask(req)
+                if getattr(agent, "uses_slot", True):     # 동시 에이전트 상한 (DESIGN.md 36.18)
+                    with slots.agent_slot(self.cfg.max_agents, log=self.log, what=f"{agent_name} {step}"):
+                        result = agent.ask(req)
+                else:
+                    result = agent.ask(req)
             except (OSError, RunnerError) as e:
                 # 실행 자체가 안 됨(인자 길이 초과, 실행 파일 사라짐 등). 재시도해도 같으므로 바로 멈춘다.
                 self.state.status = FAILED

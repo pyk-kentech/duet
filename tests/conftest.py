@@ -23,6 +23,9 @@ def isolated_tenure_home(tmp_path_factory, monkeypatch) -> Path:
     monkeypatch.setattr(_config, "DEFAULT_WORKFLOW", _config.CLASSIC_WORKFLOW)
     # worktree 도 기본 auto(36.14)지만 기존 테스트는 그 폴더에서 바로 도는 흐름을 가정한다. test_m32 가 따로 확인
     monkeypatch.setattr(_config, "DEFAULT_WORKTREE", "off")
+    # 사용자의 ~/.claude·~/.codex 세션 기록을 읽지 않게 (사용량 화면 테스트가 실제 기록을 훑느라 느리고 흔들렸다)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / "claude-config"))
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex-home"))
     if os.name == "nt":
         monkeypatch.setenv("PYTHONUTF8", "1")      # 테스트가 직접 띄우는 자식 파이썬도 UTF-8 (DESIGN.md 27.7)
     return home
