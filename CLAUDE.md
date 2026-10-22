@@ -25,5 +25,6 @@
 - 설치: `pip install -e ".[dev]"` (옛 `duet` 명령도 같은 동작의 별칭으로 남아 있다)
 - 테스트: `pytest -q`
 - 수동 확인: `tenure run "할일 CLI" --workdir /tmp/tenure-try --mock`
+- 화면 빌드: `cd app && npm install && npm run build` (결과는 src/tenure/ui/web, 커밋한다. 개발 중에는 `npm run dev` 가 /api 를 8790 의 tenure ui 로 넘김)
 - 관리자 UI: `tenure ui` (느린 mock 으로 화면 확인: `TENURE_MOCK_DELAY=1 tenure ui`)
 - UI 테스트는 `tests/test_ui.py`(HTTP 수준). 테스트는 `TENURE_HOME` 을 임시 폴더로 바꿔 사용자의 `~/.tenure` 을 건드리지 않는다.

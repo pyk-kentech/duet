@@ -5,3 +5,5 @@ build/
 dist/
 .venv/
 .pytest_cache/
+node_modules/
+app/node_modules/

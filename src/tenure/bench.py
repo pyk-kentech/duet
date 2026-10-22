@@ -523,12 +523,33 @@ def remember_result_dir(result_dir: Path) -> None:
 
     path = tenure_home() / "bench" / INDEX_FILE
     try:
-        items = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
-        items = [str(result_dir)] + [x for x in items if isinstance(x, str) and x != str(result_dir)]
+        items = [str(result_dir)] + [x for x in _read_index(path) if x != str(result_dir)]
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(items[:INDEX_MAX], ensure_ascii=False, indent=1), encoding="utf-8")
-    except (OSError, ValueError):
+        # 여러 벤치마크가 동시에 쓰면 덮어쓰다 깨졌다(실측: 끝이 ']]') → 임시 파일에 쓰고 바꿔 넣는다
+        tmp = path.with_name(f"{INDEX_FILE}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(items[:INDEX_MAX], ensure_ascii=False, indent=1), encoding="utf-8")
+        procs.replace_file(tmp, path)
+    except OSError:
         pass
+
+
+def _read_index(path: Path) -> list[str]:
+    """index.json 의 경로 목록. 깨졌으면 읽을 수 있는 경로 문자열만 건진다."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    try:
+        data = json.loads(text)
+        return [x for x in data if isinstance(x, str)] if isinstance(data, list) else []
+    except ValueError:
+        out = []
+        for m in re.finditer(r'"((?:[^"\\]|\\.)*)"', text):
+            try:
+                out.append(json.loads(f'"{m.group(1)}"'))
+            except ValueError:
+                continue
+        return out
 
 
 def known_result_dirs() -> list[Path]:
@@ -539,8 +560,8 @@ def known_result_dirs() -> list[Path]:
     if base.is_dir():
         found.update(p for p in base.iterdir() if (p / RESULTS_JSON).is_file())
         try:
-            for x in json.loads((base / INDEX_FILE).read_text(encoding="utf-8")):
-                if isinstance(x, str) and (Path(x) / RESULTS_JSON).is_file():
+            for x in _read_index(base / INDEX_FILE):
+                if (Path(x) / RESULTS_JSON).is_file():
                     found.add(Path(x))
         except (OSError, ValueError):
             pass

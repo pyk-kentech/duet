@@ -60,8 +60,10 @@ def _parse(ts: str | None) -> dt.datetime | None:
 
 
 def run_activity(state: dict[str, Any], *, live: bool, last_ts: str | None = None,
-                 now: dt.datetime | None = None) -> dict[str, Any]:
-    """실행 하나의 활동 상태 {state, reason, rank}. state 는 run.json 의 dict, live 는 잠금이 살아 있는가."""
+                 now: dt.datetime | None = None, legacy: bool = False) -> dict[str, Any]:
+    """실행 하나의 활동 상태 {state, reason, rank}. state 는 run.json 의 dict, live 는 잠금이 살아 있는가.
+
+    legacy: 이벤트 기록이 없는(M30 전) 실행. 끝난 것은 이미 본 것으로 친다(받은편지함이 옛 실행으로 차지 않게)."""
     now = now or dt.datetime.now()
     status = str(state.get("status") or "")
     seen = _parse(state.get("seen_at"))
@@ -86,7 +88,7 @@ def run_activity(state: dict[str, Any], *, live: bool, last_ts: str | None = Non
     if status == "stopped_user":
         return out(IDLE, "중지함")
     if status in ("done_approved", "done_unapproved", "done_design"):
-        if seen is None or (last is not None and last > seen):
+        if not legacy and (seen is None or (last is not None and last > seen)):
             reason = {"done_approved": "승인으로 끝남", "done_unapproved": "미승인으로 멈춤 — 확인 필요",
                       "done_design": "설계까지 끝남"}[status]
             return out(DONE_UNSEEN, reason)

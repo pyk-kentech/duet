@@ -26,7 +26,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 tenure = ["templates/*.md", "workflows/*.toml", "bench_suites/**/*"]
-"tenure.ui" = ["static/*", "static/fonts/*", "static/logos/*"]
+"tenure.ui" = ["static/*", "static/fonts/*", "static/logos/*", "web/*", "web/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 HEADER_START = "<!-- tenure"
+LEGACY_HEADER_START = "<!-- duet"      # 이름 바꾸기 전 기록 (DESIGN.md 36.11)
 HEADER_END = "-->"
 _FILE_RE = re.compile(r"^(\d{2,})_(.+)\.md$")
 
@@ -99,12 +100,13 @@ def render_header(meta: Mapping[str, Any]) -> str:
 
 def split_header(content: str) -> tuple[dict[str, str], str]:
     """(메타, 본문). 헤더가 없으면 ({}, 원문)."""
-    if not content.startswith(HEADER_START):
+    start = HEADER_START if content.startswith(HEADER_START) else LEGACY_HEADER_START if content.startswith(LEGACY_HEADER_START) else None
+    if start is None:
         return {}, content
     end = content.find(HEADER_END)
     if end < 0:
         return {}, content
-    head = content[len(HEADER_START):end]
+    head = content[len(start):end]
     meta: dict[str, str] = {}
     for line in head.splitlines():
         if ":" in line:

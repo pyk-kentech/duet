@@ -346,3 +346,18 @@ def test_ui_start_run_passes_classic_explicitly(tmp_path: Path, monkeypatch):
     argv = seen.get("argv") or []
     assert "--workflow" in argv and argv[argv.index("--workflow") + 1] == "classic"
     assert "--implementer" in argv and argv[argv.index("--implementer") + 1] == "codex"
+
+
+def test_legacy_transcript_header_is_read(tmp_path: Path):
+    from tenure.transcript import split_header
+
+    meta, body = split_header("<!-- duet\nagent: codex\nstep: review\n-->\n\n본문")
+    assert meta == {"agent": "codex", "step": "review"} and body == "본문"
+    meta2, _ = split_header("<!-- tenure\nagent: claude\n-->\n본문")
+    assert meta2 == {"agent": "claude"}
+
+
+def test_runs_without_events_count_as_seen():
+    now = dt.datetime(2026, 10, 21, 12, 0, 0)
+    assert run_activity({"status": "done_approved"}, live=False, now=now, legacy=True)["state"] == "idle"
+    assert run_activity({"status": "running"}, live=True, now=now, legacy=True)["state"] == "working"

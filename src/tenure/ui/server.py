@@ -453,6 +453,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if method == "GET" and path in ("/", "/index.html"):
                 return self._index(query)
+            if method == "GET" and path in ("/classic", "/classic/"):      # 옛 화면 (새 화면으로 옮기는 동안, 36.9 M31)
+                return self._index(query, classic=True)
+            if method == "GET" and path.startswith("/app/"):
+                return self._web_asset(path[len("/app/"):])
             if method == "GET" and path.startswith("/static/"):
                 return self._static(path[len("/static/"):])
             if method == "GET" and path.startswith("/logos/") and path.endswith(".svg"):
@@ -559,7 +563,7 @@ class Handler(BaseHTTPRequestHandler):
         morsel = jar.get(self._cookie_name())
         return morsel.value if morsel is not None else None
 
-    def _index(self, query: dict[str, str]) -> None:
+    def _index(self, query: dict[str, str], classic: bool = False) -> None:
         """?t= 가 맞으면 쿠키를 심고, 다음부터는 쿠키로 연다 (DESIGN.md 28.1). API 는 쿠키로 열지 않는다."""
         via_query = self._token_ok(query.get("t"))
         if not via_query and not self._token_ok(self._cookie_token()):
@@ -575,8 +579,22 @@ class Handler(BaseHTTPRequestHandler):
         if via_query:
             extra = {"Set-Cookie": f"{self._cookie_name()}={self.server.token}; HttpOnly; SameSite=Strict; "
                                    f"Path=/; Max-Age={COOKIE_MAX_AGE}"}
-        html = _static_text("index.html").replace(TOKEN_PLACEHOLDER, self.server.token)
+        web = None if classic else _web_index()
+        html = (web if web is not None else _static_text("index.html")).replace(TOKEN_PLACEHOLDER, self.server.token)
         self._send(HTTPStatus.OK, html.encode("utf-8"), "text/html; charset=utf-8", extra)
+
+    def _web_asset(self, rel: str) -> None:
+        """새 화면(React 빌드)의 자산. ui/web 안의 파일만, 아는 확장자만."""
+        if not rel or ".." in rel.split("/") or "\\" in rel or rel.startswith("/"):
+            self._text(HTTPStatus.NOT_FOUND, "없는 파일입니다.")
+            return
+        ctype = WEB_TYPES.get(Path(rel).suffix.lower())
+        node = resources.files("tenure.ui").joinpath("web", *rel.split("/"))
+        if ctype is None or not node.is_file():
+            self._text(HTTPStatus.NOT_FOUND, "없는 파일입니다.")
+            return
+        cache = "public, max-age=31536000, immutable" if rel.startswith("assets/") else "no-cache"   # 이름에 해시가 붙은 자산
+        self._send(HTTPStatus.OK, node.read_bytes(), ctype, {"Cache-Control": cache})
 
     def _static(self, name: str) -> None:
         if name in STATIC_BINARY:
@@ -825,6 +843,19 @@ def logo_path(name: str) -> Path | None:
     except OSError:
         pass
     return None
+
+
+WEB_TYPES = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
+             ".png": "image/png", ".woff2": "font/woff2", ".json": "application/json", ".ico": "image/x-icon"}
+
+
+def _web_index() -> str | None:
+    """새 화면 빌드가 있으면 그 index.html (없으면 옛 화면)."""
+    node = resources.files("tenure.ui").joinpath("web", "index.html")
+    try:
+        return node.read_text(encoding="utf-8") if node.is_file() else None
+    except OSError:
+        return None
 
 
 def _static_text(name: str) -> str:

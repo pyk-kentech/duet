@@ -72,7 +72,7 @@ def validate_settings(data: dict[str, Any]) -> None:
     if not isinstance(roots, list) or not all(isinstance(r, str) and r.strip() for r in roots):
         raise SettingsError("workspace_roots 는 경로 문자열 목록이어야 합니다.")
     for r in roots:
-        if not (r.startswith("/") or r.startswith("~")):
+        if not (r.startswith("/") or r.startswith("~") or re.match(r"^[A-Za-z]:[\\/]", r) or r.startswith("\\\\")):   # 윈도우 C:\ · UNC
             raise SettingsError(f"작업 폴더 위치는 절대 경로(또는 ~)여야 합니다: {r}")
     if not isinstance(data.get("defaults", {}), dict):
         raise SettingsError("defaults 는 객체여야 합니다.")

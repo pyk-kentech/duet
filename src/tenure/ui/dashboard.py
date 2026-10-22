@@ -461,8 +461,10 @@ class Dashboard:
             cfg = load_config(wd if wd.is_dir() else None, overrides)
         except ConfigError as e:
             raise ApiError(400, f"설정 오류: {e}") from e
+        # auto 는 실행할 때 과제를 보고 고른다(36.5). 여기서는 classic 으로 미리 확인해 둔다(설계만 등)
+        check_name = CLASSIC_WORKFLOW if cfg.workflow == "auto" else cfg.workflow
         try:
-            wf = load_workflow(cfg.workflow, wd if wd.is_dir() else None, cfg)
+            wf = load_workflow(check_name, wd if wd.is_dir() else None, cfg)
         except WorkflowError as e:
             raise ApiError(400, f"워크플로 오류: {e}") from e
         unknown = sorted(set(cfg.step_overrides) - set(wf.roles))
@@ -686,7 +688,7 @@ class Dashboard:
     def _activity(self, rd: Path, st: RunState, is_live: bool) -> dict[str, Any]:
         """화면이 정렬·표시할 활동 상태 (DESIGN.md 36.3.1)."""
         ev = last_event(rd)
-        return run_activity(st.to_dict(), live=is_live, last_ts=(ev or {}).get("ts") or st.updated_at)
+        return run_activity(st.to_dict(), live=is_live, last_ts=(ev or {}).get("ts") or st.updated_at, legacy=ev is None)
 
     def _resume_hint(self, st: RunState, wd: Path) -> dict[str, Any]:
         cur = int(st.config.get("max_review") or 0)
