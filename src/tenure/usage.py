@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -60,36 +61,73 @@ def claude_local_usage(now: dt.datetime | None = None, home: Path | None = None)
     if root.is_dir():
         for path in root.glob("*/*.jsonl"):
             try:
-                if path.stat().st_mtime < horizon:
-                    continue
+                stat = path.stat()
             except OSError:
                 continue
+            if stat.st_mtime < horizon:
+                continue
             files += 1
-            for o in _jsonl(path):
-                msg = o.get("message")
-                if not isinstance(msg, dict) or not isinstance(msg.get("usage"), dict):
-                    continue
-                key = str(o.get("requestId") or msg.get("id") or o.get("uuid"))
-                if key in seen:
-                    continue
-                ts = _parse_ts(o.get("timestamp"))
-                if ts is None or ts.timestamp() < horizon:
+            for key, ts_epoch, inp, outp, model in _claude_records(path, stat):
+                if key in seen or ts_epoch < horizon:
                     continue
                 seen.add(key)
-                u = msg["usage"]
-                inp = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
-                outp = int(u.get("output_tokens") or 0)
-                age = now.timestamp() - ts.timestamp()
+                age = now.timestamp() - ts_epoch
                 for name, window in CLAUDE_WINDOWS:
                     if age <= window:
                         totals[name]["input_tokens"] += inp
                         totals[name]["output_tokens"] += outp
                         totals[name]["messages"] += 1
-                model = msg.get("model")
                 if model and age <= CLAUDE_WINDOWS[-1][1]:
                     by_model[model] = by_model.get(model, 0) + outp
     return {"windows": totals, "output_by_model_7d": by_model, "files": files,
             "as_of": now.isoformat(timespec="seconds")}
+
+
+# 세션 파일마다 사용량 기록을 기억한다: (크기, 수정 시각, 읽은 바이트, 기록). 파일이 자라면 덧붙은 부분만 읽는다.
+# 사용량 화면이 매번 7일 치 기록(수만 줄)을 다시 파싱하던 것을 줄인다 (DESIGN.md 36.16).
+_RECORDS: dict[str, tuple[int, float, int, list[tuple[str, float, int, int, str | None]]]] = {}
+_RECORDS_LOCK = threading.Lock()
+
+
+def _claude_records(path: Path, stat: os.stat_result) -> list[tuple[str, float, int, int, str | None]]:
+    """(요청 키, 시각 epoch, 입력 토큰, 출력 토큰, 모델) 목록. 파일이 그대로면 기억한 것을 쓴다."""
+    k = str(path)
+    with _RECORDS_LOCK:
+        hit = _RECORDS.get(k)
+    if hit is not None and hit[0] == stat.st_size and hit[1] == stat.st_mtime:
+        return hit[3]
+    start, records = (hit[2], list(hit[3])) if hit is not None and stat.st_size > hit[2] else (0, [])
+    end = start
+    try:
+        with path.open("rb") as f:
+            f.seek(start)
+            for raw in f:
+                if not raw.endswith(b"\n"):
+                    break                       # 쓰는 중인 마지막 줄은 다음에
+                end += len(raw)
+                if b'"usage"' not in raw:
+                    continue
+                try:
+                    o = json.loads(raw)
+                except ValueError:
+                    continue
+                if not isinstance(o, dict):
+                    continue
+                msg = o.get("message")
+                if not isinstance(msg, dict) or not isinstance(msg.get("usage"), dict):
+                    continue
+                ts = _parse_ts(o.get("timestamp"))
+                if ts is None:
+                    continue
+                u = msg["usage"]
+                inp = sum(int(u.get(x) or 0) for x in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+                records.append((str(o.get("requestId") or msg.get("id") or o.get("uuid")), ts.timestamp(), inp,
+                                int(u.get("output_tokens") or 0), msg.get("model")))
+    except OSError:
+        return records
+    with _RECORDS_LOCK:
+        _RECORDS[k] = (stat.st_size, stat.st_mtime, end, records)
+    return records
 
 
 # ====================================================================== codex
