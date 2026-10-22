@@ -26,5 +26,6 @@
 - 테스트: `pytest -q`
 - 수동 확인: `tenure run "할일 CLI" --workdir /tmp/tenure-try --mock`
 - 화면 빌드: `cd app && npm install && npm run build` (결과는 src/tenure/ui/web, 커밋한다. 개발 중에는 `npm run dev` 가 /api 를 8790 의 tenure ui 로 넘김)
+- 데스크톱 앱: `python desktop/build_app.py` (화면 → 엔진 얼리기 → Tauri 설치 파일. Rust 는 `~/.cargo/bin`, 업데이트 서명 키 `~/.tauri/tenure.key` 는 저장소 밖)
 - 관리자 UI: `tenure ui` (느린 mock 으로 화면 확인: `TENURE_MOCK_DELAY=1 tenure ui`)
 - UI 테스트는 `tests/test_ui.py`(HTTP 수준). 테스트는 `TENURE_HOME` 을 임시 폴더로 바꿔 사용자의 `~/.tenure` 을 건드리지 않는다.

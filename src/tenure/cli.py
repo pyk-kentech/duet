@@ -164,6 +164,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ui.add_argument("--new-token", action="store_true",
                       help="접속 토큰을 새로 만든다 (예전 주소·즐겨찾기는 더 이상 열리지 않음)")
     p_ui.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않음")
+    p_ui.add_argument("--ready-line", action="store_true", help=argparse.SUPPRESS)   # 데스크톱 셸용 (36.20)
+    p_ui.add_argument("--parent-pid", type=int, help=argparse.SUPPRESS)
     p_ui.set_defaults(func=cmd_ui)
 
     p_doc = sub.add_parser("doctor", help="실행 환경 점검 (git, Claude Code, Codex CLI 설치·로그인)")
@@ -347,7 +349,7 @@ def cmd_ui(args: argparse.Namespace) -> int:
 
     try:
         serve(args.host, args.port, open_browser=not args.no_browser, extra_projects=args.workdir,
-              new_token=args.new_token)
+              new_token=args.new_token, ready_line=args.ready_line, parent_pid=args.parent_pid)
     except OSError as e:
         raise OrchestratorError(str(e)) from e
     return EXIT_OK

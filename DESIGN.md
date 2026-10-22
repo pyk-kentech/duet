@@ -506,6 +506,11 @@ env_keep = ["CLAUDE_CODE_OAUTH_TOKEN"]
 - ✅ 가짜 대화형 CLI 로 Claude(훅)·Codex(화면 규칙·notify) 흐름 끝까지, 승인 대기 중 보내기 거부, 승인 키, 끝남·기록 다시 읽기, 원래 notify 이어 부르기, 세션 API, 비밀값 가리기, 브라우저에서 열기→보내기→승인 카드→본 것 처리→왜 이 상태?→에이전트 설정
 - 남은 것: 원격 머신 세션, tenure 실행에서 끌 항목 고르기
 
+### M35. 데스크톱 앱 (2026-10-22)
+- `app/src-tauri/`(Tauri 2 셸·시작 화면·아이콘·업데이터), `desktop/`(엔진 얼리기·전체 빌드·아이콘), 얼린 엔진용 `selfcmd`·`entry`(숨은 명령 `_hook`·`_pick`·`_http`), `ui --ready-line --parent-pid` (36.20)
+- ✅ 엔진 얼리기·확인(훅·UI 서버), Tauri 빌드 → NSIS 설치 파일·업데이트 서명·latest.json, 빌드한 앱으로 엔진 연결·창 닫기/강제 종료 때 엔진 정리·한 번만 뜨기, 얼린 엔진의 자기 호출 테스트
+- 남은 것: 깨끗한 다른 PC 에 설치해 보기, 첫 GitHub 릴리스 올리기(요청할 때)
+
 ### M7. 관리자 UI (2026-10-15 사용자 요청으로 추가)
 - `registry.py`, `lock.py`, `ui/dashboard.py`, `ui/server.py`, `ui/static/*`, `duet ui`
 - ✅ HTTP 수준 테스트(토큰·Host 검사, 경로 조작 거부, 조회, 실행·중지·이어하기), 헤드리스 브라우저로 화면·JS 오류 확인
@@ -1643,3 +1648,23 @@ M30 quick 54번의 호출 기록으로 시간·사용량(Codex 한도 환산)이
 - `tenure explain --session <id>` 는 기록(출력·훅)으로 보여 준다. 진행 중인 세션은 UI 서버가 가지므로 화면의 '왜 이 상태?'가 실시간이다.
 - 화면: 세션 화면(xterm)은 무거워 열 때만 불러온다(첫 화면 294KB 유지). 세션 출력은 SSE(쿠키 토큰), 키 입력은 15ms 모아 보낸다.
 - 동시 세션은 8개까지. 대화형 세션은 동시 에이전트 상한(36.18)에 세지 않는다(오래 입력을 기다리며 슬롯을 쥐지 않게).
+
+### 36.20 M35 데스크톱 앱의 구체안 (2026-10-22)
+**결정(사용자)**: Rust·VS C++ 빌드 도구를 이 PC 에 설치해 Tauri 2 로 만든다. 업데이트는 GitHub 릴리스(pyk-kentech/duet)로 자동 업데이트(서명 키를 만들고, 비밀 키는 이 PC 에만. 릴리스 올리기는 요청할 때만).
+
+**구조**
+- `app/src-tauri/`: Tauri 2 셸. 창 하나. 처음엔 앱에 든 작은 시작 화면("엔진을 켜는 중…")을 띄우고, 엔진이 준비되면 엔진 주소(`http://127.0.0.1:<포트>/?t=<토큰>`)로 옮긴다. 화면은 지금처럼 엔진이 준다(브라우저로 열어도 같은 화면).
+- 엔진 sidecar: 파이썬 엔진을 PyInstaller 로 얼린 폴더(`tenure-engine/`, onedir — onefile 은 켤 때마다 임시 폴더에 풀어 느리고 백신에 걸리기 쉽다)를 Tauri 리소스로 넣는다. 셸이 `tenure-engine ui --no-browser --port 0 --ready-line` 으로 띄우고, 엔진은 준비되면 표준 출력에 `TENURE_READY {"url": …}` 한 줄을 쓴다. 창을 닫으면 엔진을 끝낸다. UI 에서 시작한 실행은 지금처럼 따로 돌아 창을 닫아도 계속된다.
+- 앱은 하나만 뜬다(두 번째로 열면 기존 창을 앞으로).
+- 설치 파일: NSIS, 사용자 단위 설치(관리자 권한 없이). WebView2 는 윈도우 11 에 들어 있고, 없으면 설치 중에 받는다. Claude Code·Codex CLI 는 앱에 넣지 않는다(환경·로그인 화면이 설치를 돕는다).
+- 업데이트: `tauri-plugin-updater` 가 시작할 때 `https://github.com/pyk-kentech/duet/releases/latest/download/latest.json` 을 보고, 새 버전이 있으면 묻고(설치·다시 시작) 받는다. 서명은 `tauri signer` 키.
+
+**얼린 엔진에서 달라지는 것**: `sys.frozen` 이면 자기 자신을 `python -m tenure` 대신 실행 파일로 부른다 — UI 가 띄우는 실행(`_job`), 세션 훅(`_hook`), UI 다시 시작, 폴더 고르기 창(`_pick`), 브라우저 확인의 정적 서버(`_http`). 벤치마크의 pytest 는 PATH 의 python 으로.
+
+**구현하며 정한 것** (2026-10-22, M35)
+- 이 PC 에 Rust 1.99.1(MSVC)·VS Build Tools 2022(C++) 설치(winget). 첫 빌드 3분, 설치 파일 18.2MB(엔진 43MB 를 압축), 업데이트 서명(.sig) 함께.
+- 엔진 시작 화면 → 엔진 화면으로 옮길 때 WebView2 가 엔진(`127.0.0.1:<임의 포트>`)에 붙는다. 엔진 화면에는 Tauri 명령 권한을 주지 않는다(capabilities 는 시작 화면만). 토큰 없는 API 는 지금처럼 401.
+- 엔진은 PyInstaller onedir. 엔진 소스 전체를 데이터로도 넣는다 — 템플릿·워크플로·벤치마크 과제·화면, 그리고 원격 머신 배포용 tenure.pyz 를 앱 안에서도 만들 수 있게. pyz 의 진입점도 `tenure.entry` 로(숨은 명령이 원격에서도 같게).
+- 확인한 것(빌드한 앱을 직접 띄워): 엔진이 셸의 자식으로 뜨고 창이 엔진 화면에 붙음, 창을 닫으면 엔진이 끝남, 셸을 강제로 죽여도 엔진이 2초 안에 스스로 끝남(--parent-pid), 두 번째로 열면 새로 안 뜨고 기존 창을 앞으로(엔진 하나).
+- 릴리스: `python desktop/build_app.py` 가 설치 파일·.sig·latest.json 을 만든다. GitHub 릴리스(태그 v<버전>)에 세 파일을 올리면 설치된 앱이 시작할 때 묻고 업데이트한다. 올리는 일은 사람이 정한다. 비밀 키는 `~/.tauri/tenure.key`(이 PC 에만, 암호 없음 — 잃으면 기존 설치본은 새 키로 서명한 업데이트를 받지 못한다. 따로 보관할 것).
+- 버전은 pyproject.toml·tauri.conf.json·Cargo.toml 이 같아야 한다(빌드 스크립트·테스트가 확인).

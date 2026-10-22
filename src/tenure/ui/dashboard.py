@@ -63,13 +63,10 @@ class ApiError(Exception):
 
 
 def self_command() -> list[str]:
-    """이 tenure 를 다시 실행하는 명령. zip(tenure.pyz)으로 돌고 있으면 그 파일을 실행한다."""
-    import tenure
+    """이 tenure 를 다시 실행하는 명령 (python -m tenure · tenure.pyz · 얼린 엔진, DESIGN.md 36.20)."""
+    from tenure.selfcmd import self_argv
 
-    f = str(Path(tenure.__file__))
-    if ".pyz" in f:
-        return [sys.executable, f[: f.index(".pyz") + 4]]
-    return [sys.executable, "-m", "tenure"]
+    return self_argv()
 
 
 def jobs_dir() -> Path:

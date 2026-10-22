@@ -37,6 +37,8 @@ from tenure.runner import run_process
 from tenure.settings import LOCAL_MACHINE, SettingsError, load_settings, save_settings, validate_machine
 from tenure.ui.dashboard import ApiError, Dashboard, dispatch
 from tenure.agentconfig import agent_config
+from tenure.selfcmd import self_argv
+from tenure.runner import pid_alive
 from tenure.registry import tenure_home
 from tenure.term.session import SessionError, SessionManager
 from tenure.ui.terminal import TermJob
@@ -207,7 +209,7 @@ class TenureServer(ThreadingHTTPServer):
         try:
             initial = str(start or "").strip()
             initial = str(Path(initial).expanduser()) if initial and Path(initial).expanduser().is_dir() else ""
-            r = run_process([sys.executable, "-c", _PICK_SCRIPT, initial], Path.home(), timeout_sec=PICK_TIMEOUT_SEC,
+            r = run_process(self_argv("_pick", initial), Path.home(), timeout_sec=PICK_TIMEOUT_SEC,
                             env={"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
         finally:
             _pick_lock.release()
@@ -859,19 +861,6 @@ CODEX_NOTE_KO = {
 
 # ---------------------------------------------------------------- 폴더 고르기 (DESIGN.md 28.9)
 PICK_TIMEOUT_SEC = 600
-_PICK_SCRIPT = """
-import sys, tkinter
-from tkinter import filedialog
-root = tkinter.Tk()
-root.withdraw()
-try:
-    root.attributes("-topmost", True)
-except tkinter.TclError:
-    pass
-root.update()
-path = filedialog.askdirectory(parent=root, initialdir=sys.argv[1] or None, title="작업 폴더 고르기", mustexist=False)
-sys.stdout.write(path or "")
-"""
 _pick_lock = threading.Lock()
 
 
@@ -1042,7 +1031,7 @@ def exec_restart(server: "TenureServer") -> None:
     env = dict(os.environ)
     env[RESTART_TOKEN_ENV] = server.token
     env[RESTART_PORT_ENV] = "1"
-    argv = [sys.executable, "-m", "tenure", "ui", "--no-browser", "--host", str(host), "--port", str(port)]
+    argv = self_argv("ui", "--no-browser", "--host", str(host), "--port", str(port))
     sys.stdout.flush()
     print("\nUI 를 다시 시작합니다 (같은 주소)...", flush=True)
     if procs.IS_WINDOWS:
@@ -1086,8 +1075,21 @@ def saved_token(new: bool = False) -> str:
     return tok
 
 
+def _watch_parent(server: "TenureServer", pid: int, interval: float = 2.0) -> None:
+    """데스크톱 셸이 죽어도 엔진이 남지 않게: 부모가 사라지면 서버를 멈춘다."""
+    def loop() -> None:
+        while True:
+            time.sleep(interval)
+            if not pid_alive(pid):
+                server.shutdown()
+                return
+    threading.Thread(target=loop, name="parent-watch", daemon=True).start()
+
+
 def serve(host: str, port: int, *, open_browser: bool = True, extra_projects: list[str] = (),
-          printer: Callable[[str], None] = _print_flush, new_token: bool = False) -> None:
+          printer: Callable[[str], None] = _print_flush, new_token: bool = False,
+          ready_line: bool = False, parent_pid: int | None = None) -> None:
+    """ready_line: 준비되면 `TENURE_READY {json}` 한 줄 (데스크톱 셸이 읽음). parent_pid: 그 프로세스가 끝나면 같이 끝남 (36.20)."""
     dashboard = Dashboard()
     for p in extra_projects:
         dashboard.registry.add(p)
@@ -1110,6 +1112,10 @@ def serve(host: str, port: int, *, open_browser: bool = True, extra_projects: li
         printer("   가능하면 기본값(127.0.0.1)과 SSH 터널을 쓰세요: ssh -L 8787:127.0.0.1:8787 <서버>")
     printer(f"tenure 관리자 UI: {url}")
     printer("종료: Ctrl-C  (UI 를 꺼도 UI 에서 시작한 실행은 계속 돕니다)")
+    if ready_line:
+        printer("TENURE_READY " + json.dumps({"url": url, "port": server.port, "pid": os.getpid()}))
+    if parent_pid:
+        _watch_parent(server, parent_pid)
     if open_browser:
         try:
             webbrowser.open(url)

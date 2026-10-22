@@ -85,7 +85,7 @@ def build_pyz() -> tuple[bytes, str]:
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
             z.writestr(info, data)
-        put("__main__.py", b"import sys\nfrom tenure.cli import main\nsys.exit(main())\n")
+        put("__main__.py", b"import sys\nfrom tenure.entry import run\nsys.exit(run(sys.argv[1:]))\n")
         for f in files:
             put("tenure/" + f.relative_to(pkg).as_posix(), f.read_bytes())
     data = b"#!/usr/bin/env python3\n" + buf.getvalue()

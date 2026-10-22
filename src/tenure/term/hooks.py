@@ -23,7 +23,10 @@ MAX_FIELD = 500
 
 
 def _cmd(session_dir: Path, nonce: str) -> list[str]:
-    return [Path(sys.executable).as_posix(), "-m", "tenure", "_hook", Path(session_dir).as_posix(), nonce]
+    from tenure.selfcmd import self_argv
+
+    exe, *rest = self_argv("_hook", Path(session_dir).as_posix(), nonce)     # 얼린 엔진이면 실행 파일 그대로 (36.20)
+    return [Path(exe).as_posix(), *rest]
 
 
 def claude_settings(session_dir: Path, nonce: str) -> str:

@@ -51,7 +51,9 @@ def detect(workdir: Path) -> WebApp | None:
             return WebApp("npm", ["npm", "run", script] if script == "dev" else ["npm", "start"])
     if (wd / "index.html").is_file():
         port = _free_port()
-        return WebApp("static", [sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1"], port)
+        from tenure.selfcmd import self_argv
+
+        return WebApp("static", self_argv("_http", str(port)), port)        # 얼린 엔진에서도 (36.20)
     return None
 
 

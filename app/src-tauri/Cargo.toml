@@ -1,0 +1,24 @@
+[package]
+name = "tenure-desktop"
+version = "0.1.0"
+description = "tenure 데스크톱 앱: 엔진(sidecar)을 띄우고 그 화면을 창에 보인다 (DESIGN.md 36.20)"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-process = "2"
+tauri-plugin-single-instance = "2"
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tenure</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f6f7f9; --text: #1b1f2a; --muted: #5d6677; --bad: #c0392b; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #14171d; --text: #e7eaf0; --muted: #aab2c0; --bad: #ff7b6b; } }
+    html, body { height: 100%; margin: 0; }
+    body { background: var(--bg); color: var(--text); font: 15px/1.6 "Segoe UI", "Malgun Gothic", system-ui, sans-serif;
+           display: grid; place-items: center; }
+    .box { text-align: center; max-width: 520px; padding: 24px; }
+    .mark { width: 56px; height: 56px; border-radius: 14px; background: var(--text); color: var(--bg); display: grid;
+            place-items: center; font-size: 30px; font-weight: 800; margin: 0 auto 16px; }
+    .muted { color: var(--muted); }
+    .spin { width: 22px; height: 22px; border: 3px solid var(--muted); border-top-color: transparent; border-radius: 50%;
+            margin: 14px auto 0; animation: r 0.9s linear infinite; }
+    @keyframes r { to { transform: rotate(360deg); } }
+    .err { color: var(--bad); white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="mark">t</div>
+    <div id="msg"><b>tenure</b><div class="muted">엔진을 켜는 중…</div><div class="spin"></div></div>
+  </div>
+  <script>
+    window.showError = function (text) {
+      var m = document.getElementById("msg");
+      m.innerHTML = "<b>엔진을 켜지 못했습니다</b>";
+      var p = document.createElement("div");
+      p.className = "err";
+      p.textContent = text + "\n\n앱을 닫았다가 다시 열어 보세요. 계속되면 다시 설치하세요.";
+      m.appendChild(p);
+    };
+  </script>
+</body>
+</html>
