@@ -123,6 +123,10 @@ tenure discard --workdir ./x --run <id>          # 버리기 (변경은 .tenure/
 tenure run "..." --workdir ./x --workflow race
 tenure pick --workdir ./x --run <id> --draft codex   # 판정과 다른 초안을 고르기 (이전 상태는 브랜치로 남음)
 
+# 대화형 터미널: 관리자 UI 의 프로젝트·실행 화면에서 '터미널: Claude / Codex' 로 직접 부리고,
+# 승인을 기다리면 받은편지함에 카드가 뜬다. 상태 판단이 이상하면:
+tenure explain --session <id>                       # 맞은 화면 규칙·마지막 훅 (규칙은 ~/.tenure/screen_rules.toml 로 고침)
+
 # CLI 없이 흐름 테스트
 tenure run "..." --workdir ./x --mock
 ```

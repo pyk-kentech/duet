@@ -1,6 +1,7 @@
 // 설정 화면: 화면 테마·로고, 작업 폴더 위치, 기본 실행 설정, 고급 설정(설정 항목 정의에서 만든다), 원격 머신, UI 서버.
 // 값은 ~/.tenure/settings.json 에 저장된다 (테마만 이 브라우저의 localStorage).
 import { KeyboardEvent as ReactKeyboardEvent, ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
+import { notifyEnabled, setNotify } from "../sessions";
 import { api, LOCAL } from "../lib/api";
 import { fmtDur } from "../lib/format";
 import { STEP } from "../lib/labels";
@@ -215,6 +216,7 @@ export function SettingsView() {
       {v?.effective?.error ? <div className="alert alert-warn"><b>기본 설정 오류</b><span>{v.effective.error}</span></div> : null}
 
       <ScreenCard server={server} />
+      <NotifyCard />
       {!v ? (!error ? <div className="card empty"><span className="spinner" /> 불러오는 중…</div> : null) : (
         <>
           <RootsCard key={`roots-${ver.roots || 0}`} initial={v.settings.workspace_roots || []} nativePicker={!!server?.native_picker}
@@ -227,6 +229,23 @@ export function SettingsView() {
       )}
       <ServerCard server={server} reload={load} />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- 알림 (36.19, 이 브라우저에만 저장)
+function NotifyCard() {
+  const [on, setOn] = useState(notifyEnabled);
+  const supported = "Notification" in window;
+  return (
+    <section className="card card-pad col">
+      <div className="row"><h2>알림</h2></div>
+      <p className="muted small set-desc">대화형 세션이 승인을 기다리거나 턴이 끝나면 브라우저 알림을 띄웁니다. 상태가 바뀔 때만, 지금 보고 있는 세션은 빼고. 이 브라우저에만 저장됩니다.</p>
+      <label className="row small">
+        <input type="checkbox" checked={on} disabled={!supported}
+               onChange={async (e) => setOn(await setNotify(e.target.checked))} />
+        브라우저 알림 켜기{!supported ? " (이 브라우저는 지원하지 않음)" : ""}
+      </label>
+    </section>
   );
 }
 

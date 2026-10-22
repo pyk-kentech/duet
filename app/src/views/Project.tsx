@@ -8,14 +8,16 @@ import { hrefProject, hrefRun } from "../lib/router";
 import { ErrorBox, StateDot, StatusBadge, usePoll, useUi, Verdict } from "../ui";
 import { TREE_STATUS } from "./Merge";
 import type { NewRunInit } from "./NewRun";
+import AgentConfigView from "./AgentConfig";
+import { hrefSession, openSession } from "../sessions";
 
 interface RunsData {
   project: string; live: { pid: number; run_id: string; count?: number } | null; runs: RunSummary[];
   has_design: boolean; defaults: Record<string, any>;
 }
 
-export default function ProjectView({ route, onNewRun, onChanged }: {
-  route: { machine: string; project: string; tab: string }; onNewRun: (i: NewRunInit) => void; onChanged: () => void;
+export default function ProjectView({ route, onNewRun, onChanged, onSession }: {
+  route: { machine: string; project: string; tab: string }; onNewRun: (i: NewRunInit) => void; onChanged: () => void; onSession?: () => void;
 }) {
   const { toast, confirm } = useUi();
   const [data, setData] = useState<RunsData | null>(null);
@@ -63,6 +65,7 @@ export default function ProjectView({ route, onNewRun, onChanged }: {
         <div className="row">
           {live ? <button className="btn btn-danger" type="button" onClick={stop}>중지</button> : null}
           <button className="btn" type="button" onClick={remove}>목록에서 제거</button>
+          {m === "local" ? <TerminalButtons project={route.project} onOpened={onSession} /> : null}
           <button className="btn btn-primary" type="button" title={live ? "git 저장소면 작업마다 worktree 를 따로 만들어 동시에 돌릴 수 있습니다" : undefined}
                   onClick={() => onNewRun({ machine: m, project: route.project, defaults: data?.defaults, hasDesign: data?.has_design })}>새 실행</button>
         </div>
@@ -75,8 +78,9 @@ export default function ProjectView({ route, onNewRun, onChanged }: {
       <nav className="tabs">
         <a href={hrefProject(m, route.project, "runs")} className={route.tab === "runs" ? "active" : undefined}>실행 기록<span className="count">{data?.runs.length ?? ""}</span></a>
         <a href={hrefProject(m, route.project, "design")} className={route.tab === "design" ? "active" : undefined}>설계 문서</a>
+        {m === "local" ? <a href={hrefProject(m, route.project, "agents")} className={route.tab === "agents" ? "active" : undefined}>에이전트 설정</a> : null}
       </nav>
-      {route.tab === "design" ? (
+      {route.tab === "agents" ? <AgentConfigView project={route.project} /> : route.tab === "design" ? (
         <div className="card card-pad">{design ? <div className="md"><Markdown text={design} /></div> : <div className="empty">DESIGN.md 가 아직 없습니다.</div>}</div>
       ) : !data ? null : data.runs.length === 0 ? (
         <div className="card empty"><h3>실행 기록이 없습니다</h3><p>‘새 실행’으로 시작하세요.</p></div>
@@ -103,5 +107,23 @@ export default function ProjectView({ route, onNewRun, onChanged }: {
         </div>
       )}
     </div>
+  );
+}
+
+/** 이 폴더(또는 실행의 worktree)에서 에이전트를 터미널로 직접 연다 (36.19). */
+export function TerminalButtons({ project, run, onOpened }: { project: string; run?: string; onOpened?: () => void }) {
+  const { toast } = useUi();
+  const open = async (agent: string) => {
+    try {
+      const s = await openSession(agent, project, run);
+      onOpened?.();
+      location.hash = hrefSession(s.id);
+    } catch (e) { toast((e as Error).message, true); }
+  };
+  return (
+    <span className="row" style={{ gap: 4 }} title="이 폴더에서 에이전트를 대화형 터미널로 엽니다">
+      <button className="btn" type="button" onClick={() => open("claude")}>터미널: Claude</button>
+      <button className="btn" type="button" onClick={() => open("codex")}>Codex</button>
+    </span>
   );
 }

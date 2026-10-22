@@ -29,13 +29,16 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlsplit
 
 from tenure import procs
-from tenure.config import CLAUDE_MODEL_SUGGESTIONS, EFFORT_SUGGESTIONS
+from tenure.config import CLAUDE_MODEL_SUGGESTIONS, EFFORT_SUGGESTIONS, ConfigError, load_config
 from tenure.doctor import ACTIONS, PATH_PREFIX, action_shell
 from tenure import __version__
 from tenure.remote import Remote, RemoteError, package_digest
 from tenure.runner import run_process
 from tenure.settings import LOCAL_MACHINE, SettingsError, load_settings, save_settings, validate_machine
 from tenure.ui.dashboard import ApiError, Dashboard, dispatch
+from tenure.agentconfig import agent_config
+from tenure.registry import tenure_home
+from tenure.term.session import SessionError, SessionManager
 from tenure.ui.terminal import TermJob
 from tenure.usage import codex_home
 
@@ -78,6 +81,77 @@ class TenureServer(ThreadingHTTPServer):
         self.started_at = time.time()
         self.restart_fn: Callable[["TenureServer"], None] = exec_restart
         self._digest_cache: tuple[float, str] = (0.0, self.loaded_hash)
+        self._sessions: SessionManager | None = None
+
+    def server_close(self) -> None:
+        if self._sessions is not None:           # 서버와 함께 세션도 끝낸다(기록은 남음)
+            self._sessions.shutdown()
+        super().server_close()
+
+    # ================================================================ 대화형 세션 (DESIGN.md 36.19)
+    @property
+    def sessions(self) -> SessionManager:
+        if self._sessions is None:
+            self._sessions = SessionManager(tenure_home())
+        return self._sessions
+
+    def _session(self, sid: Any):
+        try:
+            return self.sessions.get(sid)
+        except SessionError as e:
+            raise ApiError(404, str(e)) from e
+
+    def session_create(self, machine: str, body: dict[str, Any]) -> dict[str, Any]:
+        if machine != LOCAL_MACHINE:
+            raise ApiError(400, "원격 머신의 대화형 세션은 아직 지원하지 않습니다.")
+        dash = self.dashboard
+        wd = dash.project(body.get("project"))
+        run_id = body.get("run") or None
+        cwd = dash.code_dir(dash.run_dir(wd, run_id)) if run_id else wd
+        agent = str(body.get("agent") or "")
+        try:
+            cfg = load_config(wd)                # 실행과 같은 실행 파일 (claude.bin·codex.bin)
+        except ConfigError as e:
+            raise ApiError(400, f"설정 오류: {e}") from e
+        bin_ = getattr(cfg, agent).bin if agent in ("claude", "codex") else None
+        try:
+            s = self.sessions.create(agent, cwd, str(wd), run_id=run_id, bin=bin_,
+                                     rows=_int(body.get("rows")) or 30, cols=_int(body.get("cols")) or 120,
+                                     title=str(body.get("title") or "")[:120])
+        except SessionError as e:
+            raise ApiError(400, str(e)) from e
+        return s.summary()
+
+    def session_action(self, action: str, body: dict[str, Any]) -> dict[str, Any]:
+        s = self._session(body.get("id"))
+        try:
+            if action == "input":
+                data = body.get("data")
+                if not isinstance(data, str) or len(data) > 65_536:
+                    raise ApiError(400, "입력이 잘못되었습니다.")
+                s.write(data)
+            elif action == "send":
+                text = body.get("text")
+                if not isinstance(text, str) or not text.strip() or len(text) > 100_000:
+                    raise ApiError(400, "보낼 메시지를 입력하세요.")
+                s.send(text, force=bool(body.get("force")))
+            elif action == "answer":
+                return {"ok": True, "keys": s.answer(bool(body.get("approve")))}
+            elif action == "resize":
+                s.resize(max(5, min(_int(body.get("rows")) or 30, 300)), max(20, min(_int(body.get("cols")) or 120, 500)))
+            elif action == "kill":
+                s.kill()
+            elif action == "seen":
+                self.sessions.mark_seen(s.meta.id)
+            elif action == "close":
+                self.sessions.close(s.meta.id)
+            else:
+                raise ApiError(404, "없는 동작입니다.")
+        except SessionError as e:
+            raise ApiError(409, str(e)) from e
+        except OSError as e:
+            raise ApiError(409, f"세션에 쓰지 못했습니다: {e}") from e
+        return {"ok": True}
 
     # ================================================================ 서버 자신
     def current_hash(self) -> str:
@@ -97,6 +171,8 @@ class TenureServer(ThreadingHTTPServer):
 
     def restart(self) -> dict[str, Any]:
         running = [t.title for t in self.terms.values() if t.running]
+        if self._sessions is not None:
+            running += [f"세션 {x['agent']}" for x in self._sessions.list() if x["live"]]
         if running:
             raise ApiError(409, f"진행 중인 터미널 작업이 있어 다시 시작할 수 없습니다: {', '.join(running)}")
 
@@ -466,7 +542,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._discard_body()
                     return self._json(HTTPStatus.FORBIDDEN, {"error": "다른 사이트에서 온 요청은 받지 않습니다."})
                 given = self.headers.get("X-Tenure-Token")
-                if method == "GET" and path == "/api/stream" and not given:
+                if method == "GET" and path in ("/api/stream", "/api/session/stream") and not given:
                     given = self._cookie_token()          # EventSource 는 헤더를 못 붙인다 → 쿠키
                 if not self._token_ok(given):
                     self._discard_body()
@@ -474,6 +550,8 @@ class Handler(BaseHTTPRequestHandler):
                                       {"error": "토큰이 맞지 않습니다. 터미널에 출력된 새 주소로 다시 접속하세요."})
                 if method == "GET" and path == "/api/stream":
                     return self._stream(query)
+                if method == "GET" and path == "/api/session/stream":
+                    return self._session_stream(query)
                 body = self._read_json() if method == "POST" else {}
                 return self._json(HTTPStatus.OK, self._api(method, path, query, body))
             self._text(HTTPStatus.NOT_FOUND, "없는 페이지입니다.")
@@ -531,6 +609,51 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(self.STREAM_POLL_SEC)
         except OSError:
             return                     # 상대가 연결을 닫음
+
+    SESSION_POLL_SEC = 0.05
+
+    def _session_stream(self, q: dict[str, str]) -> None:
+        """세션 출력을 SSE 로 (DESIGN.md 36.19). data 는 {data, offset, status}. 끝나면 end."""
+        s = self.server._session(q.get("id"))
+        offset = _int(q.get("offset"))
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        start = last_beat = last_state = time.monotonic()
+        state = None
+        try:
+            while time.monotonic() - start < self.STREAM_MAX_SEC:
+                snap = s.snapshot(offset)
+                now = time.monotonic()
+                sent = False
+                if snap["data"] or snap["reset"]:
+                    offset = snap["offset"]
+                    payload = {"data": snap["data"], "offset": offset, "reset": snap["reset"]}
+                    self.wfile.write(f"event: out\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"))
+                    sent = True
+                if now - last_state >= 0.5:
+                    last_state = now
+                    st = snap["status"]
+                    if st != state:
+                        state = st
+                        self.wfile.write(f"event: status\ndata: {json.dumps(st, ensure_ascii=False)}\n\n".encode("utf-8"))
+                        sent = True
+                    if not snap["live"] and not snap["data"]:
+                        self.wfile.write(b"event: end\ndata: {}\n\n")
+                        self.wfile.flush()
+                        return
+                if sent:
+                    self.wfile.flush()
+                    last_beat = now
+                elif now - last_beat >= self.STREAM_BEAT_SEC:
+                    self.wfile.write(b": keep-alive\n\n")
+                    self.wfile.flush()
+                    last_beat = now
+                time.sleep(self.SESSION_POLL_SEC)
+        except OSError:
+            return
 
     def _read_json(self) -> dict[str, Any]:
         length = int(self.headers.get("Content-Length") or 0)
@@ -678,6 +801,19 @@ class Handler(BaseHTTPRequestHandler):
             ("POST", "/api/term/input"): lambda: srv.term_input(body.get("id"), body.get("text")),
             ("POST", "/api/term/kill"): lambda: srv.term_kill(body.get("id")),
             ("POST", "/api/fs/pick"): lambda: srv.native_pick(body.get("start")),
+            # 대화형 세션 (DESIGN.md 36.19): 이 머신에서만
+            ("GET", "/api/sessions"): lambda: {"sessions": srv.sessions.list()},
+            ("POST", "/api/sessions"): lambda: srv.session_create(machine, body),
+            ("GET", "/api/session"): lambda: srv._session(q.get("id")).snapshot(_int(q.get("offset"))),
+            ("GET", "/api/session/explain"): lambda: srv._session(q.get("id")).explain(),
+            ("POST", "/api/session/input"): lambda: srv.session_action("input", body),
+            ("POST", "/api/session/send"): lambda: srv.session_action("send", body),
+            ("POST", "/api/session/answer"): lambda: srv.session_action("answer", body),
+            ("POST", "/api/session/resize"): lambda: srv.session_action("resize", body),
+            ("POST", "/api/session/kill"): lambda: srv.session_action("kill", body),
+            ("POST", "/api/session/seen"): lambda: srv.session_action("seen", body),
+            ("POST", "/api/session/close"): lambda: srv.session_action("close", body),
+            ("GET", "/api/agent-config"): lambda: agent_config(srv.dashboard.project(q.get("project"))),
         }
         handler = special.get((method, path))
         if handler is not None:

@@ -25,6 +25,10 @@ if argv[:2] == ["auth", "status"]:
                       "subscriptionType": "max" if logged else None}))
     sys.exit(0 if logged else 1)
 
+if "-p" not in argv and "exec" not in argv[:1] and "app-server" not in argv[:1] and         ("--settings" in argv or any(a.startswith("notify=") for a in argv)):
+    import _fake_interactive  # 대화형 (M34)
+    sys.exit(_fake_interactive.run("claude", argv))
+
 stdin_text = fc.read_stdin_if_piped()
 fc.dump(argv, stdin_text)
 fc.handle_common_failures()

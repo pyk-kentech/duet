@@ -13,7 +13,8 @@ export type Route =
   | { name: "usage"; machine: string }
   | { name: "setup"; machine: string }
   | { name: "settings" }
-  | { name: "bench"; dir?: string };
+  | { name: "bench"; dir?: string }
+  | { name: "session"; id: string };
 
 const enc = encodeURIComponent;
 const prefix = (m?: string) => (m && m !== LOCAL ? `#/m/${enc(m)}` : "#");
@@ -31,6 +32,7 @@ export function parseHash(hash = location.hash): Route {
     if (parts[0] === "setup") return { name: "setup", machine: q.get("m") || LOCAL };
     if (parts[0] === "settings") return { name: "settings" };
     if (parts[0] === "bench") return { name: "bench", dir: q.get("dir") || undefined };
+    if (parts[0] === "s" && parts[1]) return { name: "session", id: decodeURIComponent(parts[1]) };   // 대화형 세션 (36.19)
     let machine = LOCAL;
     if (parts[0] === "m" && parts[1]) {
       machine = decodeURIComponent(parts[1]);

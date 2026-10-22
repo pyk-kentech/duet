@@ -1,16 +1,17 @@
 import { FormEvent, useState } from "react";
 import { Group, InboxItem } from "../data";
+import { hrefSession, SESSION_STATE, SessionInfo, sessionDot } from "../sessions";
 import { api } from "../lib/api";
 import { baseName, fmtWhen, oneLine } from "../lib/format";
 import { ACTIVITY, PHASE, STEP } from "../lib/labels";
 import { hrefProject, hrefRun } from "../lib/router";
-import { ErrorBox, StateDot, StatusBadge, useUi, Verdict } from "../ui";
+import { AgentTag, ErrorBox, StateDot, StatusBadge, useUi, Verdict } from "../ui";
 import type { NewRunInit } from "./NewRun";
 
 const ORDER = ["blocked", "done-unseen", "working", "unverifiable", "failed"];
 
-export default function Home({ groups, error, inbox, onNewRun, onChanged }: {
-  groups: Group[] | null; error: unknown; inbox: InboxItem[]; onNewRun: (i?: NewRunInit) => void; onChanged: () => void;
+export default function Home({ groups, error, inbox, sessions, onNewRun, onChanged }: {
+  groups: Group[] | null; error: unknown; inbox: InboxItem[]; sessions: SessionInfo[]; onNewRun: (i?: NewRunInit) => void; onChanged: () => void;
 }) {
   const { toast } = useUi();
   const [path, setPath] = useState("");
@@ -24,6 +25,14 @@ export default function Home({ groups, error, inbox, onNewRun, onChanged }: {
     } catch (e) { toast((e as Error).message, true); }
   };
   const byState = ORDER.map((s) => [s, inbox.filter((i) => i.activity.state === s)] as const).filter(([, xs]) => xs.length);
+  const asking = sessions.filter((s) => s.status.attention);   // 승인·질문 카드 (36.19)
+  const answer = async (s: SessionInfo, approve: boolean) => {
+    try {
+      await api("/api/session/answer", { method: "POST", body: { id: s.id, approve } });
+      toast(approve ? "승인을 보냈습니다." : "거절을 보냈습니다.");
+      onChanged();
+    } catch (e) { toast((e as Error).message, true); }
+  };
 
   return (
     <div className="page">
@@ -36,6 +45,28 @@ export default function Home({ groups, error, inbox, onNewRun, onChanged }: {
         <button className="btn btn-primary" type="button" onClick={() => onNewRun({})}>새 실행</button>
       </div>
       {error ? <ErrorBox error={error} /> : null}
+
+      {asking.length ? (
+        <section className="card">
+          <div className="section-head" style={{ padding: "10px 14px 0" }}><b>세션</b><span className="faint small">{asking.length}</span></div>
+          {asking.map((s) => (
+            <div key={s.id} className="inbox-item session-card">
+              <StateDot state={sessionDot(s)} />
+              <div style={{ minWidth: 0 }}>
+                <div className="title ellipsis"><AgentTag name={s.agent} /> {s.status.attention === "blocked" ? SESSION_STATE.blocked : "턴이 끝남 · 안 봄"}</div>
+                <div className="reason ellipsis" title={s.status.reason}>{baseName(s.cwd)} · {s.status.reason}</div>
+              </div>
+              <div className="row" style={{ gap: 6 }}>
+                {s.status.attention === "blocked" ? <>
+                  <button className="btn btn-sm btn-primary" type="button" onClick={() => answer(s, true)}>승인</button>
+                  <button className="btn btn-sm" type="button" onClick={() => answer(s, false)}>거절</button>
+                </> : null}
+                <a className="btn btn-sm" href={hrefSession(s.id)}>터미널 열기</a>
+              </div>
+            </div>
+          ))}
+        </section>
+      ) : null}
 
       <section className="card">
         {byState.length === 0 ? (

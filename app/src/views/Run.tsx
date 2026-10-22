@@ -7,6 +7,7 @@ import { ACTIVITY, OUTCOME, PHASE, STATUS, STEP } from "../lib/labels";
 import { hrefProject, hrefRun } from "../lib/router";
 import { AgentTag, ErrorBox, Modal, StateDot, StatusBadge, TestTag, useUi, Verdict } from "../ui";
 import { DraftsPanel } from "./Drafts";
+import { TerminalButtons } from "./Project";
 import { MergePanel, Tree, TREE_STATUS } from "./Merge";
 import { Note, NotedDiff } from "./NotedDiff";
 
@@ -21,7 +22,7 @@ interface RunData {
 const LIVE = "__live__";
 const TABS: [string, string][] = [["talk", "대화"], ["drafts", "초안 비교"], ["issues", "지적"], ["console", "콘솔"], ["changes", "변경 사항"], ["design", "설계 문서"]];
 
-export default function RunView({ route, onSeen }: { route: { machine: string; project: string; run: string; tab: string }; onSeen: () => void }) {
+export default function RunView({ route, onSeen, onSession }: { route: { machine: string; project: string; run: string; tab: string }; onSeen: () => void; onSession?: () => void }) {
   const m = route.machine;
   const tab = route.tab === "timeline" ? "talk" : route.tab;
   const { toast, confirm } = useUi();
@@ -75,7 +76,7 @@ export default function RunView({ route, onSeen }: { route: { machine: string; p
     <div className="page">
       <Crumbs m={m} project={route.project} run={route.run} />
       {error ? <ErrorBox error={error} /> : null}
-      <Head data={data} m={m} onStop={stop} onReload={load} />
+      <Head data={data} m={m} onStop={stop} onReload={load} onSession={onSession} />
       <ResultCard data={data} m={m} q={q} onReload={load} />
       {data.worktree ? <MergePanel m={m} q={q} tree={data.worktree} st={st} live={data.live} onReload={load} /> : null}
       <nav className="tabs">
@@ -117,7 +118,7 @@ function hasFindings(s: any) {
 }
 
 // ---------------------------------------------------------------- 머리
-function Head({ data, m, onStop, onReload }: { data: RunData; m: string; onStop: () => void; onReload: () => void }) {
+function Head({ data, m, onStop, onReload, onSession }: { data: RunData; m: string; onStop: () => void; onReload: () => void; onSession?: () => void }) {
   const { toast } = useUi();
   const st = data.state, c = st.config || {};
   const [maxReview, setMaxReview] = useState<number>(Math.min((data.resume?.current_max_review || 0) + 1, 10));
@@ -155,6 +156,8 @@ function Head({ data, m, onStop, onReload }: { data: RunData; m: string; onStop:
         <span className="muted">{pos}</span>
         {data.activity?.reason ? <span className="faint small">· {data.activity.reason}</span> : null}
         <span className="spacer" />
+        {m === "local" && !data.live && (!data.worktree || data.worktree.status === "open")
+          ? <TerminalButtons project={data.project} run={st.run_id} onOpened={onSession} /> : null}
         {data.live ? <button className="btn btn-danger" type="button" onClick={onStop}>중지</button> : data.resume?.possible ? (
           <div className="row">
             {data.resume.needs_max_review ? (

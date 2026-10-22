@@ -119,6 +119,10 @@ def build_parser() -> argparse.ArgumentParser:
         p_f.add_argument("--mock", action="store_true", help="실제 CLI 호출 없이 (기본: 그 실행이 mock 이었는지 따름)")
         p_f.set_defaults(func=cmd_followup, kind=name)
 
+    p_ex = sub.add_parser("explain", help="대화형 세션이 왜 그 상태인지 (맞은 화면 규칙·마지막 훅, DESIGN.md 36.19)")
+    p_ex.add_argument("--session", required=True, metavar="ID", help="세션 id (화면 주소 #/s/<id>)")
+    p_ex.set_defaults(func=cmd_explain)
+
     p_wf = sub.add_parser("workflows", help="워크플로 템플릿 목록 / 자세히 보기")
     p_wf.add_argument("action", nargs="?", choices=["list", "show"], default="list", help="list(기본) 또는 show")
     p_wf.add_argument("name", nargs="?", help="show 할 워크플로 이름 또는 @파일경로")
@@ -303,6 +307,30 @@ def cmd_pick(args: argparse.Namespace) -> int:
     except RaceError as e:
         raise OrchestratorError(str(e)) from e
     print(f"{res['role']} 초안으로 바꿈 ({res['branch']}), 이전 상태는 브랜치 {res['kept']} 에 남김 · 상태 {res['status']}")
+    return EXIT_OK
+
+
+def cmd_explain(args: argparse.Namespace) -> int:
+    """세션 기록(출력·훅)으로 상태 판단을 보여 준다. 진행 중인 세션은 UI 서버가 가지므로 여기서는 기록 기준."""
+    from tenure.registry import tenure_home
+    from tenure.term.session import SessionError, SessionManager
+
+    try:
+        s = SessionManager(tenure_home()).get(args.session)
+    except SessionError as e:
+        raise OrchestratorError(str(e)) from e
+    e = s.explain()
+    st = e["status"]
+    print(f"세션 {s.meta.id} ({s.meta.agent}) · {s.meta.cwd}")
+    print(f"  상태: {st['state']} — {st['reason']} (근거: {st['source']})")
+    h = e["hook"]
+    print(f"  마지막 훅: {h['event']} {h['ts']} → {h['reason']}" if h else "  마지막 훅: 없음")
+    r = e["rule"]
+    print(f"  맞은 화면 규칙: {r['id']} ({r['source']}) /{r['regex']}/" if r else "  맞은 화면 규칙: 없음")
+    print(f"  살펴본 규칙: {', '.join(e['rules'])}")
+    print("  화면 끝부분:")
+    for ln in (e["tail"] or "(없음)").splitlines():
+        print(f"    {ln}")
     return EXIT_OK
 
 

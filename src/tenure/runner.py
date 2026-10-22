@@ -280,3 +280,105 @@ def _as_text(data: bytes | str | None) -> str:
 def _fmt_cmd(cmd: Sequence[str] | str, limit: int = 200) -> str:
     s = cmd if isinstance(cmd, str) else " ".join(cmd)
     return s if len(s) <= limit else s[:limit] + "…"
+
+
+# ====================================================================== 대화형 터미널 (DESIGN.md 36.19)
+class PtyProcessHandle:
+    """가상 터미널에서 도는 자식. read() 는 글자(str)를 돌려주고, 끝나면 ''."""
+
+    def __init__(self, argv: list[str], cwd: Path, env: dict[str, str], rows: int, cols: int):
+        self.argv = argv
+        if procs.IS_WINDOWS:
+            from winpty import PtyProcess   # Windows ConPTY (pywinpty)
+
+            self._p = PtyProcess.spawn(argv, cwd=str(cwd), env=env, dimensions=(rows, cols))
+            self.pid = self._p.pid
+        else:
+            import codecs
+            import fcntl
+            import struct
+            import termios
+
+            master, slave = os.openpty()
+            try:
+                fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+            except OSError:
+                pass
+            try:
+                self._proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, cwd=str(cwd), env=env,
+                                              start_new_session=True, close_fds=True)
+            finally:
+                os.close(slave)
+            self._master = master
+            self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            self.pid = self._proc.pid
+
+    def read(self) -> str:
+        if procs.IS_WINDOWS:
+            try:
+                return self._p.read(4096) or ""
+            except EOFError:
+                return ""
+        try:
+            data = os.read(self._master, 4096)
+        except OSError:
+            data = b""
+        return self._decoder.decode(data, final=not data)
+
+    def write(self, text: str) -> None:
+        if procs.IS_WINDOWS:
+            self._p.write(text)
+        else:
+            os.write(self._master, text.encode("utf-8"))
+
+    def resize(self, rows: int, cols: int) -> None:
+        if procs.IS_WINDOWS:
+            self._p.setwinsize(rows, cols)
+            return
+        import fcntl
+        import struct
+        import termios
+
+        fcntl.ioctl(self._master, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+
+    def alive(self) -> bool:
+        return self._p.isalive() if procs.IS_WINDOWS else self._proc.poll() is None
+
+    def exit_code(self) -> int | None:
+        if procs.IS_WINDOWS:
+            return None if self._p.isalive() else self._p.exitstatus
+        return self._proc.poll()
+
+    def kill(self) -> None:
+        if procs.IS_WINDOWS:
+            procs.kill_pid_tree(self.pid)
+            try:
+                self._p.terminate(force=True)
+            except Exception:  # noqa: BLE001 — 이미 끝났으면 무시
+                pass
+        elif self._proc.poll() is None:
+            kill_process_group(self._proc)
+
+    def close(self) -> None:
+        if not procs.IS_WINDOWS:
+            try:
+                os.close(self._master)
+            except OSError:
+                pass
+
+
+def spawn_pty(argv: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None, *,
+              rows: int = 30, cols: int = 120) -> PtyProcessHandle:
+    """대화형 CLI 를 가상 터미널에서 띄운다(Windows ConPTY, 그 밖은 pty). 실행 파일이 없으면 ExecutableNotFound."""
+    full = _merged_env({"TERM": "xterm-256color", "COLORTERM": "truecolor", **(env or {})})
+    resolved = procs.resolve_argv(list(argv), full.get("PATH"))
+    assert isinstance(resolved, list)
+    if procs.IS_WINDOWS:
+        if not Path(resolved[0]).is_file():
+            raise ExecutableNotFound(f"실행 파일을 찾을 수 없습니다: {argv[0]}")
+        if resolved[0].lower().endswith((".cmd", ".bat")):   # ConPTY 는 배치 파일을 바로 못 띄운다
+            resolved = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/c", *resolved]
+    try:
+        return PtyProcessHandle(resolved, Path(cwd), full, rows, cols)
+    except FileNotFoundError as e:
+        raise ExecutableNotFound(f"실행 파일을 찾을 수 없습니다: {argv[0]}") from e

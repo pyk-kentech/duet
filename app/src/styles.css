@@ -239,3 +239,9 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible, a:focus-visible {
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) img[src="/logos/codex.svg"] { filter: invert(1); } }
 /* 경쟁 초안 비교 (36.15) */
 .draft-current { outline: 2px solid color-mix(in srgb, var(--ok) 55%, transparent); outline-offset: -1px; }
+
+/* 대화형 세션 (36.19) */
+.session-page { display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 40px); }
+.term-box { flex: 1; min-height: 320px; background: #1b1d23; border-radius: var(--radius); padding: 6px; overflow: hidden; }
+.term-box .xterm { height: 100%; }
+.session-card { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }

@@ -9,7 +9,8 @@ description = "Claude Code와 Codex CLI가 설계를 토론하고 서로의 코�
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-dependencies = []
+# pywinpty: Windows 의 ConPTY 로 대화형 터미널 세션을 띄운다 (M34, DESIGN.md 36.19). 다른 OS 는 표준 pty.
+dependencies = ["pywinpty>=2.0; sys_platform == 'win32'"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
