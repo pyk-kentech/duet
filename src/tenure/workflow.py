@@ -45,7 +45,7 @@ _ROLE_KEYS = {"agent", "model", "effort", "step_effort", "step_model", "instruct
 _STEP_KEYS = {
     "explore": {"kind", "id", "role"},
     "debate": {"kind", "id", "proposers", "rounds", "synth", "output"},
-    "build": {"kind", "id", "implementer", "reviewers", "max_review", "arbiter", "design"},
+    "build": {"kind", "id", "implementer", "reviewers", "max_review", "arbiter", "design", "rivals"},
     "audit": {"kind", "id", "roles"},
 }
 _TOP_KEYS = {"name", "description", "roles", "steps"}
@@ -108,11 +108,12 @@ class Step:
     max_review: int | None = None
     arbiter: str | None = None                               # 분쟁 중재자 역할 (DESIGN.md 23.2)
     design: str | None = None                                # build: None/"doc" = DESIGN.md, "task" = 과제 원문을 설계로 (36.5)
+    rivals: list[str] = field(default_factory=list)          # build: 경쟁 초안의 맞수 (36.15)
     roles: list[str] = field(default_factory=list)           # audit
 
     def role_names(self) -> list[str]:
         names = [*([self.role] if self.role else []), *self.proposers, *([self.synth] if self.synth else []),
-                 *([self.implementer] if self.implementer else []), *self.reviewers,
+                 *([self.implementer] if self.implementer else []), *self.rivals, *self.reviewers,
                  *([self.arbiter] if self.arbiter else []), *self.roles]
         return list(dict.fromkeys(names))
 
@@ -140,6 +141,8 @@ class Step:
             extra = f", 최대 {self.max_review}회" if self.max_review is not None else ""
             if self.arbiter:
                 extra += f", 중재 {self.arbiter}"
+            if self.rivals:
+                return f"race({self.implementer} 대 {', '.join(self.rivals)}; 서로 리뷰 → 판정 → 승자가 이어서{extra})"
             return f"build({self.implementer}; 리뷰 {', '.join(self.reviewers)}{extra})"
         return f"audit({', '.join(self.roles)})"
 
@@ -343,6 +346,10 @@ def _parse_step(i: int, sdata: Any, roles: Mapping[str, Role], err) -> Step:
             step.arbiter = _need_role(sdata.get("arbiter"), label, roles, err)
             if step.arbiter == lead:
                 raise err(f"{label}: 구현자({lead})는 중재자가 될 수 없습니다")
+        if sdata.get("rivals") is not None:
+            step.rivals = _role_list(sdata, "rivals", label, roles, err, lo=1, hi=1)
+            if lead in step.rivals:
+                raise err(f"{label}: 구현자({lead})는 자기 맞수가 될 수 없습니다")
         if sdata.get("design") is not None:
             if sdata["design"] not in ("doc", "task"):
                 raise err(f"{label}: design 은 doc 또는 task 여야 합니다: {sdata['design']!r}")

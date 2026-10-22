@@ -24,6 +24,7 @@ from tenure.outcome import run_activity
 from tenure import merge as mergelib
 from tenure import notes as notelib
 from tenure import procs, stopflag, worktree
+from tenure.phases.race import DRAFTS_DIR as race_drafts_dir
 from tenure.activity import agent_activity, call_start_epoch
 from tenure.workflow import WorkflowError, list_workflows, load_workflow, role_agent_map
 from tenure.config import AGENT_NAMES, CLASSIC_WORKFLOW, WORKFLOW_NAME_RE, ConfigError, MAX_DEBATE_ROUNDS, MAX_REVIEW_ROUNDS, describe_effort, load_config
@@ -42,7 +43,7 @@ from tenure.verdict import parse_verdict
 from tenure.workspace import GitError, Workspace, WorkdirRefused, check_workdir
 
 RUN_ID_RE = re.compile(r"^\d{8}-\d{6}(?:-\d+)?$")
-ENTRY_RE = re.compile(r"^\d{2,}_[\w.\-]+\.md$")
+ENTRY_RE = re.compile(r"^(?:drafts/[a-z0-9][a-z0-9_-]{0,31}/)?\d{2,}_[\w.\-]+\.md$")   # 초안 기록 포함 (36.15)
 COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
 MAX_DIFF_BYTES = 400_000
 MAX_CONSOLE_CHUNK = 200_000
@@ -243,11 +244,18 @@ class Dashboard:
         code = self.code_dir(rd)
         live = self._live(code)
         entries = []
-        for e in Transcript(rd).entries():
-            item: dict[str, Any] = {"name": e.name, "seq": e.seq, "label": e.label, "meta": e.meta}
-            if e.meta.get("step") == "review" and e.meta.get("exit_code") == "0":
-                item["verdict"] = self._verdict(e.path)
-            entries.append(item)
+        sources = [("", rd)] + [(d.name, d) for d in sorted((rd / race_drafts_dir).glob("*")) if d.is_dir()]
+        for draft, folder in sources:
+            for e in Transcript(folder).entries():
+                name = f"{race_drafts_dir}/{draft}/{e.name}" if draft else e.name
+                item: dict[str, Any] = {"name": name, "seq": e.seq, "label": e.label, "meta": e.meta}
+                if draft:
+                    item["draft"] = draft
+                if e.meta.get("step") == "review" and e.meta.get("exit_code") == "0":
+                    item["verdict"] = self._verdict(e.path)
+                entries.append(item)
+        if len(sources) > 1:                     # 경쟁 초안: 초안 기록을 시간순으로 끼워 넣는다 (36.15)
+            entries.sort(key=lambda x: str(x["meta"].get("timestamp") or ""))
         console = rd / CONSOLE_LOG
         return {
             "project": str(wd), "run_dir": str(rd), "state": st.to_dict(), "entries": entries,
@@ -401,7 +409,8 @@ class Dashboard:
                 commits.append({"sha": parts[0], "short": parts[1], "subject": parts[2], "date": parts[3]})
         return {"base": st.base_commit, "commits": commits}
 
-    def diff(self, project: str | None, run_id: str | None, commit: str | None = None) -> dict[str, Any]:
+    def diff(self, project: str | None, run_id: str | None, commit: str | None = None,
+             draft: str | None = None) -> dict[str, Any]:
         wd = self.project(project)
         rd = self.run_dir(wd, run_id)
         st = RunState.load(rd)
@@ -409,6 +418,18 @@ class Dashboard:
         if not st.base_commit or not ws.is_repo():
             return {"text": "", "truncated": False, "title": "아직 커밋이 없습니다."}
         try:
+            if draft:                            # 경쟁 초안 하나의 기준 대비 차이 (36.15)
+                info = ((st.race or {}).get("drafts") or {}).get(draft)
+                if not info:
+                    raise ApiError(404, f"초안을 찾을 수 없습니다: {draft}")
+                try:
+                    globs = load_config(wd).diff_excludes
+                except ConfigError:
+                    globs = []
+                text = build_review_diff(ws, st.race["base"], globs, MAX_DIFF_BYTES * 2, head=info["branch"])
+                text = "" if text == "(변경 없음)" else text
+                truncated = len(text) > MAX_DIFF_BYTES
+                return {"text": text[:MAX_DIFF_BYTES], "truncated": truncated, "title": f"{draft} 초안 ({info['branch']})"}
             if commit:
                 if not COMMIT_RE.match(commit):
                     raise ApiError(400, "commit 형식이 잘못되었습니다.")
@@ -624,6 +645,22 @@ class Dashboard:
             argv.append("--mock")
         return self._spawn(kind, wd, argv, scope=code)
 
+    def pick(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """경쟁 초안 중 다른 것을 고른다 (36.15). 병합 전, 끝난 실행에서만."""
+        from tenure.phases.race import RaceError, pick
+
+        wd = self.project(payload.get("project"))
+        rd = self.run_dir(wd, payload.get("run"))
+        t = worktree.find(wd, rd.name)
+        if t is not None and t.status != worktree.OPEN:
+            raise ApiError(400, "이미 병합하거나 버린 실행입니다.")
+        code = self.code_dir(rd)
+        self._ensure_not_busy(code)
+        try:
+            return pick(code, rd, str(payload.get("draft") or ""))
+        except (RaceError, GitError) as e:
+            raise ApiError(409, str(e)) from e
+
     # ================================================================ notes (DESIGN.md 36.14)
     def notes(self, project: str | None, run_id: str | None) -> dict[str, Any]:
         wd = self.project(project)
@@ -835,6 +872,9 @@ class Dashboard:
 
     def _resume_hint(self, st: RunState, wd: Path) -> dict[str, Any]:
         cur = int(st.config.get("max_review") or 0)
+        if st.stop_reason == "picked":           # 사람이 다른 초안을 고름 (36.15)
+            from tenure.orchestrator import PICKED_NO_RESUME
+            return {"possible": False, "needs_max_review": False, "current_max_review": cur, "reason": PICKED_NO_RESUME}
         if st.status == DONE_UNAPPROVED and st.stop_reason in ("stalled", "arbiter_final") and st.round < cur:
             live = self._live(wd)
             if live and live.get("run_id") == st.run_id:
@@ -1044,7 +1084,7 @@ API_METHODS: dict[str, Any] = {
     "console": lambda d, a: d.console(a.get("project"), a.get("run"), int(a.get("offset") or 0)),
     "design": lambda d, a: d.design(a.get("project"), a.get("run"), a.get("which") or "current"),
     "commits": lambda d, a: d.commits(a.get("project"), a.get("run")),
-    "diff": lambda d, a: d.diff(a.get("project"), a.get("run"), a.get("commit") or None),
+    "diff": lambda d, a: d.diff(a.get("project"), a.get("run"), a.get("commit") or None, a.get("draft") or None),
     "jobs": lambda d, a: {"jobs": d.jobs_list()},
     "start_run": lambda d, a: d.start_run(a),
     "resume": lambda d, a: d.resume(a),
@@ -1067,6 +1107,7 @@ API_METHODS: dict[str, Any] = {
     "note_add": lambda d, a: d.note_add(a),
     "note_delete": lambda d, a: d.note_delete(a),
     "notes_send": lambda d, a: d.followup(a, "notes"),
+    "pick": lambda d, a: d.pick(a),
 }
 
 

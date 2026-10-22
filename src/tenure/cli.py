@@ -106,6 +106,11 @@ def build_parser() -> argparse.ArgumentParser:
     _add_workdir(p_discard)
     p_discard.add_argument("--run", metavar="RUN_ID", required=True, help="버릴 실행 ID")
     p_discard.set_defaults(func=cmd_discard)
+    p_pick = sub.add_parser("pick", help="경쟁 초안 중 다른 초안으로 바꿈 (끝난 race 실행, 바꾸기 전 상태는 브랜치로 남음)")
+    _add_workdir(p_pick)
+    p_pick.add_argument("--run", metavar="RUN_ID", required=True, help="실행 ID")
+    p_pick.add_argument("--draft", required=True, metavar="ROLE", help="고를 초안의 역할 이름 (예: codex)")
+    p_pick.set_defaults(func=cmd_pick)
     for name, help_ in (("resolve", "기준 브랜치와의 충돌을 구현 담당에게 풀게 함 (worktree 실행)"),
                         ("notes", "변경 사항의 줄 메모를 구현 담당에게 보내 고치게 함")):
         p_f = sub.add_parser(name, help=help_)
@@ -282,6 +287,22 @@ def cmd_discard(args: argparse.Namespace) -> int:
     except merge.MergeError as e:
         raise OrchestratorError(str(e)) from e
     print(f"버림: {args.run} (브랜치 {res['branch']} 는 남김)" + (f", 변경은 {res['patch']}" if res["patch"] else ""))
+    return EXIT_OK
+
+
+def cmd_pick(args: argparse.Namespace) -> int:
+    from tenure.phases.race import RaceError, pick
+    from tenure.worktree import code_dir
+
+    project = Path(args.workdir).expanduser().resolve()
+    run_dir = next((d for d in all_run_dirs(project) if d.name == args.run), None)
+    if run_dir is None:
+        raise OrchestratorError(f"실행 기록을 찾을 수 없습니다: {args.run}")
+    try:
+        res = pick(code_dir(run_dir), run_dir, args.draft)
+    except RaceError as e:
+        raise OrchestratorError(str(e)) from e
+    print(f"{res['role']} 초안으로 바꿈 ({res['branch']}), 이전 상태는 브랜치 {res['kept']} 에 남김 · 상태 {res['status']}")
     return EXIT_OK
 
 

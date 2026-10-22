@@ -96,6 +96,7 @@ class RunState:
     test_guard: dict[str, dict] = field(default_factory=dict)         # round → 테스트 변경 경고 (DESIGN.md 24.1)
     route: dict | None = None                                         # auto 가 고른 워크플로와 이유 (36.5)
     seen_at: str | None = None                                        # 화면에서 끝난 실행을 연 시각 (36.3.1)
+    race: dict | None = None                                          # 경쟁 초안: 초안별 결과·승자·이유 (36.15)
     followups: list[dict] = field(default_factory=list)              # 끝난 뒤 덧붙인 라운드(충돌 해결·줄 메모, 36.14)
     worktree: dict | None = None                                      # worktree 에서 돌면 {project, branch, base_branch, base_commit} (36.14)
     limit_wait: dict | None = None                                    # 한도 대기 중이면 {agent, step, until, reason} (25.1)

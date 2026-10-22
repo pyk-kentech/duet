@@ -6,10 +6,11 @@ import { Diff, Markdown } from "../lib/markdown";
 import { ACTIVITY, OUTCOME, PHASE, STATUS, STEP } from "../lib/labels";
 import { hrefProject, hrefRun } from "../lib/router";
 import { AgentTag, ErrorBox, Modal, StateDot, StatusBadge, TestTag, useUi, Verdict } from "../ui";
+import { DraftsPanel } from "./Drafts";
 import { MergePanel, Tree, TREE_STATUS } from "./Merge";
 import { Note, NotedDiff } from "./NotedDiff";
 
-interface Entry { name: string; seq: number; label: string; meta: Record<string, string>; verdict?: { status: string; must_fix?: number } | null }
+interface Entry { name: string; seq: number; label: string; meta: Record<string, string>; verdict?: { status: string; must_fix?: number } | null; draft?: string }
 interface RunData {
   project: string; run_dir: string; state: any; entries: Entry[]; live: boolean; live_pid: number | null; stale: boolean;
   console_size: number; current_call: { agent: string; step: string; started: string; elapsed_sec: number; retry?: number } | null;
@@ -18,7 +19,7 @@ interface RunData {
   code_dir?: string; worktree?: Tree | null; notes_open?: number;
 }
 const LIVE = "__live__";
-const TABS: [string, string][] = [["talk", "대화"], ["issues", "지적"], ["console", "콘솔"], ["changes", "변경 사항"], ["design", "설계 문서"]];
+const TABS: [string, string][] = [["talk", "대화"], ["drafts", "초안 비교"], ["issues", "지적"], ["console", "콘솔"], ["changes", "변경 사항"], ["design", "설계 문서"]];
 
 export default function RunView({ route, onSeen }: { route: { machine: string; project: string; run: string; tab: string }; onSeen: () => void }) {
   const m = route.machine;
@@ -78,14 +79,16 @@ export default function RunView({ route, onSeen }: { route: { machine: string; p
       <ResultCard data={data} m={m} q={q} onReload={load} />
       {data.worktree ? <MergePanel m={m} q={q} tree={data.worktree} st={st} live={data.live} onReload={load} /> : null}
       <nav className="tabs">
-        {TABS.filter(([k]) => k !== "issues" || hasFindings(st)).map(([k, label]) => (
+        {TABS.filter(([k]) => (k !== "issues" || hasFindings(st)) && (k !== "drafts" || st.race)).map(([k, label]) => (
           <a key={k} href={hrefRun(m, route.project, route.run, k)} className={tab === k ? "active" : undefined}>
             {label}{k === "talk" ? <span className="count">{data.entries.length}</span> : k === "issues" && (st.issues || []).length ? <span className="count">{st.issues.length}</span>
               : k === "changes" && data.notes_open ? <span className="count" title="보내지 않은 줄 메모">메모 {data.notes_open}</span> : null}
           </a>
         ))}
       </nav>
-      {tab === "issues" ? <Issues st={st} /> : tab === "console" ? <ConsolePanel m={m} q={q} live={data.live} />
+      {tab === "drafts" && st.race ? <DraftsPanel m={m} q={q} race={st.race} roles={roleAgents(st)} onReload={load}
+                                                  canPick={!data.live && ["done_approved", "done_unapproved"].includes(st.status) && (!data.worktree || data.worktree.status === "open")} />
+        : tab === "issues" ? <Issues st={st} /> : tab === "console" ? <ConsolePanel m={m} q={q} live={data.live} />
         : tab === "changes" ? <Changes m={m} q={q} live={data.live} finished={["done_approved", "done_unapproved", "done_design"].includes(st.status)}
                                        editable={!data.worktree || data.worktree.status === "open"} onReload={load} />
         : tab === "design" ? <DesignPanel m={m} q={q} />
@@ -101,6 +104,12 @@ function Crumbs({ m, project, run }: { m: string; project: string; run: string }
       <a href={hrefProject(m, project)}>{baseName(project)}</a><span className="sep">/</span><span className="mono">{run}</span>
     </div>
   );
+}
+
+function roleAgents(s: any): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, r] of Object.entries<any>(s.workflow?.roles || {})) out[name] = r.agent || name;
+  return out;
 }
 
 function hasFindings(s: any) {
@@ -194,7 +203,7 @@ function Rounds({ data }: { data: RunData }) {
     const s = e.meta.step;
     const failed = e.meta.ok === "false" || e.label.endsWith("_failed");
     if (failed && s !== "test") continue;
-    if (s === "implement" || s === "fix") items.push(<span key={e.name} className="chip">{e.meta.round}회차 {STEP[s]}</span>);
+    if (s === "implement" || s === "fix") items.push(<span key={e.name} className="chip">{e.draft ? `초안 ${e.draft} · ` : ""}{e.meta.round}회차 {STEP[s]}</span>);
     else if (s === "test") items.push(<span key={e.name} className="row" style={{ gap: 4, display: "inline-flex" }}>→ <TestTag status={e.meta.test_status} /></span>);
     else if (s === "review") {
       const h = hist[e.name];
@@ -258,7 +267,8 @@ function Talk({ data, m, q, events }: { data: RunData; m: string; q: Record<stri
               <span className="time">{String(e.seq).padStart(2, "0")}</span>
               <StateDot state={failed ? (outcome === "blocked" ? "blocked" : "failed") : "idle"} title={outcome ? OUTCOME[outcome] : undefined} />
               <div style={{ minWidth: 0 }}>
-                <div className="row"><AgentTag name={meta.agent} role={meta.role} /><b className="ellipsis">{STEP[meta.step] || meta.step}</b></div>
+                <div className="row"><AgentTag name={meta.agent} role={meta.role} /><b className="ellipsis">{STEP[meta.step] || meta.step}</b>
+                  {e.draft ? <span className="badge info" style={{ height: 18 }}>초안 {e.draft}</span> : null}</div>
                 <div className="meta">
                   {meta.round && meta.round !== "0" ? `${meta.round}회차 · ` : ""}
                   {failed ? `${meta.reason || (meta.rate_limited === "true" ? "한도 도달" : meta.timed_out === "true" ? "시간 초과" : `실패 (exit ${meta.exit_code})`)} · ` : ""}

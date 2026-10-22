@@ -237,3 +237,5 @@ input:focus, select:focus, textarea:focus, .btn:focus-visible, a:focus-visible {
 /* 검은 Codex 로고는 어두운 테마에서 뒤집는다 */
 :root[data-theme="dark"] img[src="/logos/codex.svg"] { filter: invert(1); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) img[src="/logos/codex.svg"] { filter: invert(1); } }
+/* 경쟁 초안 비교 (36.15) */
+.draft-current { outline: 2px solid color-mix(in srgb, var(--ok) 55%, transparent); outline-offset: -1px; }

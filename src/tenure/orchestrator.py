@@ -257,6 +257,8 @@ class Orchestrator:
         state = RunState.load(run_dir)
         prev_max = int(state.config.get("max_review") or 0)
 
+        if state.stop_reason == "picked":
+            raise OrchestratorError(PICKED_NO_RESUME)
         stalled_early = (state.status == DONE_UNAPPROVED and state.stop_reason in ("stalled", "arbiter_final")
                          and state.round < prev_max)
         if state.status == DONE_UNAPPROVED and not stalled_early:
@@ -560,6 +562,7 @@ class Orchestrator:
             raise OrchestratorError(f"저장된 워크플로를 읽을 수 없습니다: {e}") from e
         build = wf.first("build")
         implementer = build.implementer if build is not None and build.implementer else cfg.implementer
+        implementer = (state.race or {}).get("picked") or (state.race or {}).get("winner") or implementer   # 경쟁 초안이면 채택된 쪽 (36.15)
         agents = self._make_agents(cfg, use_mock, wf)
         with self._locked(workdir, kind) as lock:
             state = RunState.load(run_dir)
@@ -652,6 +655,10 @@ class Orchestrator:
         if run_dir is None:
             raise OrchestratorError(f"{workdir} 에 이어할 실행 기록이 없습니다 (.tenure/runs 비어 있음).")
         return run_dir
+
+
+PICKED_NO_RESUME = ("다른 초안으로 바꾼 실행은 이어할 수 없습니다 (라운드 기록이 처음 채택된 초안 기준). "
+                    "줄 메모로 고치거나 새 실행을 시작하세요.")
 
 
 class _ConsoleScope:

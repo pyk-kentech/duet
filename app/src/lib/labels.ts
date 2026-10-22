@@ -8,7 +8,7 @@ export const STATUS: Record<string, string> = {
 
 export const STEP: Record<string, string> = {
   propose: "설계안", critique: "비판·개정", synthesize: "설계 종합", implement: "구현", fix: "리뷰 반영",
-  review: "리뷰", report: "결과 요약", explore: "사전 조사", audit: "감사", arbitrate: "중재", test: "테스트",
+  review: "리뷰", report: "결과 요약", race: "경쟁 초안", resolve: "충돌 해결", notes: "메모 반영", explore: "사전 조사", audit: "감사", arbitrate: "중재", test: "테스트",
   repro: "재현 테스트", testguard: "테스트 변경 감지", dedup: "중복 확인", base: "기준 커밋", stalled: "수렴 안 됨",
   design_only: "설계만", approved: "승인", unapproved: "미승인", route: "경로 선택",
 };

@@ -119,6 +119,10 @@ tenure resolve --workdir ./x --run <id>          # 기준 브랜치와의 충돌
 tenure notes --workdir ./x --run <id>            # 화면에서 단 줄 메모를 구현 담당에게 보내 고치게 함
 tenure discard --workdir ./x --run <id>          # 버리기 (변경은 .tenure/discarded/ 에 패치로 남음)
 
+# 경쟁 초안: Claude·Codex 가 각자 구현 → 서로 리뷰 → 판정 → 승자가 이어서 (비용은 quick 의 약 두 배)
+tenure run "..." --workdir ./x --workflow race
+tenure pick --workdir ./x --run <id> --draft codex   # 판정과 다른 초안을 고르기 (이전 상태는 브랜치로 남음)
+
 # CLI 없이 흐름 테스트
 tenure run "..." --workdir ./x --mock
 ```

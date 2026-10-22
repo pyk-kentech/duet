@@ -102,6 +102,7 @@ class BuildPhase:
         self.state = ctx.state
         self.cfg = ctx.cfg
         self.ws = workspace or Workspace(ctx.workdir)
+        self.step = step
         self.implementer = step.implementer if step is not None and step.implementer else ctx.cfg.implementer
         self.reviewers: list[str] = list(step.reviewers) if step is not None else [ctx.cfg.reviewer]
         self.arbiter_role = self._pick_arbiter(step)
@@ -124,6 +125,10 @@ class BuildPhase:
             ctx.log(f"기준 커밋: {st.base_commit}")
         base = st.base_commit
         assert base
+
+        if self.step is not None and self.step.rivals:     # 경쟁 초안 (DESIGN.md 36.15)
+            if self._race(self.step.rivals[0]):
+                return True
 
         for i in range(1, self.max_review + 1):
             impl_key, review_key = f"impl:{i}", f"review:{i}"
@@ -231,6 +236,26 @@ class BuildPhase:
         st.stop_reason = "max_review"
         ctx.set_position(PHASE_DONE, "unapproved", self.max_review)
         ctx.save()
+        return False
+
+    # ---------------------------------------------------------------- race (DESIGN.md 36.15)
+    def _race(self, rival: str) -> bool:
+        """초안 둘을 돌려 승자를 고르고, 이후 라운드를 승자=구현·패자=리뷰로 잇게 한다. 승자 초안이 승인이면 True."""
+        from tenure.phases.race import Race
+
+        ctx, st = self.ctx, self.state
+        if not st.is_done("race"):
+            ctx.set_position(PHASE_BUILD, "race", 1)
+            ctx.save()
+            Race(self, rival).run()
+        winner, loser = st.race["winner"], st.race["loser"]
+        self.implementer, self.reviewers, self.reviewer, self.multi = winner, [loser], loser, False
+        if len(st.review_history) == 1 and st.review_history[0].get("approved"):
+            st.status = DONE_APPROVED
+            st.stop_reason = None
+            ctx.set_position(PHASE_DONE, "approved", 1)
+            ctx.save()
+            return True
         return False
 
     # ---------------------------------------------------------------- arbiter (DESIGN.md 23장)
