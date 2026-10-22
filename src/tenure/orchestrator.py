@@ -12,12 +12,13 @@ BuildPhase
 from __future__ import annotations
 
 import datetime as dt
+import shutil
 import sys
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Any, Callable, Mapping
 
-from tenure import router
+from tenure import router, worktree
 from tenure.config import AUTO_WORKFLOW
 from tenure import events
 from tenure.agents import (AgentAdapter, AgentNotAvailable, ClaudeCodeAdapter, CodexAdapter, MockAdapter,
@@ -45,13 +46,11 @@ from tenure.state import (
     STOPPED_USER,
     RunState,
     create_run_dir,
-    latest_run_dir,
-    list_run_dirs,
 )
 from tenure import attachments
 from tenure.transcript import Transcript
 from tenure.workflow import SOURCE_LABELS, Workflow, WorkflowError, classic, load_workflow
-from tenure.workspace import GitError, WorkdirRefused, check_workdir
+from tenure.workspace import GitError, WorkdirRefused, Workspace, check_workdir
 
 Printer = Callable[[str], None]
 
@@ -92,6 +91,7 @@ class RunOptions:
     overrides: dict[str, Any] = field(default_factory=dict)   # CONFIG_KEYS 중 CLI 로 지정된 것
     register: bool = True     # UI 프로젝트 목록에 등록 (벤치마크 실행은 안 함, DESIGN.md 28.2)
     attachments: list[Path] = field(default_factory=list)     # 과제 첨부 (DESIGN.md 33.3)
+    run_id: str | None = None   # 화면이 미리 정한 실행 id (여러 작업을 동시에 띄워도 어느 실행인지 알게, 36.14)
 
 
 @dataclass
@@ -173,16 +173,31 @@ class Orchestrator:
             raise OrchestratorError(f"워크플로 {wf.name} 에는 설계 단계가 없어 {workdir / DESIGN_FILENAME} 이 필요합니다.")
         agents = self._make_agents(cfg, opts.mock, wf)
 
+        project, tree = workdir, None
+        try:
+            # 설계만 하는 실행은 프로젝트 폴더에서 (DESIGN.md 를 다음 실행이 바로 쓰게, 36.14)
+            if not opts.design_only and worktree.should_use(workdir, cfg.worktree):
+                tree = worktree.create(project, worktree.unique_run_id(project, opts.run_id))
+                workdir = Path(tree.path)
+                self._carry_design(project, workdir)
+            elif opts.run_id:
+                worktree.unique_run_id(project, opts.run_id, git=False)
+        except worktree.WorktreeError as e:
+            raise OrchestratorError(str(e)) from e
+
         with self._locked(workdir, "run") as lock:
             if opts.register:
-                register_quietly(workdir)
-            run_dir = create_run_dir(workdir)
+                register_quietly(project)
+            run_dir = create_run_dir(workdir, tree.run_id if tree else opts.run_id)
             lock.set_run(run_dir.name)
             state = RunState(run_id=run_dir.name, task=opts.task, config=self._snapshot(cfg, opts),
                              workflow=None if wf.is_classic else wf.to_dict())
             state.attachments = attachments.copy_into(run_dir, attach)
             if route is not None:
                 state.route = route.to_dict()
+            if tree is not None:
+                state.worktree = {"project": str(project), "branch": tree.branch, "base_branch": tree.base_branch,
+                                  "base_commit": tree.base_commit}
             build = wf.first("build")
             if build is not None and build.design == "task" and wf.first("debate") is None:
                 task_doc = run_dir / TASK_DOC                       # 과제 원문을 설계로 (DESIGN.md 36.5)
@@ -196,6 +211,11 @@ class Orchestrator:
             state.save(run_dir)
             with self._console_to(run_dir):
                 self.log(f"실행 시작: {run_dir.name}  (기록: {run_dir})")
+                if tree is not None:
+                    self.log(f"worktree: {tree.path} · 브랜치 {tree.branch} (기준 {tree.base_branch or tree.base_commit[:7]})"
+                             + (f" · 복사한 무시 파일 {len(tree.note['included'])}개" if tree.note.get("included") else ""))
+                    if opts.force:
+                        self.log("주의: 프로젝트 폴더의 커밋 안 한 변경은 worktree 에 들어가지 않습니다.")
                 self.log(f"권한: {cfg.access} · 웹 검색 {cfg.web_search} · 브라우저 확인 {cfg.browser_check}"
                          + (f" · 첨부 {len(state.attachments)}개" if state.attachments else ""))
                 if wf.is_classic:
@@ -218,11 +238,22 @@ class Orchestrator:
                 self._log_env_drops(cfg, opts.mock)
                 return self._execute(workdir, run_dir, cfg, agents, state, wf)
 
+    @staticmethod
+    def _carry_design(project: Path, tree_dir: Path) -> None:
+        """프로젝트의 DESIGN.md 가 커밋 안 된 상태(설계 생략 등)면 worktree 로 가져간다.
+
+        내용 비교는 하지 않는다: 윈도우의 autocrlf 체크아웃은 줄 끝만 달라 늘 다르게 보인다.
+        """
+        src = project / DESIGN_FILENAME
+        if src.is_file() and Workspace(project).git("status", "--porcelain", "--", DESIGN_FILENAME).strip():
+            shutil.copy2(src, tree_dir / DESIGN_FILENAME)
+
     # ---------------------------------------------------------------- resume
     def resume(self, workdir: Path, run_id: str | None = None,
                max_review: int | None = None) -> RunOutcome:
         workdir = Path(workdir).expanduser().resolve()
         run_dir = self._find_run(workdir, run_id)
+        workdir = worktree.code_dir(run_dir)          # worktree 실행이면 그 worktree 에서 이어 간다
         state = RunState.load(run_dir)
         prev_max = int(state.config.get("max_review") or 0)
 
@@ -490,6 +521,7 @@ class Orchestrator:
         """끝난 실행의 결과 요약을 (다시) 만든다: `tenure report` (DESIGN.md 32.3)."""
         workdir = Path(workdir).expanduser().resolve()
         run_dir = self._find_run(workdir, run_id)
+        workdir = worktree.code_dir(run_dir)
         state = RunState.load(run_dir)
         if state.status not in (DONE_APPROVED, DONE_UNAPPROVED):
             raise OrchestratorError(f"승인·미승인으로 끝난 실행만 요약할 수 있습니다 ({state.run_id}: status={state.status}).")
@@ -506,6 +538,54 @@ class Orchestrator:
             with self._console_to(run_dir):
                 self._report(ctx, run_dir, force=True)
         return run_dir / state.report if state.report else None
+
+    def followup(self, workdir: Path, run_id: str | None, kind: str, *, mock: bool | None = None) -> dict:
+        """끝난 실행에 한 번의 구현 라운드를 덧붙인다: `tenure resolve` · `tenure notes` (DESIGN.md 36.14)."""
+        from tenure.phases.followup import NOTES, RESOLVE, FollowupPhase
+
+        project = Path(workdir).expanduser().resolve()
+        run_dir = self._find_run(project, run_id)
+        workdir = worktree.code_dir(run_dir)
+        state = RunState.load(run_dir)
+        if not state.finished:
+            raise OrchestratorError(f"끝난 실행에만 덧붙일 수 있습니다 ({state.run_id}: status={state.status}).")
+        base_branch = (state.worktree or {}).get("base_branch")
+        if kind == RESOLVE and not (worktree.is_tenure_worktree(workdir) and base_branch):
+            raise OrchestratorError("충돌 해결은 기준 브랜치가 있는 worktree 실행에서만 할 수 있습니다.")
+        cfg = self._load_config(workdir, {k: state.config.get(k) for k in CONFIG_KEYS})
+        use_mock = bool(state.config.get("mock")) if mock is None else mock
+        try:
+            wf = Workflow.from_dict(state.workflow) if state.workflow else classic(cfg)
+        except WorkflowError as e:
+            raise OrchestratorError(f"저장된 워크플로를 읽을 수 없습니다: {e}") from e
+        build = wf.first("build")
+        implementer = build.implementer if build is not None and build.implementer else cfg.implementer
+        agents = self._make_agents(cfg, use_mock, wf)
+        with self._locked(workdir, kind) as lock:
+            state = RunState.load(run_dir)
+            lock.set_run(run_dir.name)
+            ctx = PhaseContext(task=state.task, workdir=workdir, cfg=cfg, agents=agents, state=state,
+                               transcript=Transcript(run_dir), run_dir=run_dir, log=self.log,
+                               workflow=None if wf.is_classic else wf)
+            phase = FollowupPhase(ctx, implementer)
+            with self._console_to(run_dir):
+                self.log(f"후속 라운드 {phase.n}: {'충돌 해결' if kind == RESOLVE else '줄 메모 반영'} ({state.run_id})")
+                keep = (state.status, state.phase, state.step, state.round)
+                try:
+                    if kind == RESOLVE:
+                        rec = phase.resolve(base_branch)
+                    elif kind == NOTES:
+                        rec = phase.send_notes()
+                    else:
+                        raise OrchestratorError(f"알 수 없는 후속 작업: {kind}")
+                except (PhaseStop, GitError) as e:
+                    self.log(f"후속 라운드 실패: {e}")
+                    raise OrchestratorError(str(e)) from e
+                finally:
+                    # 후속 라운드는 실행 상태(승인·미승인)를 바꾸지 않는다
+                    state.status, state.phase, state.step, state.round = keep
+                    state.save(run_dir)
+                return rec
 
     def _add_dedup(self, cfg: Config, mock: bool, agents: Mapping[str, AgentAdapter]) -> Mapping[str, AgentAdapter]:
         """재제기 확인자(DESIGN.md 26.2). 워크플로에 dedup 역할이 있으면 그것, 없으면 설정의 작은 모델."""
@@ -550,7 +630,7 @@ class Orchestrator:
             "test_guard": cfg.test_guard, "claude_sandbox": cfg.claude_sandbox, "spec_gate": cfg.spec_gate,
             "wait_on_limit": cfg.wait_on_limit, "limit_wait_max_min": cfg.limit_wait_max_min,
             "access": cfg.access, "web_search": cfg.web_search, "package_lookup": cfg.package_lookup,
-            "browser_check": cfg.browser_check,
+            "browser_check": cfg.browser_check, "worktree": cfg.worktree,
             "report": cfg.report, "report_agent": cfg.report_agent, "report_model": cfg.report_model,
             "report_effort": cfg.report_effort,
             "dedup": cfg.dedup, "dedup_agent": cfg.dedup_agent, "dedup_model": cfg.dedup_model,
@@ -563,11 +643,12 @@ class Orchestrator:
     @staticmethod
     def _find_run(workdir: Path, run_id: str | None) -> Path:
         if run_id:
-            candidates = [p for p in list_run_dirs(workdir) if p.name == run_id]
+            candidates = [p for p in worktree.all_run_dirs(workdir) if p.name == run_id]
             if not candidates:
                 raise OrchestratorError(f"실행 기록을 찾을 수 없습니다: {run_id}")
             return candidates[0]
-        run_dir = latest_run_dir(workdir)
+        dirs = worktree.all_run_dirs(workdir)
+        run_dir = dirs[-1] if dirs else None
         if run_dir is None:
             raise OrchestratorError(f"{workdir} 에 이어할 실행 기록이 없습니다 (.tenure/runs 비어 있음).")
         return run_dir

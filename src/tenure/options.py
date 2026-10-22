@@ -52,6 +52,9 @@ OPTIONS: tuple[Option, ...] = (
            "bool", "tools"),
     Option("browser_check", "브라우저 확인", "auto: 웹 화면이 있는 프로젝트면 리뷰 때 앱을 띄우고 리뷰어가 필요하면 브라우저로 확인 (33.4).",
            "choice", "tools", ("auto", "off"), run_dialog=True),
+    Option("worktree", "작업마다 worktree", "auto: 커밋이 있는 git 저장소면 실행마다 .tenure/worktrees/<실행 id> 에 브랜치를 따로 만들어 일하고, "
+           "끝나면 병합 준비를 점검해 사람이 합친다. 여러 작업을 동시에 돌릴 수 있다. off: 그 폴더에서 바로 (36.14).",
+           "choice", "run", ("auto", "off")),
     Option("report", "결과 요약", "실행이 끝나면 작은 모델이 만든 것과 실행 방법을 정리한다 (32장).", "bool", "run"),
     Option("report_agent", "결과 요약 CLI", "결과 요약에 쓸 CLI.", "choice", "run", ("claude", "codex")),
     Option("report_model", "결과 요약 모델", "결과 요약 모델(작은 모델 권장).", "text", "run"),

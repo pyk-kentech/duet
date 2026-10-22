@@ -21,6 +21,8 @@ def isolated_tenure_home(tmp_path_factory, monkeypatch) -> Path:
     # 기본 워크플로는 auto(DESIGN.md 36.5)지만, 기존 테스트는 classic 흐름을 가정한다. auto 는 test_m30 이 따로 확인
     import tenure.config as _config
     monkeypatch.setattr(_config, "DEFAULT_WORKFLOW", _config.CLASSIC_WORKFLOW)
+    # worktree 도 기본 auto(36.14)지만 기존 테스트는 그 폴더에서 바로 도는 흐름을 가정한다. test_m32 가 따로 확인
+    monkeypatch.setattr(_config, "DEFAULT_WORKTREE", "off")
     if os.name == "nt":
         monkeypatch.setenv("PYTHONUTF8", "1")      # 테스트가 직접 띄우는 자식 파이썬도 UTF-8 (DESIGN.md 27.7)
     return home

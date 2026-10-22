@@ -103,7 +103,7 @@ def test_duet_report_command(tmp_path: Path, capsys):
 def test_dashboard_make_report(tmp_path: Path, monkeypatch):
     rc, st, rd = run(tmp_path)
     seen = {}
-    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv: seen.update(kind=kind, argv=argv) or {"id": "j"})
+    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv, scope=None: seen.update(kind=kind, argv=argv) or {"id": "j"})
     d = Dashboard(extra_projects=[str(tmp_path / "w")]) if "extra_projects" in Dashboard.__init__.__code__.co_varnames \
         else Dashboard()
     from tenure.registry import Registry

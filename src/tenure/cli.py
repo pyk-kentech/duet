@@ -12,7 +12,8 @@ from typing import Sequence
 from tenure import __version__
 from tenure.config import ConfigError, parse_set_step, parse_step_effort, parse_step_model
 from tenure.orchestrator import Orchestrator, OrchestratorError, RunOptions
-from tenure.state import RunState, latest_run_dir, list_run_dirs
+from tenure.state import RunState
+from tenure.worktree import all_run_dirs
 from tenure.transcript import Transcript
 
 EXIT_OK = 0
@@ -71,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
                        help="과제와 함께 줄 파일(여러 번): 화면 시안·참고 문서·스크린샷. 최대 10개·합 20MB")
     p_run.add_argument("--set-step", action="append", default=None, metavar="ROLE.STEP.KEY=VALUE",
                        help="칸(역할·단계) 하나의 모델·강도 (여러 번). 예: worker.part.model=claude-haiku-5-5, codex.review.effort=xhigh")
+    p_run.add_argument("--run-id", metavar="ID", help="실행 id 를 미리 정함 (화면이 쓴다. 기본: 시각)")
     p_run.set_defaults(func=cmd_run)
 
     p_resume = sub.add_parser("resume", help="중단된 마지막 실행을 이어서 진행")
@@ -92,6 +94,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_log.add_argument("--run", metavar="RUN_ID", help="특정 실행 ID (기본: 마지막 실행)")
     p_log.add_argument("--all", action="store_true", help="모든 실행을 한 줄씩 나열")
     p_log.set_defaults(func=cmd_log)
+
+    # worktree 실행의 병합 (DESIGN.md 36.14)
+    p_merge = sub.add_parser("merge", help="worktree 실행을 기준 브랜치로 병합 (먼저 점검, 막는 항목이 있으면 안 함)")
+    _add_workdir(p_merge)
+    p_merge.add_argument("--run", metavar="RUN_ID", required=True, help="병합할 실행 ID")
+    p_merge.add_argument("--mode", choices=["squash", "merge"], default="squash", help="squash(기본, 한 커밋) 또는 merge(--no-ff)")
+    p_merge.add_argument("--check", action="store_true", help="병합하지 않고 점검 결과만 보기")
+    p_merge.set_defaults(func=cmd_merge)
+    p_discard = sub.add_parser("discard", help="worktree 실행을 버림 (변경은 .tenure/discarded/ 에 패치로 남고 브랜치는 남음)")
+    _add_workdir(p_discard)
+    p_discard.add_argument("--run", metavar="RUN_ID", required=True, help="버릴 실행 ID")
+    p_discard.set_defaults(func=cmd_discard)
+    for name, help_ in (("resolve", "기준 브랜치와의 충돌을 구현 담당에게 풀게 함 (worktree 실행)"),
+                        ("notes", "변경 사항의 줄 메모를 구현 담당에게 보내 고치게 함")):
+        p_f = sub.add_parser(name, help=help_)
+        _add_workdir(p_f)
+        p_f.add_argument("--run", metavar="RUN_ID", required=True, help="실행 ID")
+        p_f.add_argument("--mock", action="store_true", help="실제 CLI 호출 없이 (기본: 그 실행이 mock 이었는지 따름)")
+        p_f.set_defaults(func=cmd_followup, kind=name)
 
     p_wf = sub.add_parser("workflows", help="워크플로 템플릿 목록 / 자세히 보기")
     p_wf.add_argument("action", nargs="?", choices=["list", "show"], default="list", help="list(기본) 또는 show")
@@ -203,6 +224,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         # --set 은 고급 설정 (DESIGN.md 28.4). 같은 설정의 전용 플래그를 주면 그쪽이 이긴다
         overrides={**assigned, **{k: v for k, v in explicit.items() if v is not None}},
         attachments=[Path(x) for x in (args.attach or [])],
+        run_id=args.run_id,
     )
     return Orchestrator().run(opts).exit_code
 
@@ -228,6 +250,46 @@ def cmd_report(args: argparse.Namespace) -> int:
     print(path.read_text(encoding="utf-8").split("-->", 1)[-1].strip())
     print(f"\n기록: {path}")
     return EXIT_OK
+
+
+# ---------------------------------------------------------------------- merge (DESIGN.md 36.14)
+LEVEL_MARK = {"block": "막음", "warn": "주의", "ok": "통과"}
+
+
+def cmd_merge(args: argparse.Namespace) -> int:
+    from tenure import merge
+
+    project = Path(args.workdir).expanduser().resolve()
+    try:
+        ready = merge.readiness(project, args.run)
+        for c in ready.checks:
+            print(f"  [{LEVEL_MARK[c.level]}] {c.label}" + (f" — {c.detail}" if c.detail else ""))
+        if args.check:
+            print("병합할 수 있습니다." if ready.can_merge else "병합할 수 없습니다.")
+            return EXIT_OK if ready.can_merge else 1
+        res = merge.merge(project, args.run, args.mode)
+    except merge.MergeError as e:
+        raise OrchestratorError(str(e)) from e
+    print(f"병합함: {res['branch']} → {res['into']} ({res['mode']}, 커밋 {res['commit'][:10]})")
+    return EXIT_OK
+
+
+def cmd_discard(args: argparse.Namespace) -> int:
+    from tenure import merge
+
+    try:
+        res = merge.discard(Path(args.workdir).expanduser().resolve(), args.run)
+    except merge.MergeError as e:
+        raise OrchestratorError(str(e)) from e
+    print(f"버림: {args.run} (브랜치 {res['branch']} 는 남김)" + (f", 변경은 {res['patch']}" if res["patch"] else ""))
+    return EXIT_OK
+
+
+def cmd_followup(args: argparse.Namespace) -> int:
+    rec = Orchestrator().followup(Path(args.workdir), args.run, args.kind, mock=True if args.mock else None)
+    tests = rec.get("tests") or {}
+    print(f"후속 라운드 {rec['n']} 끝: 커밋 {rec['commit']}" + (f", 테스트 {tests.get('status')}" if tests else ""))
+    return EXIT_OK if not tests or tests.get("status") == "passed" else 1
 
 
 # ---------------------------------------------------------------------- ui
@@ -391,7 +453,7 @@ def cmd_job(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------- log
 def cmd_log(args: argparse.Namespace) -> int:
     workdir = Path(args.workdir).expanduser().resolve()
-    runs = list_run_dirs(workdir)
+    runs = all_run_dirs(workdir)              # worktree 실행 포함 (36.14)
     if not runs:
         print(f"{workdir} 에 실행 기록이 없습니다.")
         return EXIT_USAGE
@@ -409,8 +471,7 @@ def cmd_log(args: argparse.Namespace) -> int:
             return EXIT_USAGE
         run_dir = matches[0]
     else:
-        run_dir = latest_run_dir(workdir)
-        assert run_dir is not None
+        run_dir = runs[-1]
     st = RunState.load(run_dir)
     print_summary(st, run_dir)
     if args.full:
@@ -478,10 +539,14 @@ def _sigterm_as_interrupt(signum: int, frame: object) -> None:
 
 
 def _utf8_output() -> None:
-    """표준 출력이 파일·파이프면 UTF-8 로 쓴다 (Windows 의 cp949 에서 이모지로 죽지 않게, UI 는 로그를 UTF-8 로 읽는다)."""
+    """표준 출력이 UTF-8 이 아니면 UTF-8 로 쓴다 (Windows 의 cp949 에서 이모지·— 로 죽지 않게, UI 는 로그를 UTF-8 로 읽는다).
+
+    isatty 로 거르지 않는다: Windows 의 NUL 장치는 isatty() 가 참이라 걸러지면 cp949 로 남는다.
+    진짜 콘솔은 파이썬이 이미 UTF-8 로 연다.
+    """
     for stream in (sys.stdout, sys.stderr):
         try:
-            if not stream.isatty() and (stream.encoding or "").lower().replace("-", "") != "utf8":
+            if (stream.encoding or "").lower().replace("-", "") != "utf8":
                 stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError, OSError):
             pass

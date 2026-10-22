@@ -45,6 +45,7 @@ WORKFLOW_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 CLASSIC_WORKFLOW = "classic"
 AUTO_WORKFLOW = "auto"             # 자동 선택 (DESIGN.md 36.5)
 DEFAULT_WORKFLOW = AUTO_WORKFLOW   # 테스트는 conftest 에서 classic 으로 고정
+DEFAULT_WORKTREE = "auto"          # 실행마다 git worktree (DESIGN.md 36.14). 테스트는 conftest 에서 off
 
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9._:\[\]/-]{0,80}$")
 EFFORT_SUGGESTIONS = {
@@ -184,6 +185,8 @@ class Config:
     web_search: str = "on"              # on | off
     package_lookup: bool = True
     browser_check: str = "auto"         # auto | off
+    # 실행마다 git worktree 에서 일한다 (DESIGN.md 36.14): auto | off
+    worktree: str = field(default_factory=lambda: DEFAULT_WORKTREE)
     # 결과 요약: 실행이 끝나면 작은 모델이 만든 것·실행 방법을 정리 (DESIGN.md 32장)
     report: bool = True
     report_agent: str = "claude"
@@ -250,7 +253,7 @@ class Config:
                 or not 1 <= self.limit_wait_max_min <= 7 * 24 * 60):
             raise ConfigError(f"limit_wait_max_min 은 1~10080(분) 사이여야 합니다: {self.limit_wait_max_min}")
         for key, allowed in (("access", ("full", "standard")), ("web_search", ("on", "off")),
-                             ("browser_check", ("auto", "off"))):
+                             ("browser_check", ("auto", "off")), ("worktree", ("auto", "off"))):
             if getattr(self, key) not in allowed:
                 raise ConfigError(f"{key} 값이 잘못됨: {getattr(self, key)!r} (가능: {', '.join(allowed)})")
         for key in ("dedup_agent", "report_agent"):

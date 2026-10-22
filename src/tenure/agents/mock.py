@@ -95,7 +95,11 @@ class MockAdapter:
         if step == "audit":
             return ("## 반드시 고칠 것\n(없음)\n\n<verdict>\nstatus: APPROVED\n"
                     "must_fix: 0\np1: 0\np2: 0\np3: 0\n</verdict>\n")
-        if step in ("implement", "fix"):
+        if step == "resolve":     # 충돌 표시만 걷어 내 양쪽을 다 남긴다 (DESIGN.md 36.14)
+            if req.mode is Mode.WRITE:
+                self._unconflict(req.cwd)
+            return f"{self.name}: 충돌 해결\n"
+        if step in ("implement", "fix", "notes"):
             if req.mode is Mode.WRITE:
                 self._touch(req.cwd)
             return f"{self.name}: {step} 완료\n"
@@ -120,6 +124,21 @@ class MockAdapter:
         if req.mode is Mode.WRITE:
             self._touch(req.cwd)
         return "ok\n"
+
+    @staticmethod
+    def _unconflict(cwd: Path) -> None:
+        for p in Path(cwd).rglob("*"):
+            if not p.is_file() or {".git", ".tenure"} & set(p.relative_to(cwd).parts):
+                continue
+            try:
+                text = p.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if "<<<<<<< " not in text:
+                continue
+            keep = [ln for ln in text.splitlines(keepends=True)
+                    if not ln.startswith(("<<<<<<< ", ">>>>>>> ")) and ln.rstrip("\r\n") != "======="]
+            p.write_text("".join(keep), encoding="utf-8")
 
     def _touch(self, cwd: Path) -> None:
         p = Path(cwd) / self.write_file

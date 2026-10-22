@@ -646,6 +646,14 @@ class Handler(BaseHTTPRequestHandler):
         ("GET", "/api/events"): "events",
         ("POST", "/api/runs/seen"): "mark_seen",
         ("GET", "/api/inbox"): "inbox",
+        ("GET", "/api/merge/check"): "merge_check",
+        ("POST", "/api/actions/merge"): "merge",
+        ("POST", "/api/actions/discard"): "discard",
+        ("POST", "/api/actions/resolve"): "resolve",
+        ("GET", "/api/notes"): "notes",
+        ("POST", "/api/notes"): "note_add",
+        ("DELETE", "/api/notes"): "note_delete",
+        ("POST", "/api/actions/notes"): "notes_send",
     }
 
     def _api(self, method: str, path: str, q: dict[str, str], body: dict[str, Any]) -> Any:

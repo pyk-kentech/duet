@@ -38,14 +38,25 @@ class Workspace:
         self.timeout_sec = timeout_sec
 
     # ---------------------------------------------------------------- git
-    def git(self, *args: str, check: bool = True) -> str:
+    def git(self, *args: str, check: bool = True, as_user: bool = False) -> str:
+        """as_user: 사람이 누른 병합 커밋은 사용자의 git 이름·메일로 (없으면 tenure, DESIGN.md 36.14)."""
+        ident = GIT_IDENTITY
+        if as_user and self._has_user_identity():
+            ident = GIT_IDENTITY[4:]
         try:
-            r = run_process([self.git_bin, *GIT_IDENTITY, *args], cwd=self.workdir, timeout_sec=self.timeout_sec)
+            r = run_process([self.git_bin, *ident, *args], cwd=self.workdir, timeout_sec=self.timeout_sec)
         except ExecutableNotFound as e:
             raise GitError("git 을 찾을 수 없습니다. git 을 설치하세요.") from e
         if check and not r.ok:
             raise GitError(f"git {' '.join(args)} 실패 (exit {r.exit_code}): {r.stderr.strip()[-1000:]}")
         return r.stdout
+
+    def _has_user_identity(self) -> bool:
+        try:
+            r = run_process([self.git_bin, "config", "user.email"], cwd=self.workdir, timeout_sec=self.timeout_sec)
+        except ExecutableNotFound:
+            return False
+        return r.ok and bool(r.stdout.strip())
 
     def is_repo(self) -> bool:
         if not (self.workdir / ".git").exists():

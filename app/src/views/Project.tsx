@@ -6,10 +6,11 @@ import { Markdown } from "../lib/markdown";
 import { PHASE, STEP } from "../lib/labels";
 import { hrefProject, hrefRun } from "../lib/router";
 import { ErrorBox, StateDot, StatusBadge, usePoll, useUi, Verdict } from "../ui";
+import { TREE_STATUS } from "./Merge";
 import type { NewRunInit } from "./NewRun";
 
 interface RunsData {
-  project: string; live: { pid: number; run_id: string } | null; runs: RunSummary[];
+  project: string; live: { pid: number; run_id: string; count?: number } | null; runs: RunSummary[];
   has_design: boolean; defaults: Record<string, any>;
 }
 
@@ -44,7 +45,7 @@ export default function ProjectView({ route, onNewRun, onChanged }: {
   const stop = async () => {
     if (!(await confirm("진행 중인 실행을 멈춥니다. 지금 하던 호출은 끊기고, 나중에 이어하기로 계속할 수 있습니다.", { ok: "중지", danger: true }))) return;
     try {
-      await api("/api/actions/stop", { method: "POST", body: { project: route.project }, machine: m });
+      await api("/api/actions/stop", { method: "POST", body: { project: route.project, run: data?.live?.run_id }, machine: m });
       toast("중지 요청을 보냈습니다.");
     } catch (e) { toast((e as Error).message, true); }
   };
@@ -62,14 +63,14 @@ export default function ProjectView({ route, onNewRun, onChanged }: {
         <div className="row">
           {live ? <button className="btn btn-danger" type="button" onClick={stop}>중지</button> : null}
           <button className="btn" type="button" onClick={remove}>목록에서 제거</button>
-          <button className="btn btn-primary" type="button" disabled={!!live} title={live ? "이 폴더에서 이미 실행 중입니다" : undefined}
+          <button className="btn btn-primary" type="button" title={live ? "git 저장소면 작업마다 worktree 를 따로 만들어 동시에 돌릴 수 있습니다" : undefined}
                   onClick={() => onNewRun({ machine: m, project: route.project, defaults: data?.defaults, hasDesign: data?.has_design })}>새 실행</button>
         </div>
       </div>
       {error ? <ErrorBox error={error} /> : null}
       {live ? (
         <div className="alert alert-info"><span className="spinner" />
-          <span>실행 중: <a href={hrefRun(m, route.project, live.run_id)}>{live.run_id}</a> · pid {live.pid}</span></div>
+          <span>실행 중: <a href={hrefRun(m, route.project, live.run_id)}>{live.run_id}</a> · pid {live.pid}{live.count && live.count > 1 ? ` 외 ${live.count - 1}개` : ""}</span></div>
       ) : null}
       <nav className="tabs">
         <a href={hrefProject(m, route.project, "runs")} className={route.tab === "runs" ? "active" : undefined}>실행 기록<span className="count">{data?.runs.length ?? ""}</span></a>
@@ -82,13 +83,14 @@ export default function ProjectView({ route, onNewRun, onChanged }: {
       ) : (
         <div className="card table-scroll">
           <table className="list">
-            <thead><tr><th></th><th>실행</th><th>상태</th><th>과제</th><th>진행</th><th>판정</th><th>호출</th><th>갱신</th></tr></thead>
+            <thead><tr><th></th><th>실행</th><th>상태</th><th>브랜치</th><th>과제</th><th>진행</th><th>판정</th><th>호출</th><th>갱신</th></tr></thead>
             <tbody>
               {[...data.runs].map((run) => (
                 <tr key={run.run_id} onClick={() => { location.hash = hrefRun(m, route.project, run.run_id); }}>
                   <td><StateDot state={run.live ? "working" : run.activity?.state} /></td>
                   <td className="mono nowrap"><a href={hrefRun(m, route.project, run.run_id)} onClick={(e) => e.stopPropagation()}>{run.run_id}</a></td>
                   <td><StatusBadge status={run.status} live={run.live} stale={run.stale} /></td>
+                  <td className="nowrap small">{run.worktree ? <span title={run.worktree.branch}><span className={`badge ${TREE_STATUS[run.worktree.status].cls}`}>{TREE_STATUS[run.worktree.status].text}</span></span> : <span className="faint">-</span>}</td>
                   <td style={{ maxWidth: 380 }}><div className="ellipsis" title={run.task}>{oneLine(run.task, 90)}</div></td>
                   <td className="nowrap small">{PHASE[run.phase] || run.phase || "-"} · {STEP[run.step] || run.step || "-"}{run.round ? ` · ${run.round}회차` : ""}</td>
                   <td><Verdict v={run.last_verdict ? { status: run.last_verdict } : null} /></td>

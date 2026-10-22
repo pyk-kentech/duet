@@ -6,6 +6,8 @@ import { Diff, Markdown } from "../lib/markdown";
 import { ACTIVITY, OUTCOME, PHASE, STATUS, STEP } from "../lib/labels";
 import { hrefProject, hrefRun } from "../lib/router";
 import { AgentTag, ErrorBox, Modal, StateDot, StatusBadge, TestTag, useUi, Verdict } from "../ui";
+import { MergePanel, Tree, TREE_STATUS } from "./Merge";
+import { Note, NotedDiff } from "./NotedDiff";
 
 interface Entry { name: string; seq: number; label: string; meta: Record<string, string>; verdict?: { status: string; must_fix?: number } | null }
 interface RunData {
@@ -13,6 +15,7 @@ interface RunData {
   console_size: number; current_call: { agent: string; step: string; started: string; elapsed_sec: number; retry?: number } | null;
   resume: { possible: boolean; needs_max_review: boolean; current_max_review: number; reason: string };
   now: string; activity: Activity; last_seq: number;
+  code_dir?: string; worktree?: Tree | null; notes_open?: number;
 }
 const LIVE = "__live__";
 const TABS: [string, string][] = [["talk", "대화"], ["issues", "지적"], ["console", "콘솔"], ["changes", "변경 사항"], ["design", "설계 문서"]];
@@ -64,7 +67,7 @@ export default function RunView({ route, onSeen }: { route: { machine: string; p
   const st = data.state;
   const stop = async () => {
     if (!(await confirm("진행 중인 실행을 멈춥니다. 나중에 이어하기로 계속할 수 있습니다.", { ok: "중지", danger: true }))) return;
-    try { await api("/api/actions/stop", { method: "POST", body: { project: data.project }, machine: m }); toast("중지 요청을 보냈습니다."); }
+    try { await api("/api/actions/stop", { method: "POST", body: { project: data.project, run: st.run_id }, machine: m }); toast("중지 요청을 보냈습니다."); }
     catch (e) { toast((e as Error).message, true); }
   };
   return (
@@ -73,15 +76,19 @@ export default function RunView({ route, onSeen }: { route: { machine: string; p
       {error ? <ErrorBox error={error} /> : null}
       <Head data={data} m={m} onStop={stop} onReload={load} />
       <ResultCard data={data} m={m} q={q} onReload={load} />
+      {data.worktree ? <MergePanel m={m} q={q} tree={data.worktree} st={st} live={data.live} onReload={load} /> : null}
       <nav className="tabs">
         {TABS.filter(([k]) => k !== "issues" || hasFindings(st)).map(([k, label]) => (
           <a key={k} href={hrefRun(m, route.project, route.run, k)} className={tab === k ? "active" : undefined}>
-            {label}{k === "talk" ? <span className="count">{data.entries.length}</span> : k === "issues" && (st.issues || []).length ? <span className="count">{st.issues.length}</span> : null}
+            {label}{k === "talk" ? <span className="count">{data.entries.length}</span> : k === "issues" && (st.issues || []).length ? <span className="count">{st.issues.length}</span>
+              : k === "changes" && data.notes_open ? <span className="count" title="보내지 않은 줄 메모">메모 {data.notes_open}</span> : null}
           </a>
         ))}
       </nav>
       {tab === "issues" ? <Issues st={st} /> : tab === "console" ? <ConsolePanel m={m} q={q} live={data.live} />
-        : tab === "changes" ? <Changes m={m} q={q} live={data.live} /> : tab === "design" ? <DesignPanel m={m} q={q} />
+        : tab === "changes" ? <Changes m={m} q={q} live={data.live} finished={["done_approved", "done_unapproved", "done_design"].includes(st.status)}
+                                       editable={!data.worktree || data.worktree.status === "open"} onReload={load} />
+        : tab === "design" ? <DesignPanel m={m} q={q} />
         : <Talk data={data} m={m} q={q} events={events} />}
     </div>
   );
@@ -159,6 +166,8 @@ function Head({ data, m, onStop, onReload }: { data: RunData; m: string; onStop:
         {c.web_search === "on" ? <span className="chip">웹 검색</span> : null}
         {(st.attachments || []).length ? <span className="chip" title={st.attachments.join("\n")}>첨부 {st.attachments.length}개</span> : null}
         {c.mock ? <span className="chip">mock</span> : null}
+        {data.worktree ? <span className="chip" title={data.code_dir}>브랜치 <b className="mono">{data.worktree.branch}</b>
+          <span className={`badge ${TREE_STATUS[data.worktree.status].cls}`} style={{ height: 18 }}>{TREE_STATUS[data.worktree.status].text}</span></span> : null}
         {st.base_commit ? <span className="chip">기준 <b className="mono">{st.base_commit}</b></span> : null}
         <span className="chip">호출 {(st.calls || []).length}회 · {fmtDur(totalSec)}</span>
         {Object.entries(totals).map(([a, t]) => (
@@ -453,35 +462,82 @@ function ConsolePanel({ m, q, live }: { m: string; q: Record<string, string>; li
 }
 
 // ---------------------------------------------------------------- 변경 사항
-function Changes({ m, q, live }: { m: string; q: Record<string, string>; live: boolean }) {
+function Changes({ m, q, live, finished, editable, onReload }: {
+  m: string; q: Record<string, string>; live: boolean; finished: boolean; editable: boolean; onReload: () => void;
+}) {
+  const { toast, confirm } = useUi();
   const [commits, setCommits] = useState<{ base: string | null; commits: { sha: string; short: string; subject: string; date: string }[] } | null>(null);
   const [sel, setSel] = useState("");
   const [diff, setDiff] = useState<{ text: string; truncated: boolean; title: string } | null>(null);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const loadNotes = useCallback(() => {
+    api<{ notes: Note[] }>("/api/notes", { query: q, machine: m }).then((r) => setNotes(r.notes)).catch(() => {});
+  }, [m, q]);
   useEffect(() => {
     let alive = true;
     const load = () => api("/api/commits", { query: q, machine: m }).then((c) => { if (alive) setCommits(c); }).catch(() => {});
     load();
+    loadNotes();
     const id = live ? window.setInterval(load, 6000) : 0;
     return () => { alive = false; window.clearInterval(id); };
-  }, [m, q, live]);
+  }, [m, q, live, loadNotes]);
   useEffect(() => {
     setDiff(null);
     api("/api/diff", { query: { ...q, commit: sel || undefined }, machine: m }).then(setDiff).catch((e) => setDiff({ text: String(e.message), truncated: false, title: "오류" }));
   }, [m, q, sel, commits?.commits.length]);
+  const add = async (n: { file: string; line: number; side: string; text: string }) => {
+    try { await api("/api/notes", { method: "POST", body: { ...q, ...n }, machine: m }); loadNotes(); onReload(); return true; }
+    catch (e) { toast((e as Error).message, true); return false; }
+  };
+  const del = async (id: string) => {
+    try { await api("/api/notes", { method: "DELETE", query: { ...q, id }, machine: m }); loadNotes(); onReload(); }
+    catch (e) { toast((e as Error).message, true); }
+  };
+  const open = notes.filter((n) => n.status === "open");
+  const send = async () => {
+    const stale = open.filter((n) => n.stale).length;
+    const msg = `열린 메모 ${open.length}개를 구현 담당에게 보내 고치게 하고, 커밋·테스트를 돌립니다. 에이전트를 한 번 부릅니다.`
+      + (stale ? `\n\n그중 ${stale}개는 메모를 단 뒤 줄이 바뀌었습니다(오래됨).` : "") + "\n다시 리뷰할지는 끝난 뒤 정합니다.";
+    if (!(await confirm(msg, { ok: "보내기" }))) return;
+    try {
+      await api("/api/actions/notes", { method: "POST", body: q, machine: m });
+      toast("메모를 보냈습니다. 잠시 뒤 진행 상황이 보입니다.");
+      window.setTimeout(onReload, 1200);
+    } catch (e) { toast((e as Error).message, true); }
+  };
+  const canNote = editable && !live && sel === "";
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 320px) 1fr", gap: 12, alignItems: "start" }}>
-      <div className="card timeline">
-        <div className={`tl-item clickable${sel === "" ? " tl-live" : ""}`} style={{ gridTemplateColumns: "1fr" }} onClick={() => setSel("")}>
-          <div><b>기준 대비 전체</b><div className="meta">리뷰어가 받는 diff</div></div></div>
-        {(commits?.commits || []).map((c) => (
-          <div key={c.sha} className={`tl-item clickable${sel === c.sha ? " tl-live" : ""}`} style={{ gridTemplateColumns: "64px 1fr" }} onClick={() => setSel(c.sha)}>
-            <span className="time">{c.short}</span><div className="ellipsis" title={c.subject}>{c.subject}</div>
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 320px) minmax(0, 1fr)", gap: 12, alignItems: "start" }}>
+      <div className="col" style={{ gap: 12 }}>
+        <div className="card timeline">
+          <div className={`tl-item clickable${sel === "" ? " tl-live" : ""}`} style={{ gridTemplateColumns: "1fr" }} onClick={() => setSel("")}>
+            <div><b>기준 대비 전체</b><div className="meta">리뷰어가 받는 diff · 줄을 눌러 메모</div></div></div>
+          {(commits?.commits || []).map((c) => (
+            <div key={c.sha} className={`tl-item clickable${sel === c.sha ? " tl-live" : ""}`} style={{ gridTemplateColumns: "64px 1fr" }} onClick={() => setSel(c.sha)}>
+              <span className="time">{c.short}</span><div className="ellipsis" title={c.subject}>{c.subject}</div>
+            </div>
+          ))}
+        </div>
+        {notes.length ? (
+          <div className="card card-pad col" style={{ gap: 8 }}>
+            <div className="row"><b>줄 메모</b><span className="faint small">열림 {open.length} · 보냄 {notes.length - open.length}</span></div>
+            {notes.map((n) => (
+              <div key={n.id} className="small" style={{ opacity: n.status === "sent" ? 0.6 : 1 }}>
+                <span className="mono">{n.file}:{n.line}</span>{n.side === "old" ? <span className="faint"> (바뀌기 전)</span> : null}
+                {n.stale ? <span className="badge warn" style={{ marginLeft: 6, height: 18 }}>오래됨</span> : null}
+                <div className="ellipsis" title={n.text}>{n.text}</div>
+              </div>
+            ))}
+            <button className="btn btn-primary btn-sm btn-block" type="button" onClick={send} disabled={!open.length || live || !finished}
+                    title={!finished ? "실행이 끝난 뒤 보낼 수 있습니다" : live ? "진행 중입니다" : undefined}>에이전트에게 보내기 ({open.length})</button>
           </div>
-        ))}
+        ) : null}
       </div>
       <section className="card">
         <div className="dialog-head"><b className="ellipsis">{diff?.title || "불러오는 중…"}</b>{diff?.truncated ? <span className="badge warn">일부만</span> : null}</div>
-        {diff ? <Diff text={diff.text} /> : <div className="empty"><span className="spinner" /></div>}
+        {!diff ? <div className="empty"><span className="spinner" /></div>
+          : sel === "" ? <NotedDiff text={diff.text} notes={notes} canEdit={canNote} onAdd={add} onDelete={del} />
+          : <Diff text={diff.text} />}
       </section>
     </div>
   );

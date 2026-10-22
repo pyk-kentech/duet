@@ -195,6 +195,20 @@ pre.diff { margin: 0; padding: 10px 0; overflow: auto; background: var(--code-bg
 pre.diff .l { display: block; padding: 0 14px; white-space: pre; }
 pre.diff .add { background: var(--ok-soft); color: var(--ok); } pre.diff .del { background: var(--bad-soft); color: var(--bad); }
 pre.diff .hunk { color: var(--accent); } pre.diff .meta { color: var(--text-3); } pre.diff .file { font-weight: 700; padding-top: 8px; }
+/* 줄 번호·줄 메모가 있는 diff (36.14) */
+.diff.noted { padding: 10px 0; overflow: auto; background: var(--code-bg); border-radius: var(--radius); max-height: 720px; font-family: var(--mono); font-size: 12.5px; }
+.diff.noted .dl { display: grid; grid-template-columns: 44px 44px 1fr; min-width: max-content; }
+.diff.noted .dl .ln { color: var(--text-3); text-align: right; padding-right: 8px; user-select: none; }
+.diff.noted .dl .code { white-space: pre; padding: 0 14px 0 4px; }
+.diff.noted .dl.add { background: var(--ok-soft); color: var(--ok); } .diff.noted .dl.del { background: var(--bad-soft); color: var(--bad); }
+.diff.noted .dl.hunk { color: var(--accent); } .diff.noted .dl.meta { color: var(--text-3); } .diff.noted .dl.file { font-weight: 700; padding-top: 8px; }
+.diff.noted .dl.notable { cursor: pointer; } .diff.noted .dl.notable:hover .ln { color: var(--accent); background: var(--accent-soft); }
+.dnote { display: flex; gap: 8px; align-items: flex-start; margin: 4px 14px 6px 92px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--panel); border: 1px solid var(--line); font-family: var(--font); font-size: 13px; white-space: normal; max-width: 760px; }
+.dnote .who { font-weight: 700; color: var(--accent); white-space: nowrap; } .dnote .body { flex: 1; white-space: pre-wrap; }
+.dnote.sent { opacity: 0.65; }
+.dnote.editing { flex-direction: column; align-items: stretch; } .dnote.editing textarea { width: 100%; resize: vertical; }
+ul.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+ul.checks li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 
 /* ---------- 대화상자·알림 ---------- */
 dialog.dialog { border: 1px solid var(--line); border-radius: 12px; padding: 0; background: var(--panel); color: var(--text); box-shadow: 0 18px 48px rgba(0, 0, 0, 0.18); width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }

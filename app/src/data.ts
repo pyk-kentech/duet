@@ -7,6 +7,7 @@ export interface RunSummary {
   run_id: string; status: string; phase: string; step: string; round: number; task: string;
   created_at?: string; updated_at?: string; calls: number; total_sec: number; last_verdict?: string | null;
   live?: boolean; stale?: boolean; activity?: Activity; error?: string | null; config?: Record<string, any>;
+  worktree?: { branch: string; status: "open" | "merged" | "discarded"; base_branch: string } | null;
 }
 export interface Project {
   path: string; name: string; display?: string; exists: boolean; run_count: number;

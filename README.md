@@ -111,6 +111,14 @@ tenure log --workdir ./x            # 최근 run 요약
 tenure log --workdir ./x --full     # 전체 발언을 순서대로 출력
 tenure log --workdir ./x --all      # 모든 run 한 줄씩
 
+# 작업마다 worktree (커밋이 있는 git 저장소면 기본): 실행은 .tenure/worktrees/<run_id> 의 브랜치 tenure/<run_id> 에서 돌고,
+# 프로젝트 폴더는 사람이 병합할 때만 바뀝니다. 끄려면 --set worktree=off
+tenure merge --workdir ./x --run <id> --check    # 병합 준비 점검 (충돌·테스트·리뷰·작업 트리)
+tenure merge --workdir ./x --run <id>            # 한 커밋으로 병합 (--mode merge 면 병합 커밋)
+tenure resolve --workdir ./x --run <id>          # 기준 브랜치와의 충돌을 구현 담당에게 풀게 함
+tenure notes --workdir ./x --run <id>            # 화면에서 단 줄 메모를 구현 담당에게 보내 고치게 함
+tenure discard --workdir ./x --run <id>          # 버리기 (변경은 .tenure/discarded/ 에 패치로 남음)
+
 # CLI 없이 흐름 테스트
 tenure run "..." --workdir ./x --mock
 ```

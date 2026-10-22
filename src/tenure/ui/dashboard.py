@@ -14,14 +14,16 @@ import os
 import re
 import sys
 import threading
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from subprocess import Popen
 from typing import Any
 
 from tenure.events import last_event, read_events
 from tenure.outcome import run_activity
-from tenure import procs, stopflag
+from tenure import merge as mergelib
+from tenure import notes as notelib
+from tenure import procs, stopflag, worktree
 from tenure.activity import agent_activity, call_start_epoch
 from tenure.workflow import WorkflowError, list_workflows, load_workflow, role_agent_map
 from tenure.config import AGENT_NAMES, CLASSIC_WORKFLOW, WORKFLOW_NAME_RE, ConfigError, MAX_DEBATE_ROUNDS, MAX_REVIEW_ROUNDS, describe_effort, load_config
@@ -34,7 +36,7 @@ from tenure.registry import Registry, tenure_home, normalize
 from tenure.runner import ExecutableNotFound, pid_alive, spawn_detached
 from tenure.agents.claude_code import load_claude_limits
 from tenure.usage import claude_local_usage, codex_rate_limits
-from tenure.state import DONE_APPROVED, DONE_UNAPPROVED, LEGACY_DIR, TENURE_DIR, RUNNING, RunState, list_run_dirs, project_dir
+from tenure.state import DONE_APPROVED, DONE_UNAPPROVED, LEGACY_DIR, TENURE_DIR, RUNNING, RunState, project_dir
 from tenure.transcript import Transcript, split_header
 from tenure.verdict import parse_verdict
 from tenure.workspace import GitError, Workspace, WorkdirRefused, check_workdir
@@ -97,6 +99,7 @@ class Dashboard:
     _popens: list[Popen] = field(default_factory=list)   # 이 프로세스가 띄운 자식(좀비 방지용 reap)
     _jobs_lock: threading.Lock = field(default_factory=threading.Lock)
     _verdict_cache: dict[tuple[str, float], dict] = field(default_factory=dict)
+    _reserved: set[str] = field(default_factory=set)      # 이 프로세스가 미리 정한 실행 id (36.14)
 
     # ================================================================ validation
     def project(self, path: str | None) -> Path:
@@ -113,10 +116,41 @@ class Dashboard:
     def run_dir(self, project: Path, run_id: str | None) -> Path:
         if not run_id or not RUN_ID_RE.match(run_id):
             raise ApiError(400, "run 형식이 잘못되었습니다.")
-        for d in list_run_dirs(project):
+        for d in worktree.all_run_dirs(project):       # worktree 실행 포함 (36.14)
             if d.name == run_id:
                 return d
         raise ApiError(404, f"실행을 찾을 수 없습니다: {run_id}")
+
+    @staticmethod
+    def code_dir(rd: Path) -> Path:
+        """실행의 코드 폴더: 프로젝트 또는 그 실행의 worktree. git·잠금·세션 기록은 여기서 본다."""
+        return worktree.code_dir(rd)
+
+    def _run_live(self, rd: Path) -> dict[str, Any] | None:
+        live = self._live(self.code_dir(rd))
+        return live if live and live.get("run_id") == rd.name else None
+
+    def _tree_info(self, project: Path, run_id: str) -> dict[str, Any] | None:
+        t = worktree.find(project, run_id)
+        return asdict(t) if t is not None else None
+
+    def _code_ws(self, project: Path, rd: Path) -> Workspace:
+        """열린 worktree 면 그 폴더, 병합·버린 실행이면 프로젝트(브랜치는 남아 있다)."""
+        return Workspace(self.code_dir(rd))
+
+    def _head_ref(self, project: Path, rd: Path) -> str:
+        t = worktree.find(project, rd.name)
+        return t.branch if t is not None and t.status != worktree.OPEN else "HEAD"
+
+    def _project_live(self, project: Path) -> dict[str, Any] | None:
+        """프로젝트에서 도는 실행 하나(프로젝트 폴더 먼저, 다음은 열린 worktree)와 그 수."""
+        found = [x for x in [self._live(project)] if x]
+        for t in worktree.load_index(project):
+            if t.status == worktree.OPEN:
+                x = self._live(Path(t.path))
+                if x:
+                    found.append(x)
+        return {**found[0], "count": len(found)} if found else None
 
     # ================================================================ projects
     def projects(self) -> list[dict[str, Any]]:
@@ -124,12 +158,12 @@ class Dashboard:
         out = []
         for p in self.registry.list():
             path = Path(p)
-            runs = list_run_dirs(path) if path.is_dir() else []
+            runs = worktree.all_run_dirs(path) if path.is_dir() else []
             latest = self._run_summary(path, runs[-1]) if runs else None
             bench = bench_root_of(path)
             out.append({"path": p, "name": path.name or p, "exists": path.is_dir(),
                         "bench": bench is not None, "bench_root": str(bench) if bench else None,
-                        "run_count": len(runs), "latest": latest, "live": self._live(path)})
+                        "run_count": len(runs), "latest": latest, "live": self._project_live(path) if path.is_dir() else None})
         _display_names(out)
         return out
 
@@ -198,15 +232,16 @@ class Dashboard:
     # ================================================================ runs
     def runs(self, project: str | None) -> dict[str, Any]:
         wd = self.project(project)
-        runs = [self._run_summary(wd, d) for d in reversed(list_run_dirs(wd))]
-        return {"project": str(wd), "live": self._live(wd), "runs": runs,
+        runs = [self._run_summary(wd, d) for d in reversed(worktree.all_run_dirs(wd))]
+        return {"project": str(wd), "live": self._project_live(wd), "runs": runs,
                 "has_design": (wd / DESIGN_FILENAME).is_file(), "defaults": self._defaults(wd)}
 
     def run(self, project: str | None, run_id: str | None) -> dict[str, Any]:
         wd = self.project(project)
         rd = self.run_dir(wd, run_id)
         st = RunState.load(rd)
-        live = self._live(wd)
+        code = self.code_dir(rd)
+        live = self._live(code)
         entries = []
         for e in Transcript(rd).entries():
             item: dict[str, Any] = {"name": e.name, "seq": e.seq, "label": e.label, "meta": e.meta}
@@ -222,7 +257,9 @@ class Dashboard:
             "console_size": console.stat().st_size if console.is_file() else 0,
             "has_design_backup": (rd / BACKUP_FILENAME).is_file(),
             "current_call": self._current_call(rd) if live and live.get("run_id") == st.run_id else None,
-            "resume": self._resume_hint(st, wd),
+            "resume": self._resume_hint(st, code),
+            "code_dir": str(code), "worktree": self._tree_info(wd, rd.name),
+            "notes_open": sum(1 for n in notelib.load(rd) if n.get("status") == notelib.OPEN),
             "now": dt.datetime.now().isoformat(timespec="seconds"),
             "activity": self._activity(rd, st, bool(live and live.get("run_id") == st.run_id)),
             "last_seq": (last_event(rd) or {}).get("seq", 0),
@@ -239,8 +276,7 @@ class Dashboard:
         """끝난 실행을 열어 봤다고 적는다(받은편지함에서 '끝났는데 안 봄'이 사라짐). 진행 중이면 그대로."""
         wd = self.project(project)
         rd = self.run_dir(wd, run_id)
-        live = self._live(wd)
-        if live and live.get("run_id") == rd.name:
+        if self._run_live(rd):
             return {"ok": False, "reason": "진행 중"}
         st = RunState.load(rd)
         st.seen_at = dt.datetime.now().isoformat(timespec="seconds")
@@ -255,8 +291,10 @@ class Dashboard:
             if not path or not proj.get("exists", True):
                 continue
             wd = Path(path)
-            for rd in list(reversed(list_run_dirs(wd)))[:per_project]:
+            for rd in list(reversed(worktree.all_run_dirs(wd)))[:per_project]:
                 summary = self._run_summary(wd, rd)
+                if (summary.get("worktree") or {}).get("status") == worktree.DISCARDED:
+                    continue                                   # 버린 작업은 더 볼 일이 없다 (36.14)
                 act = summary.get("activity") or {}
                 if act.get("state") in ("blocked", "done-unseen", "working", "unverifiable") or (
                         act.get("state") == "failed" and summary.get("status") == RUNNING):
@@ -272,14 +310,13 @@ class Dashboard:
         """지금 진행 중인 호출에서 에이전트가 하는 일(파일 읽기·수정·명령·메시지)."""
         wd = self.project(project)
         rd = self.run_dir(wd, run_id)
-        live = self._live(wd)
-        if not live or live.get("run_id") != rd.name:
+        if not self._run_live(rd):
             return {"live": False, "call": None, "events": []}
         call = self._current_call(rd)
         if not call:
             return {"live": True, "call": None, "events": []}
         since = call_start_epoch(call["started"])
-        return {"live": True, "call": call, "events": agent_activity(call["cli"], wd, since)}
+        return {"live": True, "call": call, "events": agent_activity(call["cli"], self.code_dir(rd), since)}
 
     def _current_call(self, rd: Path) -> dict[str, Any] | None:
         """지금 호출. 로그에는 역할 이름이 찍히므로 세션 기록을 찾을 CLI 이름(cli)을 붙인다 (DESIGN.md 19.4)."""
@@ -336,8 +373,9 @@ class Dashboard:
             path = rd / BACKUP_FILENAME
         else:
             # 변경 설계로 끝난 실행은 그 실행의 docs/changes/<run>.md (DESIGN.md 19.5)
-            doc = RunState.load(self.run_dir(wd, run_id)).design_doc if run_id else None
-            path = wd / (doc or DESIGN_FILENAME)
+            rd = self.run_dir(wd, run_id) if run_id else None
+            doc = RunState.load(rd).design_doc if rd is not None else None
+            path = (self.code_dir(rd) if rd is not None else wd) / (doc or DESIGN_FILENAME)
         if not path.is_file():
             return {"text": None, "path": str(path)}
         return {"text": path.read_text(encoding="utf-8", errors="replace"), "path": str(path)}
@@ -345,14 +383,15 @@ class Dashboard:
     # ================================================================ git
     def commits(self, project: str | None, run_id: str | None) -> dict[str, Any]:
         wd = self.project(project)
-        st = RunState.load(self.run_dir(wd, run_id))
-        ws = Workspace(wd)
+        rd = self.run_dir(wd, run_id)
+        st = RunState.load(rd)
+        ws = self._code_ws(wd, rd)
         if not st.base_commit or not ws.is_repo():
             return {"base": None, "commits": []}
         try:
             fmt = "%H%x1f%h%x1f%s%x1f%cI"
             out = ws.git("log", f"--format={fmt}", f"{st.base_commit}^!", "--")
-            out += ws.git("log", "--reverse", f"--format={fmt}", f"{st.base_commit}..HEAD", "--")
+            out += ws.git("log", "--reverse", f"--format={fmt}", f"{st.base_commit}..{self._head_ref(wd, rd)}", "--")
         except GitError as e:
             raise ApiError(500, str(e)) from e
         commits = []
@@ -364,8 +403,9 @@ class Dashboard:
 
     def diff(self, project: str | None, run_id: str | None, commit: str | None = None) -> dict[str, Any]:
         wd = self.project(project)
-        st = RunState.load(self.run_dir(wd, run_id))
-        ws = Workspace(wd)
+        rd = self.run_dir(wd, run_id)
+        st = RunState.load(rd)
+        ws = self._code_ws(wd, rd)
         if not st.base_commit or not ws.is_repo():
             return {"text": "", "truncated": False, "title": "아직 커밋이 없습니다."}
         try:
@@ -381,7 +421,7 @@ class Dashboard:
                     globs = load_config(wd).diff_excludes
                 except ConfigError:
                     globs = []
-                text = build_review_diff(ws, st.base_commit, globs, MAX_DIFF_BYTES * 2)
+                text = build_review_diff(ws, st.base_commit, globs, MAX_DIFF_BYTES * 2, head=self._head_ref(wd, rd))
                 if text == "(변경 없음)":
                     text = ""
                 title = f"기준 {st.base_commit} 대비 전체 변경 (리뷰어가 받는 diff 와 같은 규칙: DESIGN.md·잠금 파일 제외)"
@@ -474,7 +514,12 @@ class Dashboard:
             raise ApiError(400, f"워크플로 {wf.name} 에는 설계 단계가 없어 '설계만'을 고를 수 없습니다.")
         if skip_design and not (wd / DESIGN_FILENAME).is_file():
             raise ApiError(400, f"'설계 생략'인데 {wd / DESIGN_FILENAME} 이 없습니다.")
-        self._ensure_not_busy(wd)
+        # worktree 실행은 폴더가 따로라 프로젝트에 다른 실행이 돌아도 시작할 수 있다 (36.14)
+        use_tree = not design_only and wd.is_dir() and worktree.should_use(wd, cfg.worktree)
+        if not use_tree:
+            self._ensure_not_busy(wd)
+        run_id = self._reserve_run_id(wd, git=use_tree)
+        scope = project_dir(wd) / worktree.TREES_DIR / run_id if use_tree else wd
 
         uploads = self._decode_attachments(payload.get("attachments"))
         wd.mkdir(parents=True, exist_ok=True)
@@ -514,8 +559,100 @@ class Dashboard:
                          (mock, "--mock"), (force, "--force")):
             if on:
                 argv.append(flag)
+        argv += ["--run-id", run_id]
         self.registry.add(wd)
-        return self._spawn("run", wd, argv)
+        return {**self._spawn("run", wd, argv, scope=scope), "run_id": run_id, "worktree": use_tree}
+
+    def _reserve_run_id(self, wd: Path, *, git: bool) -> str:
+        with self._jobs_lock:
+            base = worktree.unique_run_id(wd, git=git)
+            rid, n = base, 1
+            while rid in self._reserved:
+                n += 1
+                rid = f"{base}-{n}"
+                try:
+                    worktree.unique_run_id(wd, rid, git=git)
+                except worktree.WorktreeError:
+                    continue
+            self._reserved.add(rid)
+            return rid
+
+    # ================================================================ merge (DESIGN.md 36.14)
+    def merge_check(self, project: str | None, run_id: str | None) -> dict[str, Any]:
+        wd = self.project(project)
+        rd = self.run_dir(wd, run_id)
+        try:
+            return mergelib.readiness(wd, rd.name).to_dict()
+        except mergelib.MergeError as e:
+            raise ApiError(400, str(e)) from e
+
+    def merge(self, payload: dict[str, Any]) -> dict[str, Any]:
+        wd = self.project(payload.get("project"))
+        rd = self.run_dir(wd, payload.get("run"))
+        mode = str(payload.get("mode") or mergelib.SQUASH)
+        try:
+            return mergelib.merge(wd, rd.name, mode)
+        except (mergelib.MergeError, GitError) as e:
+            raise ApiError(409, str(e)) from e
+
+    def discard(self, payload: dict[str, Any]) -> dict[str, Any]:
+        wd = self.project(payload.get("project"))
+        rd = self.run_dir(wd, payload.get("run"))
+        self._ensure_not_busy(self.code_dir(rd))
+        try:
+            return mergelib.discard(wd, rd.name)
+        except (mergelib.MergeError, GitError) as e:
+            raise ApiError(409, str(e)) from e
+
+    def followup(self, payload: dict[str, Any], kind: str) -> dict[str, Any]:
+        """충돌 해결(resolve)·줄 메모 보내기(notes)를 작업으로 띄운다."""
+        wd = self.project(payload.get("project"))
+        rd = self.run_dir(wd, payload.get("run"))
+        st = RunState.load(rd)
+        if not st.finished:
+            raise ApiError(400, "끝난 실행에만 할 수 있습니다.")
+        if kind == "notes" and not notelib.open_notes(rd):
+            raise ApiError(400, "보낼 메모가 없습니다.")
+        if kind == "resolve":
+            t = worktree.find(wd, rd.name)
+            if t is None or t.status != worktree.OPEN:
+                raise ApiError(400, "열린 worktree 실행에서만 충돌을 풀 수 있습니다.")
+        code = self.code_dir(rd)
+        self._ensure_not_busy(code)
+        argv = [kind, "--workdir", str(wd), "--run", rd.name]
+        if st.config.get("mock"):
+            argv.append("--mock")
+        return self._spawn(kind, wd, argv, scope=code)
+
+    # ================================================================ notes (DESIGN.md 36.14)
+    def notes(self, project: str | None, run_id: str | None) -> dict[str, Any]:
+        wd = self.project(project)
+        rd = self.run_dir(wd, run_id)
+        st = RunState.load(rd)
+        return {"notes": notelib.with_stale(rd, self.code_dir(rd), st.base_commit)}
+
+    def note_add(self, payload: dict[str, Any]) -> dict[str, Any]:
+        wd = self.project(payload.get("project"))
+        rd = self.run_dir(wd, payload.get("run"))
+        st = RunState.load(rd)
+        try:
+            line = int(payload.get("line") or 0)
+        except (TypeError, ValueError):
+            raise ApiError(400, "줄 번호가 잘못되었습니다.") from None
+        try:
+            note = notelib.add(rd, self.code_dir(rd), file=str(payload.get("file") or ""), line=line,
+                               side=str(payload.get("side") or notelib.NEW), text=str(payload.get("text") or ""),
+                               base=st.base_commit)
+        except notelib.NoteError as e:
+            raise ApiError(400, str(e)) from e
+        return {"note": note}
+
+    def note_delete(self, payload: dict[str, Any]) -> dict[str, Any]:
+        wd = self.project(payload.get("project"))
+        rd = self.run_dir(wd, payload.get("run"))
+        if not notelib.remove(rd, str(payload.get("id") or "")):
+            raise ApiError(404, "메모를 찾을 수 없습니다.")
+        return {"ok": True}
 
     @staticmethod
     def _decode_attachments(raw: Any) -> list[tuple[str, bytes]]:
@@ -572,11 +709,12 @@ class Dashboard:
         st = RunState.load(rd)
         if st.status not in (DONE_APPROVED, DONE_UNAPPROVED):
             raise ApiError(400, "승인·미승인으로 끝난 실행만 요약할 수 있습니다.")
-        self._ensure_not_busy(wd)
+        code = self.code_dir(rd)
+        self._ensure_not_busy(code)
         argv = ["report", "--workdir", str(wd), "--run", rd.name]
         if st.config.get("mock"):
             argv.append("--mock")
-        return self._spawn("report", wd, argv)
+        return self._spawn("report", wd, argv, scope=code)
 
     def resume(self, payload: dict[str, Any]) -> dict[str, Any]:
         wd = self.project(payload.get("project"))
@@ -592,16 +730,19 @@ class Dashboard:
                 raise ApiError(400, f"max_review 는 1~{MAX_REVIEW_ROUNDS} 사이여야 합니다.")
             argv += ["--max-review", str(mr)]
         st = RunState.load(rd)
-        hint = self._resume_hint(st, wd)
+        code = self.code_dir(rd)
+        hint = self._resume_hint(st, code)
         if not hint["possible"]:
             raise ApiError(400, hint["reason"])
         if hint["needs_max_review"] and (mr in (None, "") or int(mr) <= hint["current_max_review"]):
             raise ApiError(400, f"리뷰 상한을 {hint['current_max_review']}보다 크게 지정하세요.")
-        self._ensure_not_busy(wd)
-        return self._spawn("resume", wd, argv)
+        self._ensure_not_busy(code)
+        return self._spawn("resume", wd, argv, scope=code)
 
     def stop(self, payload: dict[str, Any]) -> dict[str, Any]:
         wd = self.project(payload.get("project"))
+        if payload.get("run"):                     # worktree 실행은 그 worktree 의 잠금 (36.14)
+            wd = self.code_dir(self.run_dir(wd, payload.get("run")))
         info = read_lock(wd)
         if info is None:
             raise ApiError(409, "실행 중인 tenure 가 없습니다.")
@@ -632,7 +773,8 @@ class Dashboard:
             self._popens = [p for p in self._popens if p.poll() is None]
 
     # ================================================================ helpers
-    def _spawn(self, kind: str, wd: Path, argv: list[str]) -> dict[str, Any]:
+    def _spawn(self, kind: str, wd: Path, argv: list[str], scope: Path | None = None) -> dict[str, Any]:
+        """scope: 이 작업이 쓰는 코드 폴더(프로젝트 또는 worktree). 같은 폴더의 작업이 겹치지 않게 본다."""
         log_dir = project_dir(wd) / UI_DIR / "jobs"
         log_dir.mkdir(parents=True, exist_ok=True)
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
@@ -648,7 +790,7 @@ class Dashboard:
                 popen = spawn_detached(cmd, wd, log_file=log_file, env={"PYTHONUNBUFFERED": "1"})
         except ExecutableNotFound as e:
             raise ApiError(500, str(e)) from e
-        rec = {"id": job_id, "kind": kind, "project": str(wd), "argv": argv, "pid": popen.pid,
+        rec = {"id": job_id, "kind": kind, "project": str(wd), "scope": str(scope or wd), "argv": argv, "pid": popen.pid,
                "log_path": str(log_path), "started_at": dt.datetime.now().isoformat(timespec="seconds")}
         rec_path.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
         with self._jobs_lock:
@@ -660,7 +802,7 @@ class Dashboard:
         if info is not None:
             raise ApiError(409, f"이 작업 폴더에서 이미 실행 중입니다 (pid {info.pid}, 실행 {info.run_id}).")
         for j in self.jobs_list(limit=50):
-            if j.get("project") == str(wd) and j["running"]:
+            if j.get("scope", j.get("project")) == str(wd) and j["running"]:
                 raise ApiError(409, "이 작업 폴더에서 UI 가 시작한 실행이 아직 끝나지 않았습니다.")
 
     def _live(self, wd: Path) -> dict[str, Any] | None:
@@ -674,8 +816,8 @@ class Dashboard:
             st = RunState.load(rd)
         except (OSError, ValueError, TypeError) as e:
             return {"run_id": rd.name, "status": "broken", "error": str(e)}
-        live = self._live(wd)
-        is_live = bool(live and live.get("run_id") == st.run_id)
+        is_live = self._run_live(rd) is not None
+        tree = st.worktree and worktree.find(wd, st.run_id)
         return {
             "run_id": st.run_id, "status": st.status, "phase": st.phase, "step": st.step, "round": st.round,
             "task": st.task[:300], "created_at": st.created_at, "updated_at": st.updated_at,
@@ -683,6 +825,7 @@ class Dashboard:
             "last_verdict": st.last_verdict, "config": st.config, "error": st.error,
             "live": is_live, "stale": st.status == RUNNING and not is_live,
             "activity": self._activity(rd, st, is_live),
+            "worktree": {"branch": tree.branch, "status": tree.status, "base_branch": tree.base_branch} if tree else None,
         }
 
     def _activity(self, rd: Path, st: RunState, is_live: bool) -> dict[str, Any]:
@@ -741,7 +884,7 @@ class Dashboard:
             if not wd.is_dir():
                 continue
             proj_total: dict[str, dict] = {}
-            for rd in list_run_dirs(wd):
+            for rd in worktree.all_run_dirs(wd):
                 try:
                     st = RunState.load(rd)
                 except (OSError, ValueError, TypeError):
@@ -916,6 +1059,14 @@ API_METHODS: dict[str, Any] = {
     "events": lambda d, a: d.events(a.get("project"), a.get("run"), int(a.get("since") or 0)),
     "mark_seen": lambda d, a: d.mark_seen(a.get("project"), a.get("run")),
     "inbox": lambda d, a: d.inbox(),
+    "merge_check": lambda d, a: d.merge_check(a.get("project"), a.get("run")),
+    "merge": lambda d, a: d.merge(a),
+    "discard": lambda d, a: d.discard(a),
+    "resolve": lambda d, a: d.followup(a, "resolve"),
+    "notes": lambda d, a: d.notes(a.get("project"), a.get("run")),
+    "note_add": lambda d, a: d.note_add(a),
+    "note_delete": lambda d, a: d.note_delete(a),
+    "notes_send": lambda d, a: d.followup(a, "notes"),
 }
 
 

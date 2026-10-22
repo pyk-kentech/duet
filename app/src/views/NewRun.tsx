@@ -98,10 +98,10 @@ export default function NewRun({ init, groups, onClose, onStarted }: {
         design_only: !!adv.design_only, skip_design: !!adv.skip_design, force: !!adv.force, options: opts,
       };
       if (files.length) body.attachments = await Promise.all(files.map(readAsBase64));
-      const job = await api<{ id: string; project: string }>("/api/actions/run", { method: "POST", body, machine });
-      toast("실행을 시작했습니다.");
+      const job = await api<{ id: string; project: string; run_id?: string; worktree?: boolean }>("/api/actions/run", { method: "POST", body, machine });
+      toast(job.worktree ? "실행을 시작했습니다. 이 작업은 따로 만든 worktree·브랜치에서 돕니다." : "실행을 시작했습니다.");
       onStarted();
-      follow(machine, job.project || p);
+      follow(machine, job.project || p, job.run_id);
     } catch (e) {
       setProblem((e as Error).message);
       setBusy(false);
@@ -254,14 +254,15 @@ function OptionField({ o, value, onChange }: { o: OptionDef; value: any; onChang
 }
 
 /** 시작한 실행이 잡히면 그 화면으로 이동한다(30초까지). */
-async function follow(machine: string, project: string) {
+async function follow(machine: string, project: string, runId?: string) {
   location.hash = hrefProject(machine, project);
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 900));
     try {
       const d = await api<{ live: { run_id?: string } | null; runs: { run_id: string }[] }>("/api/runs", { query: { project }, machine });
-      if (d.live?.run_id) { location.hash = hrefRun(machine, project, d.live.run_id); return; }
+      // 화면이 실행 id 를 미리 정한다(여러 작업이 동시에 돌아도 이 실행을 따라가게, 36.14)
+      if (runId ? d.runs.some((r) => r.run_id === runId) : d.live?.run_id) { location.hash = hrefRun(machine, project, runId || d.live!.run_id!); return; }
     } catch { /* 폴더가 아직 등록 전 */ }
   }
 }

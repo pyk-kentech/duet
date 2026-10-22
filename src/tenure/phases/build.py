@@ -68,24 +68,25 @@ def truncate_diff(diff: str, max_chars: int) -> str:
     return diff[:max_chars] + TRUNCATED_NOTE
 
 
-def diff_body(ws: Workspace, frm: str, exclude, excludes_glob, budget: int, context: bool) -> str:
+def diff_body(ws: Workspace, frm: str, exclude, excludes_glob, budget: int, context: bool, head: str = "HEAD") -> str:
     """본문 diff. context 면 함수 단위 문맥(리뷰 패킷, DESIGN.md 21.1)을 쓰되 budget 을 넘으면 예전 diff."""
     if context:
-        body = ws.diff(frm, "HEAD", exclude=exclude, exclude_globs=excludes_glob, context=True)
+        body = ws.diff(frm, head, exclude=exclude, exclude_globs=excludes_glob, context=True)
         if body.strip() and len(body) <= budget:
             return body
-    return ws.diff(frm, "HEAD", exclude=exclude, exclude_globs=excludes_glob)
+    return ws.diff(frm, head, exclude=exclude, exclude_globs=excludes_glob)
 
 
 def build_review_diff(ws: Workspace, base: str, excludes_glob: list[str], max_chars: int,
-                      exclude: tuple[str, ...] = DIFF_EXCLUDES, context: bool = False) -> str:
+                      exclude: tuple[str, ...] = DIFF_EXCLUDES, context: bool = False, head: str = "HEAD") -> str:
     """리뷰어에게 줄 diff. 맨 앞의 파일 요약(stat)은 잘리지 않게 두고, 본문 diff 만 자른다.
 
     exclude: 빼는 파일(설계 문서). 변경 설계면 DESIGN.md 대신 docs/changes/<run>.md (DESIGN.md 19.5).
+    head: 화면이 병합·버린 worktree 실행을 볼 때는 남겨 둔 브랜치 (36.14).
     """
-    stat = ws.diff_stat(base, "HEAD", exclude=exclude)
+    stat = ws.diff_stat(base, head, exclude=exclude)
     budget0 = max(1000, max_chars - len(stat) - 200)
-    body = diff_body(ws, base, exclude, excludes_glob, budget0, context)
+    body = diff_body(ws, base, exclude, excludes_glob, budget0, context, head)
     if not stat.strip() and not body.strip():
         return "(변경 없음)"
     header = "[변경 파일 요약]\n" + stat.rstrip() + "\n"

@@ -172,7 +172,7 @@ def test_review_session_not_reused_when_model_changes(tmp_path: Path, monkeypatc
 # ====================================================================== UI
 def test_ui_start_run_passes_step_overrides(tmp_path: Path, monkeypatch):
     seen = {}
-    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv: seen.update(argv=argv) or {"id": "j"})
+    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv, scope=None: seen.update(argv=argv) or {"id": "j"})
     Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True, "workflow": "secure",
                            "step_overrides": {"security": {"review": {"model": "gpt-6-luna", "effort": ""}},
                                               "codex": {"review": {"effort": "xhigh"}}}})

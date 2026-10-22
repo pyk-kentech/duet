@@ -167,7 +167,7 @@ def test_attachment_limits(tmp_path: Path, monkeypatch):
 
 def test_dashboard_attachments(tmp_path: Path, monkeypatch):
     seen = {}
-    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv: seen.update(argv=argv) or {"id": "j"})
+    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv, scope=None: seen.update(argv=argv) or {"id": "j"})
     data = base64.b64encode(b"hello").decode()
     Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True,
                            "attachments": [{"name": "../evil name.txt", "data": data}, {"name": "x.png", "data": data}]})

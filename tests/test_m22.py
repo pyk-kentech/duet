@@ -191,7 +191,7 @@ def test_settings_options_save(server):
 
 def test_new_run_passes_advanced_options(tmp_path: Path, monkeypatch):
     seen = {}
-    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv: seen.update(argv=argv) or {"id": "j"})
+    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv, scope=None: seen.update(argv=argv) or {"id": "j"})
     Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True,
                            "options": {"arbiter": "false", "dedup": "", "limit_wait_max_min": "30"}})
     argv = seen["argv"]

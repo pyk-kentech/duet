@@ -455,7 +455,7 @@ def _run_workflow(task: Task, workflow: str, rep: int, wd: Path, result_dir: Pat
     from tenure.orchestrator import Orchestrator, OrchestratorError, RunOptions
 
     orch = Orchestrator(printer=printer if verbose else (lambda line: None))
-    overrides: dict[str, Any] = {"workflow": workflow}
+    overrides: dict[str, Any] = {"workflow": workflow, "worktree": "off"}   # 채점은 그 폴더를 본다 (36.14)
     if wait_on_limit:
         overrides["wait_on_limit"] = True
     if max_review or task.max_review:
