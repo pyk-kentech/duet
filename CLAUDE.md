@@ -10,7 +10,8 @@
 
 ## 기술 규칙
 - 엔진: Python 3.11+, `src/` 레이아웃, 타입 힌트, dataclass 선호. **런타임 의존성은 쓸 이유가 분명할 때만** 더하고(2026-10-21 사용자 결정으로 표준 라이브러리 제한 해제), `pyproject.toml` 과 DESIGN.md 에 이유를 적는다. 원격(SSH)에서 부르는 API 경로는 무거운 의존성 없이 돌게 둔다.
-- 화면: React + TypeScript + Vite. 데스크톱 셸: Tauri 2(엔진은 sidecar). 브라우저로도 열려야 한다.
+- 화면: React + TypeScript + Vite. 데스크톱 앱: 오르카(Electron) 포크 `orca/` 로 옮기는 중(DESIGN.md 36.23, 2026-10-22 사용자 결정). 그 전까지는 Tauri 2 셸(엔진은 sidecar). 엔진 화면은 브라우저로도 열려야 한다.
+- 포크(`orca/`)는 오르카 규칙(orca/AGENTS.md)을 따르고 Node 24·pnpm 12 는 `.tools/` 의 휴대용 Node 로 돌린다.
 - 모든 subprocess 호출은 엔진의 `runner` 모듈을 통한다.
 - 사용자에게 보이는 메시지(로그, 에러, README, 화면)는 한국어. 코드 식별자와 주석은 영어/한국어 자유.
 - 사용자 설정(`~/.claude`, `~/.codex`)을 고치지 않는다. 훅·MCP 는 호출마다 인자로 붙인다.
