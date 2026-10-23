@@ -1722,3 +1722,5 @@ M30 quick 54번의 호출 기록으로 시간·사용량(Codex 한도 환산)이
 - M38 흐름 실행: 새 작업공간 창에 'tenure 흐름'(빠른·경쟁 초안·토론) → 엔진이 worktree 실행, '흐름' 탭(타임라인·리뷰 라운드·결과 요약), 사이드바 카드에 흐름 상태(주의 순).
 - M39 리뷰·합치기: 오르카 차이 메모를 tenure 메모 보내기와 잇기, 병합 준비 확인·합치기·버리기, 경쟁 초안 비교 탭.
 - M40 섬·설치 파일: 윈도우 섬(항상 위 작은 창), NSIS 설치 파일, tenure 릴리스로 업데이트. 이때 옛 Tauri 셸을 걷어낸다.
+
+**M37 결과 (2026-10-23)**: 포크 `src/main/tenure-engine/` 가 엔진(`TENURE_ENGINE` → 설치본 resources/engine → 개발 체크아웃의 `../.venv`)을 `ui --ready-line --parent-pid` 로 띄우고, `TENURE_READY` 의 주소·토큰으로 `/api/*` 만 대리 호출한다(IPC `tenureEngine:get|restart|request`, 갱신 `tenureEngine:update`). 상태 막대에 연결 점·에이전트 자리, 툴팁에 Claude·Codex 한도(모르면 '모름'). 앱을 강제로 꺼도 엔진은 parent-pid 감시로 끝난다(확인). 오르카 핵심 파일은 시작 한 줄·preload 등록·상태 막대 한 줄만 고쳤다(업스트림 merge 를 쉽게).
