@@ -787,6 +787,7 @@ class Handler(BaseHTTPRequestHandler):
         ("DELETE", "/api/notes"): "note_delete",
         ("POST", "/api/actions/notes"): "notes_send",
         ("POST", "/api/actions/pick"): "pick",
+        ("POST", "/api/flow/notes"): "flow_notes",
     }
 
     def _api(self, method: str, path: str, q: dict[str, str], body: dict[str, Any]) -> Any:

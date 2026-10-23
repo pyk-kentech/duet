@@ -91,3 +91,24 @@ def test_shell_session(tmp_path, monkeypatch):
         time.sleep(0.1)
     assert "메아리" in s.snapshot()["data"] and s.status()["attention"] is None
     assert sessionlib.default_shell()                                              # 원래 함수도 무언가를 돌려준다 (monkeypatch 전 값)
+
+
+def test_flow_notes_attach_to_last_finished_run(repo, monkeypatch):
+    from tenure.events import EventLog
+    from tenure.state import DONE_APPROVED, RunState, create_run_dir
+
+    rd = create_run_dir(repo, "20261023-000001")
+    st = RunState(run_id=rd.name, task="메모 CLI", config={"workflow": "quick", "mock": True})
+    st.status = DONE_APPROVED
+    st.save(rd)
+    EventLog(rd).emit("state", status=DONE_APPROVED)
+    spawned = []
+    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv, scope=None: spawned.append(argv) or {"job": kind})
+    d = Dashboard()
+    out = dispatch(d, "flow_notes", {"project": str(repo), "notes": [
+        {"file": str(repo / "src" / "app.py"), "line": 1, "text": "print 대신 logging"}]})
+    assert out["run_id"] == rd.name and out["added"] == 1 and out["job"] == "notes"
+    assert spawned[0][:2] == ["notes", "--workdir"] and "--mock" in spawned[0]
+    assert dispatch(d, "notes", {"project": str(repo), "run": rd.name})["notes"][0]["file"] == "src/app.py"
+    with pytest.raises(ApiError):
+        dispatch(d, "flow_notes", {"project": str(repo), "notes": []})

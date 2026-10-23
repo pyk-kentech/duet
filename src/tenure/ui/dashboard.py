@@ -654,6 +654,43 @@ class Dashboard:
             argv.append("--mock")
         return self._spawn(kind, wd, argv, scope=code)
 
+    def flow_notes(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """데스크톱 앱의 차이 메모를 이 폴더의 마지막 끝난 흐름에 붙이고 고치기 회차를 띄운다 (36.23 M39)."""
+        wd = self.project(payload.get("project"))
+        raw = payload.get("notes")
+        if not isinstance(raw, list) or not raw:
+            raise ApiError(400, "보낼 메모가 없습니다.")
+        target = None
+        for rd in sorted(self._run_dirs(wd), key=lambda d: d.name, reverse=True):
+            try:
+                st = RunState.load(rd)
+            except (OSError, ValueError):
+                continue
+            if st.finished:
+                target = (rd, st)
+                break
+            if self._run_live(rd):
+                raise ApiError(409, "이 폴더에서 흐름이 진행 중입니다. 끝난 뒤에 보내세요.")
+        if target is None:
+            raise ApiError(400, "이 폴더에 끝난 흐름이 없습니다. 먼저 흐름을 돌리세요.")
+        rd, st = target
+        root = str(wd).replace("\\", "/").rstrip("/") + "/"
+        added = 0
+        for item in raw[: notelib.MAX_NOTES]:
+            if not isinstance(item, dict):
+                continue
+            file = str(item.get("file") or "").replace("\\", "/")
+            if file.lower().startswith(root.lower()):
+                file = file[len(root):]
+            try:
+                notelib.add(rd, self.code_dir(rd), file=file, line=int(item.get("line") or 0), side=notelib.NEW,
+                            text=str(item.get("text") or ""), base=st.base_commit)
+                added += 1
+            except (notelib.NoteError, TypeError, ValueError) as e:
+                raise ApiError(400, f"메모를 붙이지 못했습니다 ({file}): {e}") from e
+        job = self.followup({"project": str(wd), "run": rd.name}, "notes")
+        return {**job, "run_id": rd.name, "added": added}
+
     def pick(self, payload: dict[str, Any]) -> dict[str, Any]:
         """경쟁 초안 중 다른 것을 고른다 (36.15). 병합 전, 끝난 실행에서만."""
         from tenure.phases.race import RaceError, pick
@@ -1209,6 +1246,7 @@ API_METHODS: dict[str, Any] = {
     "note_delete": lambda d, a: d.note_delete(a),
     "notes_send": lambda d, a: d.followup(a, "notes"),
     "pick": lambda d, a: d.pick(a),
+    "flow_notes": lambda d, a: d.flow_notes(a),
     "ws_tree": lambda d, a: d.ws_call(fileslib.tree, d.ws_dir(a.get("project"), a.get("run")), a.get("path")),
     "ws_file": lambda d, a: d.ws_call(fileslib.read_file, d.ws_dir(a.get("project"), a.get("run")), a.get("path") or ""),
     "ws_status": lambda d, a: d.ws_call(fileslib.status, d.ws_dir(a.get("project"), a.get("run"))),
