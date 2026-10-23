@@ -2,6 +2,7 @@
 
 tenure 가 함께 배포하거나 실행 중에 쓰는 다른 프로젝트의 코드와 그 라이선스입니다.
 다른 도구(OpenRig, Orca, herdr, Emdash, Schaltwerk, CodexMonitor, Daintree, NotchCrew)는 설계 아이디어만 참고했고 코드는 가져오지 않았습니다(DESIGN.md 36.8).
+화면 3차(DESIGN.md 36.22)의 작업공간 배치·치수·무채색 색 토큰은 Orca(https://github.com/stablyai/orca, MIT, © stablyai)의 화면 구조를 따랐습니다. 코드는 옮기지 않고 다시 짰습니다.
 
 ## 화면 빌드에 들어가는 것 (`src/tenure/ui/web/`)
 

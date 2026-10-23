@@ -15,6 +15,20 @@ const P: Record<string, string> = {
   robot: "M7 9h10v9H7zM12 5v4M9 13v.1M15 13v.1M5 12v3M19 12v3",
   terminal: "M4 5h16v14H4zM7 9l3 3-3 3M12 15h5",
   search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
+  plus: "M12 5v14M5 12h14",
+  folder: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+  folderPlus: "M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 11v5M9.5 13.5h5",
+  files: "M8 3h7l4 4v11H8zM15 3v4h4M5 7v14h11",
+  git: "M6 3v12M18 9a3 3 0 1 0 0-.1M6 21a3 3 0 1 0 0-.1M18 12a9 9 0 0 1-9 9",
+  pin: "M12 17v5M9 3h6l-1 6 3 3H7l3-3z",
+  split: "M4 5h16v14H4zM12 5v14",
+  play: "M7 5l12 7-12 7z",
+  panelLeft: "M4 5h16v14H4zM9 5v14",
+  panelRight: "M4 5h16v14H4zM15 5v14",
+  flow: "M5 6h6M5 12h10M5 18h14",
+  stack: "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5",
+  check: "M5 12l4 4 10-10",
+  dots: "M5 12v.1M12 12v.1M19 12v.1",
 };
 
 export function Icon({ name, size = 18, label }: { name: keyof typeof P | string; size?: number; label?: string }) {

@@ -4,13 +4,12 @@ import { api, RunEvent, subscribeEvents } from "../lib/api";
 import { baseName, fmtDur, fmtTok, oneLine } from "../lib/format";
 import { Diff, Markdown } from "../lib/markdown";
 import { ACTIVITY, OUTCOME, PHASE, STATUS, STEP } from "../lib/labels";
-import { hrefProject, hrefRun } from "../lib/router";
+import { hrefProject } from "../lib/router";
 import { AgentTag, ErrorBox, Modal, StateDot, StatusBadge, TestTag, useUi, Verdict } from "../ui";
-import { Icon } from "../icons";
 import AgentConfigView from "./AgentConfig";
 import { DraftsPanel } from "./Drafts";
 import { Shape } from "./WorkList";
-import { TerminalButtons } from "./Project";
+import { hrefWs } from "../ws";
 import { MergePanel, Tree, TREE_STATUS } from "./Merge";
 import { Note, NotedDiff } from "./NotedDiff";
 
@@ -24,102 +23,91 @@ interface RunData {
 }
 const LIVE = "__live__";
 
-export default function RunView({ route, onSeen, onSession }: { route: { machine: string; project: string; run: string; tab: string }; onSeen: () => void; onSession?: () => void }) {
-  const m = route.machine;
-  const tab = route.tab === "timeline" ? "talk" : route.tab;
-  const { toast, confirm } = useUi();
+export type RunQ = { project: string; run: string };
+export type { RunData };
+
+/** 실행 하나의 데이터: 처음 읽기 + 진행 중이면 이벤트로 다시 읽기 (36.22 에서 탭들이 같이 씀). */
+export function useRunData(m: string, project: string, run: string, onSeen: () => void) {
   const [data, setData] = useState<RunData | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
-  const q = useMemo(() => ({ project: route.project, run: route.run }), [route.project, route.run]);
+  const q = useMemo(() => ({ project, run }), [project, run]);
   const seenOnce = useRef(false);
 
   const load = useCallback(async () => {
+    if (!run) return;                            // 폴더 작업공간에서는 부르지 않는다
     try {
       const d = await api<RunData>("/api/run", { query: q, machine: m });
       setData(d);
       setError(null);
-      if (!d.live && d.activity?.state === "done-unseen" && !seenOnce.current) {   // 끝난 실행을 열었다 → 받은편지함에서 빠짐
+      if (!d.live && d.activity?.state === "done-unseen" && !seenOnce.current) {   // 끝난 실행을 열었다 → 주의 목록에서 빠짐
         seenOnce.current = true;
         api("/api/runs/seen", { method: "POST", body: q, machine: m }).then(onSeen).catch(() => {});
       }
     } catch (e) { setError(e); }
   }, [q, m, onSeen]);
 
-  useEffect(() => { load(); }, [load]);
-  // 실시간: 이벤트가 오면 다시 읽는다(진행 중일 때만 연결). 이벤트 자체는 '최근 활동'에 쓴다.
+  useEffect(() => { setData(null); setEvents([]); seenOnce.current = false; load(); }, [load]);
   useEffect(() => {
-    if (!data?.live) return;
+    if (!data?.live || !run) return;
     let timer = 0;
-    const off = subscribeEvents(m, route.project, route.run, Math.max(0, (data.last_seq || 0) - 40), (evs) => {
+    const off = subscribeEvents(m, project, run, Math.max(0, (data.last_seq || 0) - 40), (evs) => {
       setEvents((prev) => [...prev, ...evs].slice(-200));
       if (evs.some((e) => e.kind !== "log")) { window.clearTimeout(timer); timer = window.setTimeout(load, 300); }
     }, () => load());
     const poll = window.setInterval(() => { if (!document.hidden) load(); }, 8000);   // 이벤트가 끊겨도 따라가게
     return () => { off(); window.clearInterval(poll); window.clearTimeout(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.live, m, route.project, route.run]);
+  }, [data?.live, m, project, run]);
+  return { data, error, events, q, load };
+}
 
-  if (!data) {
-    return (
-      <div className="page">
-        <Crumbs m={m} project={route.project} run={route.run} />
-        {error ? <ErrorBox error={error} /> : <div className="empty"><span className="spinner" /></div>}
-      </div>
-    );
-  }
-  const st = data.state;
+/** 흐름 탭: 머리 · 결과 요약 · 대화 타임라인. */
+export function FlowTab({ data, m, q, events, onReload }: { data: RunData; m: string; q: RunQ; events: RunEvent[]; onReload: () => void }) {
+  const { toast, confirm } = useUi();
   const stop = async () => {
     if (!(await confirm("진행 중인 실행을 멈춥니다. 나중에 이어하기로 계속할 수 있습니다.", { ok: "중지", danger: true }))) return;
-    try { await api("/api/actions/stop", { method: "POST", body: { project: data.project, run: st.run_id }, machine: m }); toast("중지 요청을 보냈습니다."); }
+    try { await api("/api/actions/stop", { method: "POST", body: { project: data.project, run: data.state.run_id }, machine: m }); toast("중지 요청을 보냈습니다."); }
     catch (e) { toast((e as Error).message, true); }
   };
-  // 오른쪽 얇은 아이콘 사이드바 (NotchCrew 1.12, 36.21): 누르면 그 판, 다시 누르면 대화로
-  const panels: [string, string, string, number | string | null][] = [
-    ["talk", "talk", "대화", data.entries.length || null],
-    ["changes", "diff", "변경 사항", data.notes_open ? `${data.notes_open}` : null],
-    ...(data.worktree ? [["merge", "merge", "병합", data.worktree.status === "open" ? "!" : null] as [string, string, string, string | null]] : []),
-    ...(st.race ? [["drafts", "drafts", "초안 비교", Object.keys(st.race.drafts || {}).length || null] as [string, string, string, number | null]] : []),
-    ...(hasFindings(st) ? [["issues", "issue", "지적", (st.issues || []).length || null] as [string, string, string, number | null]] : []),
-    ["console", "console", "콘솔", null],
-    ["design", "doc", "설계 문서", null],
-    ...(m === "local" ? [["agents", "robot", "에이전트 설정", null] as [string, string, string, null]] : []),
-  ];
-  const panelHref = (k: string) => hrefRun(m, route.project, route.run, tab === k && k !== "talk" ? "talk" : k);
   return (
-    <div className="run-layout">
-      <div className="page">
-        {error ? <ErrorBox error={error} /> : null}
-        <Head data={data} m={m} onStop={stop} onReload={load} onSession={onSession} />
-        {tab === "drafts" && st.race ? <DraftsPanel m={m} q={q} race={st.race} roles={roleAgents(st)} onReload={load}
-                                                    canPick={!data.live && ["done_approved", "done_unapproved"].includes(st.status) && (!data.worktree || data.worktree.status === "open")} />
-          : tab === "merge" && data.worktree ? <MergePanel m={m} q={q} tree={data.worktree} st={st} live={data.live} onReload={load} />
-          : tab === "issues" ? <Issues st={st} /> : tab === "console" ? <ConsolePanel m={m} q={q} live={data.live} />
-          : tab === "changes" ? <Changes m={m} q={q} live={data.live} finished={["done_approved", "done_unapproved", "done_design"].includes(st.status)}
-                                         editable={!data.worktree || data.worktree.status === "open"} onReload={load} />
-          : tab === "design" ? <DesignPanel m={m} q={q} />
-          : tab === "agents" && m === "local" ? <AgentConfigView project={data.code_dir || data.project} />
-          : <><ResultCard data={data} m={m} q={q} onReload={load} /><Talk data={data} m={m} q={q} events={events} /></>}
-      </div>
-      <nav className="side-icons" aria-label="작업 판">
-        {panels.map(([k, icon, label, n]) => (
-          <a key={k} href={panelHref(k)} className={`side-icon${tab === k ? " on" : ""}`} title={label} aria-label={label} aria-current={tab === k ? "page" : undefined}>
-            <Icon name={icon} />{n ? <span className="n">{n}</span> : null}
-          </a>
-        ))}
-      </nav>
+    <div className="page flow-page">
+      <Head data={data} m={m} onStop={stop} onReload={onReload} />
+      <ResultCard data={data} m={m} q={q} onReload={onReload} />
+      <Talk data={data} m={m} q={q} events={events} />
     </div>
   );
 }
 
-function Crumbs({ m, project, run }: { m: string; project: string; run: string }) {
-  return (
-    <div className="crumbs">
-      <a href="#/">받은편지함</a><span className="sep">/</span>
-      <a href={hrefProject(m, project)}>{baseName(project)}</a><span className="sep">/</span><span className="mono">{run}</span>
-    </div>
-  );
+/** 실행에서 열 수 있는 판 탭. */
+export function runPanels(data: RunData): [string, string][] {
+  const st = data.state;
+  return [
+    ["changes", "변경 전체 · 줄 메모"],
+    ...(st.race ? [["drafts", "초안 비교"] as [string, string]] : []),
+    ...(hasFindings(st) ? [["issues", "지적"] as [string, string]] : []),
+    ["console", "진행 로그"],
+    ["design", "설계 문서"],
+  ];
 }
+
+export function RunPanel({ kind, data, m, q, onReload }: { kind: string; data: RunData; m: string; q: RunQ; onReload: () => void }) {
+  const st = data.state;
+  const body = kind === "drafts" && st.race ? <DraftsPanel m={m} q={q} race={st.race} roles={roleAgents(st)} onReload={onReload}
+                                                       canPick={!data.live && ["done_approved", "done_unapproved"].includes(st.status) && (!data.worktree || data.worktree.status === "open")} />
+    : kind === "issues" ? <Issues st={st} /> : kind === "console" ? <ConsolePanel m={m} q={q} live={data.live} />
+    : kind === "changes" ? <Changes m={m} q={q} live={data.live} finished={["done_approved", "done_unapproved", "done_design"].includes(st.status)}
+                                    editable={!data.worktree || data.worktree.status === "open"} onReload={onReload} />
+    : kind === "design" ? <DesignPanel m={m} q={q} /> : <div className="empty">없는 판입니다.</div>;
+  return <div className="page">{body}</div>;
+}
+
+export function RunMergePanel({ data, m, q, onReload }: { data: RunData; m: string; q: RunQ; onReload: () => void }) {
+  if (!data.worktree) return <div className="rp-empty">이 실행은 worktree 없이 프로젝트 폴더에서 바로 돌았습니다.</div>;
+  return <MergePanel m={m} q={q} tree={data.worktree} st={data.state} live={data.live} onReload={onReload} />;
+}
+
+export const RunAgentConfig = ({ data }: { data: RunData }) => <AgentConfigView project={data.code_dir || data.project} />;
 
 function roleAgents(s: any): Record<string, string> {
   const out: Record<string, string> = {};
@@ -132,7 +120,7 @@ function hasFindings(s: any) {
 }
 
 // ---------------------------------------------------------------- 머리
-function Head({ data, m, onStop, onReload, onSession }: { data: RunData; m: string; onStop: () => void; onReload: () => void; onSession?: () => void }) {
+function Head({ data, m, onStop, onReload }: { data: RunData; m: string; onStop: () => void; onReload: () => void }) {
   const { toast } = useUi();
   const st = data.state, c = st.config || {};
   const [maxReview, setMaxReview] = useState<number>(Math.min((data.resume?.current_max_review || 0) + 1, 10));
@@ -185,8 +173,6 @@ function Head({ data, m, onStop, onReload, onSession }: { data: RunData; m: stri
           </div>
         </div>
         <StatusBadge status={st.status} live={data.live} stale={data.stale} />
-        {m === "local" && !data.live && (!data.worktree || data.worktree.status === "open")
-          ? <TerminalButtons project={data.project} run={st.run_id} onOpened={onSession} /> : null}
         {data.live ? <button className="btn btn-danger" type="button" onClick={onStop}>중지</button> : data.resume?.possible ? (
           <div className="row">
             {data.resume.needs_max_review ? (
@@ -201,7 +187,7 @@ function Head({ data, m, onStop, onReload, onSession }: { data: RunData; m: stri
       {data.activity?.reason || data.worktree || st.route || (st.attachments || []).length ? (
         <div className="chips">
           {data.activity?.reason ? <span className="chip">{data.activity.reason}</span> : null}
-          {data.worktree ? <a className="chip" href={hrefRun(m, data.project, st.run_id, "merge")} title={data.code_dir}>브랜치 <b className="mono">{data.worktree.branch}</b>
+          {data.worktree ? <a className="chip" href={hrefWs({ machine: m, project: data.project, run: st.run_id }, "flow") + "&panel=merge"} title={data.code_dir}>브랜치 <b className="mono">{data.worktree.branch}</b>
             <span className={`badge ${TREE_STATUS[data.worktree.status].cls}`} style={{ height: 18 }}>{TREE_STATUS[data.worktree.status].text}</span></a> : null}
           {st.route ? <span className="chip" title={st.route.reason}>자동 선택 · {st.route.source === "model" ? "모델 판단" : "규칙"}</span> : null}
           {(st.attachments || []).length ? <span className="chip" title={st.attachments.join("\n")}>첨부 {st.attachments.length}개</span> : null}
@@ -281,7 +267,7 @@ function Talk({ data, m, q, events }: { data: RunData; m: string; q: Record<stri
   const selected = data.live && (auto || !sel) ? LIVE : sel || (data.entries.length ? data.entries[data.entries.length - 1].name : null);
   const pick = (name: string) => { setSel(name); setAuto(name === LIVE); };
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 380px) 1fr", gap: 12, alignItems: "start" }}>
+    <div className="two-col" style={{ ["--left" as string]: "minmax(260px, 360px)" }}>
       <div className="card timeline" role="list">
         {data.entries.length === 0 && !data.live ? <div className="empty small">아직 기록이 없습니다.</div> : null}
         {data.entries.map((e) => {
@@ -544,7 +530,7 @@ function Changes({ m, q, live, finished, editable, onReload }: {
   };
   const canNote = editable && !live && sel === "";
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "minmax(240px, 320px) minmax(0, 1fr)", gap: 12, alignItems: "start" }}>
+    <div className="two-col" style={{ ["--left" as string]: "minmax(220px, 300px)" }}>
       <div className="col" style={{ gap: 12 }}>
         <div className="card timeline">
           <div className={`tl-item clickable${sel === "" ? " tl-live" : ""}`} style={{ gridTemplateColumns: "1fr" }} onClick={() => setSel("")}>

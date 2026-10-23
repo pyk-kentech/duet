@@ -8,8 +8,8 @@ import { LOCAL } from "./api";
 
 export type Route =
   | { name: "home" }
-  | { name: "project"; machine: string; project: string; tab: string }
-  | { name: "run"; machine: string; project: string; run: string; tab: string }
+  | { name: "project"; machine: string; project: string; tab: string; panel?: string }
+  | { name: "run"; machine: string; project: string; run: string; tab: string; panel?: string }
   | { name: "usage"; machine: string }
   | { name: "setup"; machine: string }
   | { name: "settings" }
@@ -42,8 +42,12 @@ export function parseHash(hash = location.hash): Route {
     }
     if (parts[0] === "p" && parts[1]) {
       const project = decodeURIComponent(parts[1]);
-      if (parts[2] === "r" && parts[3]) return { name: "run", machine, project, run: decodeURIComponent(parts[3]), tab: q.get("tab") || "timeline" };
-      return { name: "project", machine, project, tab: q.get("tab") || "runs" };
+      // 작업공간 (36.22): tab 은 작업공간의 탭 키 (flow, s:<id>, f:<경로> …), 옛 탭 이름(timeline·runs)은 기본 탭으로
+      let tab = q.get("tab") || "";
+      let panel = q.get("panel") || undefined;
+      if (tab === "merge") { tab = ""; panel = "merge"; }
+      if (parts[2] === "r" && parts[3]) return { name: "run", machine, project, run: decodeURIComponent(parts[3]), tab: tab === "timeline" || tab === "talk" ? "" : tab, panel };
+      return { name: "project", machine, project, tab: tab === "runs" ? "" : tab, panel };
     }
   } catch { /* 잘못된 주소 → 홈 */ }
   return { name: "home" };

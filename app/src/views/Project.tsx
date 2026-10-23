@@ -16,25 +16,28 @@ interface RunsData {
   has_design: boolean; defaults: Record<string, any>;
 }
 
-export default function ProjectView({ route, onNewRun, onChanged, onSession }: {
+export default function ProjectView({ route, onNewRun, onChanged, onSession, embedded }: {
   route: { machine: string; project: string; tab: string }; onNewRun: (i: NewRunInit) => void; onChanged: () => void; onSession?: () => void;
+  embedded?: boolean;     // 작업공간의 '개요' 탭 (36.22): 이동 줄·터미널·새 실행 버튼은 탭 줄에 있다
 }) {
   const { toast, confirm } = useUi();
   const [data, setData] = useState<RunsData | null>(null);
   const [design, setDesign] = useState<string | null | undefined>(undefined);
   const [error, setError] = useState<unknown>(null);
   const m = route.machine;
+  const [localTab, setLocalTab] = useState("runs");
+  const tab = embedded ? localTab : route.tab;
   usePoll(async () => {
     try {
       const d = await api<RunsData>("/api/runs", { query: { project: route.project }, machine: m });
       setData(d);
       setError(null);
-      if (route.tab === "design" && design === undefined) {
+      if (tab === "design" && design === undefined) {
         const r = await api<{ text: string | null }>("/api/design", { query: { project: route.project }, machine: m });
         setDesign(r.text);
       }
     } catch (e) { setError(e); }
-  }, data?.live ? 2500 : 6000, [route.project, route.tab, m]);
+  }, data?.live ? 2500 : 6000, [route.project, tab, m]);
 
   const remove = async () => {
     if (!(await confirm(`목록에서만 제거합니다. 파일은 지우지 않습니다.\n\n${route.project}`, { ok: "목록에서 제거" }))) return;
@@ -57,7 +60,7 @@ export default function ProjectView({ route, onNewRun, onChanged, onSession }: {
     <div className="page">
       <div className="page-head">
         <div style={{ minWidth: 0 }}>
-          <div className="crumbs"><a href="#/">받은편지함</a><span className="sep">/</span><span>{baseName(route.project)}</span></div>
+          {embedded ? null : <div className="crumbs"><a href="#/">받은편지함</a><span className="sep">/</span><span>{baseName(route.project)}</span></div>}
           <h1>{baseName(route.project)}</h1>
           <div className="sub">{route.project}</div>
         </div>
@@ -65,9 +68,9 @@ export default function ProjectView({ route, onNewRun, onChanged, onSession }: {
         <div className="row">
           {live ? <button className="btn btn-danger" type="button" onClick={stop}>중지</button> : null}
           <button className="btn" type="button" onClick={remove}>목록에서 제거</button>
-          {m === "local" ? <TerminalButtons project={route.project} onOpened={onSession} /> : null}
-          <button className="btn btn-primary" type="button" title={live ? "git 저장소면 작업마다 worktree 를 따로 만들어 동시에 돌릴 수 있습니다" : undefined}
-                  onClick={() => onNewRun({ machine: m, project: route.project, defaults: data?.defaults, hasDesign: data?.has_design })}>새 실행</button>
+          {m === "local" && !embedded ? <TerminalButtons project={route.project} onOpened={onSession} /> : null}
+          {embedded ? null : <button className="btn btn-primary" type="button" title={live ? "git 저장소면 작업마다 worktree 를 따로 만들어 동시에 돌릴 수 있습니다" : undefined}
+                  onClick={() => onNewRun({ machine: m, project: route.project, defaults: data?.defaults, hasDesign: data?.has_design })}>새 실행</button>}
         </div>
       </div>
       {error ? <ErrorBox error={error} /> : null}
@@ -76,11 +79,13 @@ export default function ProjectView({ route, onNewRun, onChanged, onSession }: {
           <span>실행 중: <a href={hrefRun(m, route.project, live.run_id)}>{live.run_id}</a> · pid {live.pid}{live.count && live.count > 1 ? ` 외 ${live.count - 1}개` : ""}</span></div>
       ) : null}
       <nav className="tabs">
-        <a href={hrefProject(m, route.project, "runs")} className={route.tab === "runs" ? "active" : undefined}>실행 기록<span className="count">{data?.runs.length ?? ""}</span></a>
-        <a href={hrefProject(m, route.project, "design")} className={route.tab === "design" ? "active" : undefined}>설계 문서</a>
-        {m === "local" ? <a href={hrefProject(m, route.project, "agents")} className={route.tab === "agents" ? "active" : undefined}>에이전트 설정</a> : null}
+        {([["runs", `실행 기록`], ["design", "설계 문서"], ...(m === "local" && !embedded ? [["agents", "에이전트 설정"]] : [])] as [string, string][]).map(([k, label]) => (
+          <a key={k} href={hrefProject(m, route.project, k)} className={tab === k ? "active" : undefined}
+             onClick={(e) => { if (embedded) { e.preventDefault(); setLocalTab(k); } }}>
+            {label}{k === "runs" ? <span className="count">{data?.runs.length ?? ""}</span> : null}</a>
+        ))}
       </nav>
-      {route.tab === "agents" ? <AgentConfigView project={route.project} /> : route.tab === "design" ? (
+      {tab === "agents" ? <AgentConfigView project={route.project} /> : tab === "design" ? (
         <div className="card card-pad">{design ? <div className="md"><Markdown text={design} /></div> : <div className="empty">DESIGN.md 가 아직 없습니다.</div>}</div>
       ) : !data ? null : data.runs.length === 0 ? (
         <div className="card empty"><h3>실행 기록이 없습니다</h3><p>‘새 실행’으로 시작하세요.</p></div>

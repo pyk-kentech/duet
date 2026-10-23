@@ -55,7 +55,8 @@ TOKEN_PLACEHOLDER = "__TENURE_TOKEN__"
 COOKIE_PREFIX = "tenure_t_"
 COOKIE_MAX_AGE = 30 * 24 * 3600
 TOKEN_FILE = "ui-token"
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+# style 'unsafe-inline': 터미널(xterm)이 글자색·글꼴을 <style> 요소로 넣는다 (36.22). 스크립트는 여전히 'self' 만.
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
        "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 
 
@@ -772,6 +773,11 @@ class Handler(BaseHTTPRequestHandler):
         ("POST", "/api/runs/seen"): "mark_seen",
         ("GET", "/api/inbox"): "inbox",
         ("GET", "/api/works"): "works",
+        ("GET", "/api/ws/tree"): "ws_tree",
+        ("GET", "/api/ws/file"): "ws_file",
+        ("GET", "/api/ws/status"): "ws_status",
+        ("GET", "/api/ws/diff"): "ws_diff",
+        ("GET", "/api/limits"): "limits",
         ("GET", "/api/merge/check"): "merge_check",
         ("POST", "/api/actions/merge"): "merge",
         ("POST", "/api/actions/discard"): "discard",

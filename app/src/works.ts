@@ -70,6 +70,7 @@ export function buildFolders(works: WorkGroup[], sessions: SessionInfo[]): WorkF
     }
   }
   for (const s of sessions) {
+    if (s.agent === "shell") continue;                       // 보통 터미널은 작업공간의 탭일 뿐 (36.22)
     if (!s.live && !s.status.attention) continue;          // 끝나고 본 세션은 목록에서 뺌 (세션 기록은 프로젝트에서)
     const state = sessionDot(s);
     folder(LOCAL, s.project).items.push({ kind: "session", key: `session|${s.id}`, machine: LOCAL, project: s.project, session: s,

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import re
+import shutil
+import sys
 import secrets
 import threading
 import time
@@ -21,7 +24,7 @@ from tenure.runner import ExecutableNotFound, PtyProcessHandle, spawn_pty
 from tenure.term import hooks, rules
 
 SESSIONS_DIR = "sessions"
-AGENTS = ("claude", "codex")
+AGENTS = ("claude", "codex", "shell")   # shell: 작업공간의 보통 터미널 (훅 없음, 36.22)
 MAX_BUFFER = 1_000_000            # 메모리에 두는 출력 (넘으면 앞을 버림)
 MAX_LOG = 2_000_000               # output.log 상한 (넘으면 뒤쪽 절반만 남김)
 MAX_LIVE = 8                      # 동시에 열 수 있는 세션
@@ -35,6 +38,13 @@ SESSION_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 class SessionError(Exception):
     pass
+
+
+def default_shell() -> list[str]:
+    """작업공간 터미널에 띄울 셸: Windows 는 PowerShell 7(pwsh) → Windows PowerShell, 그 밖은 $SHELL."""
+    if sys.platform == "win32":
+        return [shutil.which("pwsh") or "powershell.exe", "-NoLogo"]
+    return [os.environ.get("SHELL") or "/bin/bash", "-l"]
 
 
 def _now() -> str:
@@ -314,8 +324,10 @@ class SessionManager:
         if not Path(cwd).is_dir():
             raise SessionError(f"작업 폴더가 없습니다: {cwd}")
         with self._lock:
-            if sum(1 for s in self.sessions.values() if s.live) >= MAX_LIVE:
-                raise SessionError(f"세션은 동시에 {MAX_LIVE}개까지 열 수 있습니다. 끝난 세션을 닫으세요.")
+            shell = agent == "shell"             # 셸과 에이전트 세션은 따로 센다
+            if sum(1 for s in self.sessions.values() if s.live and (s.meta.agent == "shell") == shell) >= MAX_LIVE:
+                what = "터미널" if shell else "에이전트 세션"
+                raise SessionError(f"{what}은 동시에 {MAX_LIVE}개까지 열 수 있습니다. 끝난 것을 닫으세요.")
             sid = secrets.token_hex(6)
             folder = self.root / sid
             folder.mkdir(parents=True)
@@ -327,7 +339,9 @@ class SessionManager:
             self.sessions[sid] = s
         env = {"TENURE_SESSION": sid}
         exe = bin or agent
-        if agent == "claude":
+        if agent == "shell":
+            argv = default_shell()
+        elif agent == "claude":
             argv = [exe, "--settings", hooks.claude_settings(folder, nonce)]
         else:
             argv = [exe, *hooks.codex_args(folder, nonce)]

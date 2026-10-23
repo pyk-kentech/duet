@@ -23,7 +23,8 @@ from tenure.events import last_event, read_events
 from tenure.outcome import run_activity
 from tenure import merge as mergelib
 from tenure import notes as notelib
-from tenure import procs, stopflag, worktree
+from tenure import procs, slots, stopflag, worktree
+from tenure.ui import files as fileslib
 from tenure.phases.race import DRAFTS_DIR as race_drafts_dir
 from tenure.ui.cache import RunDirs, StatCache, TtlCache
 from tenure.activity import agent_activity, call_start_epoch
@@ -988,6 +989,29 @@ class Dashboard:
                 "review_diff": cfg.review_diff, "repro_tests": cfg.repro_tests,
                 "limits": {"debate_rounds": MAX_DEBATE_ROUNDS, "max_review": MAX_REVIEW_ROUNDS}}
 
+    # ================================================================ 작업공간 파일·git (36.22)
+    def ws_dir(self, project: str | None, run_id: str | None) -> Path:
+        """작업공간 폴더: 프로젝트 자체, 또는 그 실행의 코드 폴더(worktree)."""
+        wd = self.project(project)
+        return self.code_dir(self.run_dir(wd, run_id)) if run_id else wd
+
+    def ws_call(self, fn: Any, *args: Any) -> Any:
+        try:
+            return fn(*args)
+        except fileslib.FilesError as e:
+            raise ApiError(400, str(e)) from e
+
+    def limits(self) -> dict[str, Any]:
+        """아래 상태 막대: 구독 한도 사용률과 동시 에이전트 자리 (무거운 사용량 합산은 하지 않는다)."""
+        limit = 0
+        for p in self.registry.list()[:1]:
+            try:
+                limit = load_config(Path(p)).max_agents
+            except (ConfigError, OSError):
+                pass
+        return {"codex": codex_rate_limits(), "claude": load_claude_limits(),
+                "slots": {"busy": slots.in_use(64), "max": slots.resolve(limit)}}
+
     # ================================================================ usage
     def usage_summary(self) -> dict[str, Any]:
         projects = []
@@ -1185,6 +1209,11 @@ API_METHODS: dict[str, Any] = {
     "note_delete": lambda d, a: d.note_delete(a),
     "notes_send": lambda d, a: d.followup(a, "notes"),
     "pick": lambda d, a: d.pick(a),
+    "ws_tree": lambda d, a: d.ws_call(fileslib.tree, d.ws_dir(a.get("project"), a.get("run")), a.get("path")),
+    "ws_file": lambda d, a: d.ws_call(fileslib.read_file, d.ws_dir(a.get("project"), a.get("run")), a.get("path") or ""),
+    "ws_status": lambda d, a: d.ws_call(fileslib.status, d.ws_dir(a.get("project"), a.get("run"))),
+    "ws_diff": lambda d, a: d.ws_call(fileslib.file_diff, d.ws_dir(a.get("project"), a.get("run")), a.get("path") or ""),
+    "limits": lambda d, a: d.limits(),
 }
 
 

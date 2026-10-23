@@ -4,7 +4,7 @@ import { api } from "./lib/api";
 
 export interface SessionStatus { state: "working" | "blocked" | "idle" | "ended"; reason: string; source: string; rule: string | null; attention: "blocked" | "done-unseen" | null }
 export interface SessionInfo {
-  id: string; agent: "claude" | "codex"; cwd: string; project: string; run_id: string | null; created: string;
+  id: string; agent: "claude" | "codex" | "shell"; cwd: string; project: string; run_id: string | null; created: string;
   ended: string | null; returncode: number | null; rows: number; cols: number; seen_at: string | null; title: string;
   live: boolean; status: SessionStatus;
 }
