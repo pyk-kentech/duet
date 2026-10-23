@@ -78,10 +78,11 @@ def test_ui_ready_line_and_parent_watch(tmp_path):
             parent.kill()
 
 
-def test_desktop_versions_match():
-    py = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-    conf = json.loads((ROOT / "app" / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8"))
-    cargo = tomllib.loads((ROOT / "app" / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
-    assert py == conf["version"] == cargo
-    assert conf["plugins"]["updater"]["pubkey"] and "releases/latest/download/latest.json" in conf["plugins"]["updater"]["endpoints"][0]
-    assert conf["bundle"]["resources"] == {"engine/": "engine/"} and conf["bundle"]["windows"]["nsis"]["installMode"] == "currentUser"
+def test_desktop_build_wiring():
+    """설치 파일은 오르카 포크가 만들고, 얼린 엔진은 build/desktop/dist/tenure-engine 에서 resources/engine 으로 들어간다 (36.23)."""
+    src = (ROOT / "desktop" / "build_engine.py").read_text(encoding="utf-8")
+    assert 'TARGET = DIST / "tenure-engine"' in src and "src-tauri" not in src
+    builder = ROOT / "orca" / "config" / "electron-builder.config.cjs"
+    if builder.is_file():                                   # 포크는 따로 저장소라 없는 체크아웃도 있다
+        text = builder.read_text(encoding="utf-8")
+        assert "'tenure-engine'" in text and "to: 'engine'" in text and "productName: 'tenure'" in text

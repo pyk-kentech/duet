@@ -127,8 +127,8 @@ tenure pick --workdir ./x --run <id> --draft codex   # 판정과 다른 초안�
 # 승인을 기다리면 받은편지함에 카드가 뜬다. 상태 판단이 이상하면:
 tenure explain --session <id>                       # 맞은 화면 규칙·마지막 훅 (규칙은 ~/.tenure/screen_rules.toml 로 고침)
 
-# 데스크톱 앱(윈도우) 빌드: Node, Rust(MSVC), VS C++ 빌드 도구, pip install -e ".[desktop]" 가 필요
-python desktop/build_app.py                       # → app/src-tauri/target/release/bundle/nsis/tenure_<버전>_x64-setup.exe
+# 데스크톱 앱(윈도우) 빌드: 오르카 포크 orca/, 휴대용 Node 24(.tools/node24), VS C++ 빌드 도구, pip install -e ".[desktop]"
+python desktop/build_desktop.py                   # → orca/dist/ 의 tenure 설치 파일 (DESIGN.md 36.23)
 
 # CLI 없이 흐름 테스트
 tenure run "..." --workdir ./x --mock

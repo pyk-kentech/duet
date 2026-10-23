@@ -1,4 +1,4 @@
-"""엔진 sidecar 를 얼린다 (DESIGN.md 36.20): PyInstaller onedir → app/src-tauri/engine/.
+"""엔진 sidecar 를 얼린다 (DESIGN.md 36.20·36.23): PyInstaller onedir → build/desktop/dist/tenure-engine/ (데스크톱 앱 설치 파일이 resources/engine 으로 담는다).
 
     python desktop/build_engine.py            # 빌드 + 간단한 확인
     python desktop/build_engine.py --check    # 이미 만든 것만 확인
@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILD = ROOT / "build" / "desktop"
 STAGE = BUILD / "stage"
 DIST = BUILD / "dist"
-TARGET = ROOT / "app" / "src-tauri" / "engine"
+TARGET = DIST / "tenure-engine"
 NAME = "tenure-engine"
 EXE = TARGET / (NAME + (".exe" if sys.platform == "win32" else ""))
 
@@ -55,9 +55,6 @@ def build() -> None:
     if sys.platform == "win32":
         args += ["--collect-all", "winpty"]       # ConPTY (pywinpty 의 DLL·실행 파일)
     pyi.run(args)
-    if TARGET.exists():
-        shutil.rmtree(TARGET)
-    shutil.copytree(DIST / NAME, TARGET)
     print(f"엔진: {TARGET}")
 
 
