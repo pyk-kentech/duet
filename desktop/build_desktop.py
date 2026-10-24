@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -19,6 +20,14 @@ ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
 ORCA = ROOT / "orca"
 NODE24 = ROOT / ".tools" / "node24"
+REVISION_FILE = ROOT / "desktop" / "desktop-revision.txt"
+
+
+def desktop_version() -> str:
+    """앱 버전 = 오르카 버전의 끝자리 x100 + tenure 회차 (예: 1.4.214 + 1 → 1.4.21401). 오르카가 올라가도 계속 커진다."""
+    major, minor, patch = json.loads((ORCA / "package.json").read_text(encoding="utf-8"))["version"].split("-")[0].split(".")
+    rev = int(REVISION_FILE.read_text(encoding="utf-8").strip() or "0")
+    return f"{major}.{minor}.{int(patch) * 100 + rev}"
 
 
 def run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> None:
@@ -35,7 +44,9 @@ def main() -> None:
     run([npm, "run", "build"], APP)                                           # 엔진 화면 → src/tenure/ui/web (섬 화면 포함)
     run([sys.executable, str(ROOT / "desktop" / "build_engine.py")], ROOT)    # 엔진 → build/desktop/dist/tenure-engine
     env = {**os.environ, "PATH": f"{NODE24}{os.pathsep}{os.environ.get('PATH', '')}",
-           "COREPACK_HOME": str(ROOT / ".tools" / "corepack"), "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"}
+           "COREPACK_HOME": str(ROOT / ".tools" / "corepack"), "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
+           "ORCA_LOCAL_BUILD_VERSION": desktop_version()}
+    print(f"데스크톱 앱 버전: {env['ORCA_LOCAL_BUILD_VERSION']}")
     pnpm = str(NODE24 / ("pnpm.cmd" if sys.platform == "win32" else "pnpm"))
     if not (ORCA / "mobile" / "node_modules").is_dir():                       # 설치 파일 단계가 모바일 웹 묶음을 검사한다
         run([pnpm, "install", "--frozen-lockfile"], ORCA / "mobile", env)
