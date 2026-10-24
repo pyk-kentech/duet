@@ -1,0 +1,19 @@
+name = "race"
+description = "경쟁 초안 · Claude·Codex 가 각자 구현 → 서로 리뷰 → 판정 → 승자가 이어서 (36.15)"
+
+# 두 초안을 따로 만든 worktree 에서 동시에 구현하고, 상대 초안을 리뷰한다. 테스트·리뷰·막는 지적·바뀐 줄로
+# 승자를 고르고(모델 호출 없음), 승자 초안이 승인되지 않았으면 승자가 고치고 패자가 리뷰하는 라운드를 잇는다.
+# 비용은 quick 의 약 두 배. 벤치마크로 효과를 확인한 뒤 쓴다(DESIGN.md 36.9).
+[roles.claude]
+agent = "claude"
+
+[roles.codex]
+agent = "codex"
+
+[[steps]]
+kind = "build"
+implementer = "claude"
+rivals = ["codex"]
+reviewers = ["codex"]
+max_review = 2
+design = "task"

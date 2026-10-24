@@ -7,15 +7,15 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet.agents import make_role_agents
-from duet.agents.base import AgentRequest, Mode
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.config import Config, load_config
-from duet.state import DONE_APPROVED, DONE_DESIGN, DONE_UNAPPROVED, STOPPED_RATE_LIMIT, RunState, list_run_dirs
-from duet.transcript import Transcript
-from duet.workflow import (
+import tenure.orchestrator as orch_mod
+from tenure.agents import make_role_agents
+from tenure.agents.base import AgentRequest, Mode
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.config import Config, load_config
+from tenure.state import DONE_APPROVED, DONE_DESIGN, DONE_UNAPPROVED, STOPPED_RATE_LIMIT, RunState, list_run_dirs
+from tenure.transcript import Transcript
+from tenure.workflow import (
     Role,
     Workflow,
     WorkflowError,
@@ -43,7 +43,7 @@ DEBATE = {"kind": "debate", "proposers": ["a", "b"], "synth": "b"}
 
 
 def write_project_wf(wd: Path, name: str, text: str) -> None:
-    d = wd / ".duet" / "workflows"
+    d = wd / ".tenure" / "workflows"
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{name}.toml").write_text(text, encoding="utf-8")
 
@@ -143,11 +143,11 @@ class TestLoad:
         for name in ("secure", "existing", "lean"):
             assert load_workflow(name, None, cfg).source == "builtin"
 
-    def test_project_and_user_shadow_builtin(self, tmp_path: Path, isolated_duet_home: Path):
+    def test_project_and_user_shadow_builtin(self, tmp_path: Path, isolated_tenure_home: Path):
         wd = tmp_path / "w"
         text = '[roles.a]\nagent = "claude"\n[roles.b]\nagent = "codex"\n[[steps]]\nkind = "build"\nimplementer = "a"\nreviewers = ["b"]\n'
-        (isolated_duet_home / "workflows").mkdir()
-        (isolated_duet_home / "workflows" / "lean.toml").write_text(text, encoding="utf-8")
+        (isolated_tenure_home / "workflows").mkdir()
+        (isolated_tenure_home / "workflows" / "lean.toml").write_text(text, encoding="utf-8")
         assert load_workflow("lean", wd, Config()).source == "user"
         write_project_wf(wd, "lean", text)
         assert load_workflow("lean", wd, Config()).source == "project"
@@ -174,8 +174,8 @@ class TestLoad:
                                   '[[steps]]\nkind = "build"\nimplementer = "a"\nreviewers = ["b"]\n')
         with pytest.raises(WorkflowError, match="my_review"):
             load_workflow("t", wd, Config())
-        (wd / ".duet" / "templates").mkdir(parents=True)
-        (wd / ".duet" / "templates" / "my_review.md").write_text("리뷰 {task}\n<verdict>\n", encoding="utf-8")
+        (wd / ".tenure" / "templates").mkdir(parents=True)
+        (wd / ".tenure" / "templates" / "my_review.md").write_text("리뷰 {task}\n<verdict>\n", encoding="utf-8")
         assert load_workflow("t", wd, Config()).roles["b"].templates == {"review": "my_review"}
 
 
@@ -333,7 +333,7 @@ def test_template_params_and_cli_precedence(tmp_path: Path):
 def test_workflow_from_duet_toml(tmp_path: Path):
     wd = tmp_path / "w"
     wd.mkdir()
-    (wd / "duet.toml").write_text('workflow = "lean"\n', encoding="utf-8")
+    (wd / "tenure.toml").write_text('workflow = "lean"\n', encoding="utf-8")
     assert run(wd) == 0
     assert RunState.load(only_run(wd)).workflow["name"] == "lean"
 
@@ -358,7 +358,7 @@ def test_resume_uses_saved_workflow(tmp_path: Path, monkeypatch):
     rd = only_run(wd)
     st = RunState.load(rd)
     assert st.status == STOPPED_RATE_LIMIT and st.is_done("review:1:r1") and not st.is_done("review:1")
-    (wd / ".duet" / "workflows" / "two.toml").unlink()            # 파일이 없어도 저장본으로 이어간다
+    (wd / ".tenure" / "workflows" / "two.toml").unlink()            # 파일이 없어도 저장본으로 이어간다
     assert main(["resume", "--workdir", str(wd)]) == 0
     st = RunState.load(rd)
     assert st.status == DONE_APPROVED and st.review_history[0]["approved"]

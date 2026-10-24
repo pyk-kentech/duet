@@ -1,6 +1,6 @@
 import pytest
 
-from duet.verdict import Status, Verdict, parse_verdict
+from tenure.verdict import Status, Verdict, parse_verdict
 
 
 def test_block_approved():

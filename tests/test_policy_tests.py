@@ -1,4 +1,4 @@
-"""심각도 기준 판정, 수렴 실패 감지, duet 가 직접 돌리는 테스트."""
+"""심각도 기준 판정, 수렴 실패 감지, tenure 가 직접 돌리는 테스트."""
 
 from __future__ import annotations
 
@@ -7,19 +7,19 @@ from pathlib import Path
 
 import pytest
 
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.phases.build import BuildPhase, extract_section
-from duet.policy import blocking_count, decide, stalled
-from duet.state import DONE_APPROVED, DONE_UNAPPROVED, RunState, list_run_dirs
-from duet.testing import detect_command, resolve_command, run_tests
-from duet.verdict import Status, parse_verdict
-from duet.workspace import Workspace
-from duet.procs import PYTHON_CMD
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.phases.build import BuildPhase, extract_section
+from tenure.policy import blocking_count, decide, stalled
+from tenure.state import DONE_APPROVED, DONE_UNAPPROVED, RunState, list_run_dirs
+from tenure.testing import detect_command, resolve_command, run_tests
+from tenure.verdict import Status, parse_verdict
+from tenure.workspace import Workspace
+from tenure.procs import PYTHON_CMD
 from tests.helpers import echo_exit, py_cmd
 from tests.helpers import file_names, make_ctx
 
-import duet.orchestrator as orch_mod
+import tenure.orchestrator as orch_mod
 
 
 def vblock(status="CHANGES_REQUESTED", must=None, p1=None, p2=None, p3=None):
@@ -104,11 +104,11 @@ def test_resolve_command_precedence(tmp_path: Path):
     (tmp_path / "tests").mkdir()
     (tmp_path / "setup.py").write_text("")
     assert resolve_command(tmp_path, "auto")[1] == "자동 감지"
-    (tmp_path / "duet.toml").write_text('test_command = "make check"\n')
-    assert resolve_command(tmp_path, "auto") == ("make check", "duet.toml")
+    (tmp_path / "tenure.toml").write_text('test_command = "make check"\n')
+    assert resolve_command(tmp_path, "auto") == ("make check", "tenure.toml")
     assert resolve_command(tmp_path, "pytest -x") == ("pytest -x", "설정")
     assert resolve_command(tmp_path, "none") is None
-    (tmp_path / "duet.toml").write_text('test_command = "none"\n')
+    (tmp_path / "tenure.toml").write_text('test_command = "none"\n')
     assert resolve_command(tmp_path, "auto") is None
 
 
@@ -152,10 +152,10 @@ def test_tests_run_and_reach_reviewer(tmp_path: Path):
     assert file_names(ctx.run_dir) == ["01_impl1_claude.md", "02_test1.md", "03_review1_codex.md"]
     t = ctx.state.tests["1"]
     assert t["status"] == "passed" and t["summary"] == "7 passed in 0.2s" and t["file"] == "02_test1.md"
-    assert "[duet 가 직접 실행한 테스트]" in prompts[0] and "7 passed" in prompts[0] and "통과" in prompts[0]
+    assert "[tenure 가 직접 실행한 테스트]" in prompts[0] and "7 passed" in prompts[0] and "통과" in prompts[0]
     assert "(첫 리뷰)" in prompts[0]
     head = (ctx.run_dir / "02_test1.md").read_text(encoding="utf-8")
-    assert "agent: duet" in head and "test_status: passed" in head
+    assert "agent: tenure" in head and "test_status: passed" in head
     assert ctx.state.review_history[0]["tests"] == "passed"
 
 
@@ -192,12 +192,12 @@ def test_test_artifacts_not_committed(tmp_path: Path):
 def test_implementer_declares_test_command_in_duet_toml(tmp_path: Path):
     def impl(req, n):
         assert "test_command" in req.prompt   # 구현 프롬프트가 안내한다
-        (req.cwd / "duet.toml").write_text('test_command = "echo from-duet-toml"\n', encoding="utf-8")
+        (req.cwd / "tenure.toml").write_text('test_command = "echo from-tenure-toml"\n', encoding="utf-8")
         return "done"
 
     ctx = prep(tmp_path, {"claude": MockAdapter(label="claude", responder=impl), "codex": approve_reviewer()})
     assert BuildPhase(ctx).run()
-    assert ctx.state.tests["1"]["command"] == "echo from-duet-toml" and ctx.state.tests["1"]["source"] == "duet.toml"
+    assert ctx.state.tests["1"]["command"] == "echo from-tenure-toml" and ctx.state.tests["1"]["source"] == "tenure.toml"
 
 
 def test_no_test_command_skips(tmp_path: Path):
@@ -278,9 +278,9 @@ def test_resume_old_run_does_not_retest_reviewed_rounds(tmp_path: Path):
     ws = Workspace(tmp_path)
     ws.ensure_repo()
     st = ctx.state
-    st.base_commit = ws.commit_all("duet: design")
+    st.base_commit = ws.commit_all("tenure: design")
     (tmp_path / "main.py").write_text("v1\n", encoding="utf-8")
-    ws.commit_all("duet: impl round 1")
+    ws.commit_all("tenure: impl round 1")
     for k in ("build:base", "impl:1:called", "impl:1", "review:1"):   # 예전 실행: test:1 키가 없음
         st.mark_done(k)
     st.last_review = "x.md"

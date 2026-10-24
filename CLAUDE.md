@@ -1,27 +1,32 @@
 # CLAUDE.md
 
-이 저장소는 `duet`을 만든다. 무엇을 만드는지는 **DESIGN.md가 기준**이다. 작업 시작 전에 DESIGN.md 전체를 읽어라.
+이 저장소는 **tenure**(옛 이름 duet)를 만든다. 무엇을 만드는지는 **DESIGN.md가 기준**이다. 작업 시작 전에 DESIGN.md 를 읽어라(지금 진행 중인 설계는 36장).
 
 ## 작업 방식
-- DESIGN.md 11장의 마일스톤(M0 → M6)을 **순서대로 하나씩** 진행한다.
-- 각 마일스톤마다: 구현 → 테스트 작성 → `pytest` 통과 확인 → 완료 기준 점검 → 커밋(`M1: 실행부와 어댑터` 같은 메시지).
+- 마일스톤을 **순서대로 하나씩** 진행한다. 지금은 DESIGN.md 36.9 의 M30 → M35, 그다음 최적화.
+- 각 마일스톤마다: 구현 → 테스트 작성 → 테스트 통과 확인 → 완료 기준 점검 → 커밋(`M30: 엔진 기반` 같은 메시지).
 - 한 마일스톤을 끝내면 무엇을 했는지 3~5줄로 보고하고, 다음 마일스톤으로 넘어가기 전에 멈춘다. (사용자가 "계속"이라고 하면 진행)
 - 설계에서 벗어나야 할 이유가 생기면 먼저 사용자에게 묻고, 합의되면 DESIGN.md도 함께 고친다. 몰래 바꾸지 않는다.
 
 ## 기술 규칙
-- Python 3.11+, **런타임 의존성 없음**(표준 라이브러리만). 개발 의존성은 pytest만.
-- `src/` 레이아웃, 타입 힌트 사용, dataclass 선호.
-- 모든 subprocess 호출은 `duet.runner`를 통한다.
-- 사용자에게 보이는 메시지(로그, 에러, README)는 한국어. 코드 식별자와 주석은 영어/한국어 자유.
+- 엔진: Python 3.11+, `src/` 레이아웃, 타입 힌트, dataclass 선호. **런타임 의존성은 쓸 이유가 분명할 때만** 더하고(2026-10-21 사용자 결정으로 표준 라이브러리 제한 해제), `pyproject.toml` 과 DESIGN.md 에 이유를 적는다. 원격(SSH)에서 부르는 API 경로는 무거운 의존성 없이 돌게 둔다.
+- 화면: React + TypeScript + Vite. 데스크톱 앱: 오르카(Electron) 포크 `orca/` (DESIGN.md 36.23, 2026-10-22 사용자 결정, 옛 Tauri 셸은 M40 에서 걷어냄). 엔진은 그 안에서 자식 프로세스로 돈다. 엔진 화면은 브라우저로도 열려야 한다.
+- 포크(`orca/`)는 오르카 규칙(orca/AGENTS.md)을 따르고 Node 24·pnpm 12 는 `.tools/` 의 휴대용 Node 로 돌린다.
+- 모든 subprocess 호출은 엔진의 `runner` 모듈을 통한다.
+- 사용자에게 보이는 메시지(로그, 에러, README, 화면)는 한국어. 코드 식별자와 주석은 영어/한국어 자유.
+- 사용자 설정(`~/.claude`, `~/.codex`)을 고치지 않는다. 훅·MCP 는 호출마다 인자로 붙인다.
+- 다른 프로젝트의 코드를 빌리면 라이선스를 확인하고 `THIRD_PARTY_NOTICES.md` 에 출처를 적는다. NotchCrew 처럼 소스가 없는 것은 아이디어만.
 
 ## 절대 하지 말 것
-- 테스트나 개발 중에 **실제 `claude -p`, `codex exec`로 프롬프트를 실행하지 않는다.** 사용자 구독 한도를 소모한다. `--help`, `--version` 확인만 허용(M1).
-- Anthropic/OpenAI API SDK를 추가하지 않는다.
+- 테스트나 개발 중에 **실제 `claude -p`, `codex exec`/`codex app-server` 로 프롬프트를 실행하지 않는다.** 사용자 구독 한도를 소모한다. `--help`, `--version` 확인만 허용. (사용자가 실제 실행을 분명히 요청한 경우는 예외)
+- Anthropic/OpenAI API SDK를 추가하지 않는다(구독 CLI 만 쓴다).
 - `prototype/agent_team.py`를 수정하지 않는다. 참고만 한다.
 
 ## 명령어
-- 설치: `pip install -e ".[dev]"`
+- 설치: `pip install -e ".[dev]"` (옛 `duet` 명령도 같은 동작의 별칭으로 남아 있다)
 - 테스트: `pytest -q`
-- 수동 확인: `duet run "할일 CLI" --workdir /tmp/duet-try --mock`
-- 관리자 UI: `duet ui` (느린 mock 으로 화면 확인: `DUET_MOCK_DELAY=1 duet ui`)
-- UI 테스트는 `tests/test_ui.py`(HTTP 수준). 테스트는 `DUET_HOME` 을 임시 폴더로 바꿔 사용자의 `~/.duet` 을 건드리지 않는다.
+- 수동 확인: `tenure run "할일 CLI" --workdir /tmp/tenure-try --mock`
+- 화면 빌드: `cd app && npm install && npm run build` (결과는 src/tenure/ui/web, 커밋한다. 개발 중에는 `npm run dev` 가 /api 를 8790 의 tenure ui 로 넘김)
+- 데스크톱 앱: `python desktop/build_desktop.py` (엔진 화면 → 엔진 얼리기 → 오르카 포크 `orca/` 의 NSIS 설치 파일 `orca/dist/`). 포크 개발 실행: `orca/` 에서 PATH 앞에 `.tools/node24` 를 두고 `pnpm dev`
+- 관리자 UI: `tenure ui` (느린 mock 으로 화면 확인: `TENURE_MOCK_DELAY=1 tenure ui`)
+- UI 테스트는 `tests/test_ui.py`(HTTP 수준). 테스트는 `TENURE_HOME` 을 임시 폴더로 바꿔 사용자의 `~/.tenure` 을 건드리지 않는다.

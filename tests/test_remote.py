@@ -11,19 +11,19 @@ from pathlib import Path
 
 import pytest
 
-from duet.remote import Remote, RemoteError, build_pyz
-from duet.settings import load_settings
-from duet.state import list_run_dirs
-from duet.ui.server import make_server
+from tenure.remote import Remote, RemoteError, build_pyz
+from tenure.settings import load_settings
+from tenure.state import list_run_dirs
+from tenure.ui.server import make_server
 from tests.test_ui import TOKEN, call, wait_for
 
 
 @pytest.fixture
 def remote_env(tmp_path: Path, fake_bin: Path, monkeypatch):
     home = tmp_path / "remote-home"
-    monkeypatch.setenv("DUET_SSH", str(fake_bin / "ssh"))
-    monkeypatch.setenv("DUET_FAKE_REMOTE_HOME", str(home))
-    monkeypatch.setenv("DUET_FAKE_PY_DIR", str(Path(sys.executable).parent))
+    monkeypatch.setenv("TENURE_SSH", str(fake_bin / "ssh"))
+    monkeypatch.setenv("TENURE_FAKE_REMOTE_HOME", str(home))
+    monkeypatch.setenv("TENURE_FAKE_PY_DIR", str(Path(sys.executable).parent))
     return home
 
 
@@ -46,18 +46,18 @@ def server():
 def test_pyz_is_deterministic_and_complete(tmp_path: Path):
     data, digest = build_pyz()
     assert build_pyz()[1] == digest
-    path = tmp_path / "duet.pyz"
+    path = tmp_path / "tenure.pyz"
     path.write_bytes(data)
     names = zipfile.ZipFile(path).namelist()
-    assert "__main__.py" in names and "duet/cli.py" in names
-    assert "duet/templates/review.md" in names and "duet/ui/static/app.js" in names
+    assert "__main__.py" in names and "tenure/cli.py" in names
+    assert "tenure/templates/review.md" in names and "tenure/ui/static/app.js" in names
     assert not any("__pycache__" in n for n in names)
     import subprocess
     r = subprocess.run([sys.executable, str(path), "--version"], capture_output=True, text=True, encoding="utf-8")
-    assert r.returncode == 0 and "duet" in r.stdout
+    assert r.returncode == 0 and "tenure" in r.stdout
     # zip 안에서도 템플릿을 읽을 수 있어야 한다(원격 실행)
     r = subprocess.run([sys.executable, "-c",
-                        f"import sys; sys.path.insert(0, {str(path)!r}); from duet.prompts import render; "
+                        f"import sys; sys.path.insert(0, {str(path)!r}); from tenure.prompts import render; "
                         "print(render('propose', task='T')[:80])"], capture_output=True, text=True, encoding="utf-8")
     assert r.returncode == 0, r.stderr
     assert "시니어 엔지니어" in r.stdout
@@ -73,9 +73,9 @@ def test_remote_probe_deploy_api(remote_env, tmp_path: Path):
         r.api("projects")
     r = Remote({"id": "lab", "ssh": "me@lab", "python": info["python"]})
     out = r.deploy()
-    assert out["deployed"] and "duet" in out["version"]
-    assert (remote_env / ".duet" / "bin" / "duet.pyz").exists()
-    assert os.access(remote_env / ".duet" / "bin" / "duet", os.X_OK)
+    assert out["deployed"] and "tenure" in out["version"]
+    assert (remote_env / ".tenure" / "bin" / "tenure.pyz").exists()
+    assert os.access(remote_env / ".tenure" / "bin" / "tenure", os.X_OK)
     info = r.probe()
     assert info["deployed"] and info["up_to_date"]
     assert r.api("projects") == {"projects": [], "jobs": []}
@@ -98,7 +98,7 @@ def test_server_remote_machine_end_to_end(server, remote_env, tmp_path: Path):
     s, body, _ = call(server, "POST", "/api/machines", body={"id": "Bad Id", "ssh": "me@lab"})
     assert s == 400
     s, body, _ = call(server, "POST", "/api/machines", body={
-        "id": "lab", "name": "연구실", "ssh": "me@lab", "port": "22", "workspace_root": "~/duet-projects"})
+        "id": "lab", "name": "연구실", "ssh": "me@lab", "port": "22", "workspace_root": "~/tenure-projects"})
     assert s == 200 and body["settings"]["machines"][0]["id"] == "lab"
 
     s, info, _ = call(server, "POST", "/api/machines/probe", body={"machine": "lab"})
@@ -112,7 +112,7 @@ def test_server_remote_machine_end_to_end(server, remote_env, tmp_path: Path):
     assert set(groups) == {"local", "lab"} and groups["lab"]["error"] is None and groups["lab"]["projects"] == []
 
     # 원격에서 mock 실행
-    remote_wd = str(remote_env / "duet-projects" / "memo")
+    remote_wd = str(remote_env / "tenure-projects" / "memo")
     s, job, _ = call(server, "POST", "/api/actions/run", body={
         "machine": "lab", "project": remote_wd, "task": "원격 메모 CLI", "mock": True, "debate_rounds": 0})
     assert s == 200, job
@@ -128,7 +128,7 @@ def test_server_remote_machine_end_to_end(server, remote_env, tmp_path: Path):
     s, entry, _ = call(server, "GET", f"/api/entry?machine=lab&project={remote_wd}&run={run_id}&file=03_synthesize_codex.md")
     assert "## 결정 사항" in entry["body"]
     # 기록은 원격 HOME 쪽에만 있다
-    assert list_run_dirs(Path(remote_wd)) and (remote_env / ".duet" / "projects.json").exists()
+    assert list_run_dirs(Path(remote_wd)) and (remote_env / ".tenure" / "projects.json").exists()
     server._remote_cache.clear()
     s, projects, _ = call(server, "GET", "/api/projects")
     lab = next(g for g in projects["machines"] if g["id"] == "lab")
@@ -170,14 +170,14 @@ def test_doctor_api(server, fake_bin, monkeypatch):
     monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
     s, d, _ = call(server, "GET", "/api/doctor")
     assert s == 200 and d["ready"] is True
-    assert {c["id"] for c in d["checks"]} >= {"duet", "git", "claude", "codex", "uv"}
+    assert {c["id"] for c in d["checks"]} >= {"tenure", "git", "claude", "codex", "uv"}
     s, a, _ = call(server, "GET", "/api/setup/actions")
     assert "install_claude" in a["actions"] and a["actions"]["login_codex"]["interactive"]
 
 
 def test_setup_action_terminal_flow(server, monkeypatch):
-    import duet.ui.server as srv_mod
-    from duet.doctor import Action
+    import tenure.ui.server as srv_mod
+    from tenure.doctor import Action
 
     # Windows 는 PowerShell 파이프 방식으로 같은 흐름을 본다 (DESIGN.md 27.5)
     test_action = Action("t", "테스트 로그인", "printf 'code? '; read x; echo \"ok:$x\"", True,
@@ -201,9 +201,9 @@ def test_setup_action_terminal_flow(server, monkeypatch):
 def test_usage_api(server, tmp_path: Path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "no-codex"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude"))
-    from duet.cli import main
+    from tenure.cli import main
     main(["run", "t", "--workdir", str(tmp_path / "p"), "--mock", "--debate-rounds", "0"])
     s, u, _ = call(server, "GET", "/api/usage")
     assert s == 200 and u["codex_limits"] is None
     assert u["claude_local"]["windows"]["5시간"]["output_tokens"] == 0
-    assert "projects" in u["duet"]
+    assert "projects" in u["tenure"]

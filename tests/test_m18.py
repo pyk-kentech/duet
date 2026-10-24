@@ -10,17 +10,17 @@ from pathlib import Path
 
 import pytest
 
-import duet.doctor as doctor
-import duet.orchestrator as orch_mod
-from duet import testguard
-from duet.agents.base import AgentRequest, Mode
-from duet.agents.claude_code import ClaudeCodeAdapter
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.config import Config, ConfigError, load_config
-from duet.state import RunState, list_run_dirs
-from duet.ui.server import make_server
-from duet.workspace import Workspace
+import tenure.doctor as doctor
+import tenure.orchestrator as orch_mod
+from tenure import testguard
+from tenure.agents.base import AgentRequest, Mode
+from tenure.agents.claude_code import ClaudeCodeAdapter
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.config import Config, ConfigError, load_config
+from tenure.state import RunState, list_run_dirs
+from tenure.ui.server import make_server
+from tenure.workspace import Workspace
 from tests.helpers import file_names
 
 TWO_TESTS = "def test_a():\n    assert 1 == 1\n    assert 2 == 2\n\n\ndef test_b():\n    assert f() == 3\n"
@@ -107,7 +107,7 @@ def test_scan_repro_changed(tmp_path):
     ws, base = repo(tmp_path, {"main.py": "x = 1\n"})
     reviewed = ws.head()
     write(ws, {"tests/test_repro_x.py": "def test_x():\n    assert f(1) == 2\n"})
-    repro_commit = ws.commit_all("duet: repro tests from review 1")
+    repro_commit = ws.commit_all("tenure: repro tests from review 1")
     rf = testguard.repro_files({"1": {"files": ["tests/test_repro_x.py"], "commit": repro_commit}})
     assert testguard.scan(ws, reviewed, repro_files=rf) == []         # 저장만 된 재현 테스트는 조용
     write(ws, {"tests/test_repro_x.py": "def test_x():\n    pass\n"})
@@ -122,7 +122,7 @@ def test_scan_repro_changed(tmp_path):
 
 def test_format_signals():
     text = testguard.format_signals([{"kind": "deleted", "file": "tests/t.py", "detail": "파일 삭제"}], "지난 리뷰 이후")
-    assert text.startswith("[테스트 변경 경고] duet 가 지난 리뷰 이후")
+    assert text.startswith("[테스트 변경 경고] tenure 가 지난 리뷰 이후")
     assert "- 테스트 파일 삭제: `tests/t.py` (파일 삭제)" in text and "[P1]" in text
     assert testguard.format_signals([], "x") == ""
 
@@ -150,7 +150,7 @@ def run(tmp_path, monkeypatch, *extra, toml=""):
     monkeypatch.setattr(orch_mod, "make_agents", factory)
     wd = tmp_path / "w"
     wd.mkdir(parents=True)
-    (wd / "duet.toml").write_text('test_command = "none"\n' + toml, encoding="utf-8")
+    (wd / "tenure.toml").write_text('test_command = "none"\n' + toml, encoding="utf-8")
     rc = main(["run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", *extra])
     [rd] = list_run_dirs(wd)
     return rc, seen, RunState.load(rd), rd
@@ -164,7 +164,7 @@ def test_build_warns_reviewer_about_weakened_tests(tmp_path, monkeypatch, capsys
     assert g["file"] in file_names(rd) and g["file"].endswith("_testguard2.md")
     reviews = [c for c in seen["codex"].calls if c.step == "review"]
     assert "[테스트 변경 경고]" not in reviews[0].prompt
-    assert "[테스트 변경 경고] duet 가 지난 리뷰 이후" in reviews[1].prompt and "`tests/test_a.py`" in reviews[1].prompt
+    assert "[테스트 변경 경고] tenure 가 지난 리뷰 이후" in reviews[1].prompt and "`tests/test_a.py`" in reviews[1].prompt
     assert "⚠️ 테스트 변경 감지 2건" in capsys.readouterr().out
     assert "guard:1" in st.done and "guard:2" in st.done
 
@@ -192,7 +192,7 @@ def server():
 def req(srv, path, headers, method="GET", token=True):
     h = dict(headers)
     if token:
-        h["X-Duet-Token"] = TOKEN
+        h["X-Tenure-Token"] = TOKEN
     data = b"{}" if method == "POST" else None
     if data is not None:
         h["Content-Type"] = "application/json"
@@ -241,12 +241,12 @@ def test_sandbox_flag_only_for_write_when_enabled():
 def test_sandbox_settings_config(tmp_path):
     wd = tmp_path / "w"
     wd.mkdir()
-    (wd / "duet.toml").write_text('access = "standard"\nclaude_sandbox = true\n[claude]\nsandbox_settings = \'{"sandbox": {"enabled": true}}\'\n',
+    (wd / "tenure.toml").write_text('access = "standard"\nclaude_sandbox = true\n[claude]\nsandbox_settings = \'{"sandbox": {"enabled": true}}\'\n',
                                   encoding="utf-8")
     cfg = load_config(wd, global_defaults={})
     c = cmd(cfg, Mode.WRITE)
     assert c[c.index("--settings") + 1] == '{"sandbox": {"enabled": true}}'
-    (wd / "duet.toml").write_text("[claude]\nsandbox_settings = '{bad'\n", encoding="utf-8")
+    (wd / "tenure.toml").write_text("[claude]\nsandbox_settings = '{bad'\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="sandbox_settings"):
         load_config(wd, global_defaults={})
 
@@ -257,9 +257,9 @@ def test_cli_claude_sandbox_flag(tmp_path, monkeypatch):
 
 
 def test_doctor_sandbox_check(monkeypatch):
-    monkeypatch.setattr("duet.config.load_config", lambda *a, **k: Config(claude_sandbox=False))
+    monkeypatch.setattr("tenure.config.load_config", lambda *a, **k: Config(claude_sandbox=False))
     assert doctor._sandbox_check() is None
-    monkeypatch.setattr("duet.config.load_config", lambda *a, **k: Config(claude_sandbox=True))
+    monkeypatch.setattr("tenure.config.load_config", lambda *a, **k: Config(claude_sandbox=True))
     monkeypatch.setattr(doctor.sys, "platform", "linux")
     monkeypatch.setattr(doctor, "_which", lambda name: "/usr/bin/bwrap" if name == "bwrap" else "")
     c = doctor._sandbox_check()

@@ -11,19 +11,19 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet import attachments, browser as browserlib
-from duet.agents.base import AgentRequest, Mode
-from duet.agents.claude_code import ClaudeCodeAdapter
-from duet.agents.codex import CodexAdapter
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.config import Config, ConfigError, load_config
-from duet.options import BY_KEY
-from duet.phases.build import BuildPhase
-from duet.state import RunState, list_run_dirs
-from duet.tools import PACKAGE_LOOKUP_TOOLS, Browser
-from duet.ui.dashboard import ApiError, Dashboard
+import tenure.orchestrator as orch_mod
+from tenure import attachments, browser as browserlib
+from tenure.agents.base import AgentRequest, Mode
+from tenure.agents.claude_code import ClaudeCodeAdapter
+from tenure.agents.codex import CodexAdapter
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.config import Config, ConfigError, load_config
+from tenure.options import BY_KEY
+from tenure.phases.build import BuildPhase
+from tenure.state import RunState, list_run_dirs
+from tenure.tools import PACKAGE_LOOKUP_TOOLS, Browser
+from tenure.ui.dashboard import ApiError, Dashboard
 
 
 def creq(step="propose", mode=Mode.READ, **kw):
@@ -141,7 +141,7 @@ def test_attachments_copied_and_shown(tmp_path: Path, monkeypatch):
     assert (rd / "attachments" / "screen.png").read_bytes() == b"\x89PNG fake"
     calls = {c.step: c for c in seen["claude"].calls + seen["codex"].calls}
     for step in ("propose", "implement", "review"):
-        assert "## 첨부 파일" in calls[step].prompt and ".duet/runs/" in calls[step].prompt
+        assert "## 첨부 파일" in calls[step].prompt and ".tenure/runs/" in calls[step].prompt
     review = calls["review"]
     assert [Path(p).name for p in review.images] == ["screen.png"]             # 이미지는 -i 용으로도
     assert "첨부 2" not in (rd / "console.log").read_text(encoding="utf-8") and \
@@ -167,13 +167,13 @@ def test_attachment_limits(tmp_path: Path, monkeypatch):
 
 def test_dashboard_attachments(tmp_path: Path, monkeypatch):
     seen = {}
-    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv: seen.update(argv=argv) or {"id": "j"})
+    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv, scope=None: seen.update(argv=argv) or {"id": "j"})
     data = base64.b64encode(b"hello").decode()
     Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True,
                            "attachments": [{"name": "../evil name.txt", "data": data}, {"name": "x.png", "data": data}]})
     paths = [seen["argv"][i + 1] for i, a in enumerate(seen["argv"]) if a == "--attach"]
     assert [Path(p).name for p in paths] == ["evil name.txt", "x.png"] and all(Path(p).read_bytes() == b"hello" for p in paths)
-    assert all(".duet" in p and "attachments" in p for p in paths)
+    assert all(".tenure" in p and "attachments" in p for p in paths)
     for bad, msg in (([{"name": "a", "data": "!!notb64"}], "읽을 수 없습니다"), ([{"name": "a", "data": data}] * 11, "10개"),
                      ("x", "10개")):
         with pytest.raises(ApiError, match=msg):
@@ -222,9 +222,9 @@ def test_playwright_tool_finds_npx_on_path(tmp_path: Path, monkeypatch):
     assert tool.args[:2] == ["-y", "@playwright/mcp@latest"] and "--headless" in tool.args
 
 
-@pytest.mark.parametrize("module", ["duet.tools", "duet.browser", "duet.attachments"])
+@pytest.mark.parametrize("module", ["tenure.tools", "tenure.browser", "tenure.attachments"])
 def test_new_modules_import_standalone(module: str):
-    # duet.tools 가 duet.agents 를 불러 순환 import 가 나던 회귀: 새 프로세스에서 단독으로 불러 본다
+    # tenure.tools 가 tenure.agents 를 불러 순환 import 가 나던 회귀: 새 프로세스에서 단독으로 불러 본다
     import subprocess
     proc = subprocess.run([sys.executable, "-c", f"import {module}"], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr

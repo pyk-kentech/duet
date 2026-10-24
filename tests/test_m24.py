@@ -7,19 +7,19 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet.agents import make_agents
-from duet.agents.base import AgentRequest, Mode
-from duet.agents.claude_code import ClaudeCodeAdapter
-from duet.agents.codex import CodexAdapter
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.config import (
+import tenure.orchestrator as orch_mod
+from tenure.agents import make_agents
+from tenure.agents.base import AgentRequest, Mode
+from tenure.agents.claude_code import ClaudeCodeAdapter
+from tenure.agents.codex import CodexAdapter
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.config import (
     Config, ConfigError, apply_step_overrides, describe_model, load_config, parse_set_step,
 )
-from duet.state import RunState, list_run_dirs
-from duet.ui.dashboard import ApiError, Dashboard
-from duet.workflow import load_workflow
+from tenure.state import RunState, list_run_dirs
+from tenure.ui.dashboard import ApiError, Dashboard
+from tenure.workflow import load_workflow
 
 
 # ====================================================================== 30.2 에이전트 층
@@ -34,7 +34,7 @@ def test_model_for_and_rereview():
 
 
 def test_layer_rule_model_clears_step_model(tmp_path: Path):
-    (tmp_path / "duet.toml").write_text('[claude]\nstep_model = { implement = "claude-sonnet-5-5" }\n', encoding="utf-8")
+    (tmp_path / "tenure.toml").write_text('[claude]\nstep_model = { implement = "claude-sonnet-5-5" }\n', encoding="utf-8")
     assert load_config(tmp_path).claude.model_for("implement") == "claude-sonnet-5-5"
     # 위 층이 model 만 정하면 모든 단계 그 모델 (18.1 과 같은 층 규칙)
     cfg = load_config(tmp_path, {"claude.model": "claude-opus-5-5"})
@@ -125,7 +125,7 @@ def run_mock(tmp_path: Path, monkeypatch, *extra: str, reuse: bool = False):
     wd = tmp_path / "w"
     wd.mkdir(parents=True, exist_ok=True)
     if reuse:
-        (wd / "duet.toml").write_text('review_session = "reuse"\n', encoding="utf-8")
+        (wd / "tenure.toml").write_text('review_session = "reuse"\n', encoding="utf-8")
 
     def factory(cfg, *, mock):
         seen["cfg"] = cfg
@@ -172,7 +172,7 @@ def test_review_session_not_reused_when_model_changes(tmp_path: Path, monkeypatc
 # ====================================================================== UI
 def test_ui_start_run_passes_step_overrides(tmp_path: Path, monkeypatch):
     seen = {}
-    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv: seen.update(argv=argv) or {"id": "j"})
+    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv, scope=None: seen.update(argv=argv) or {"id": "j"})
     Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True, "workflow": "secure",
                            "step_overrides": {"security": {"review": {"model": "gpt-6-luna", "effort": ""}},
                                               "codex": {"review": {"effort": "xhigh"}}}})
@@ -189,7 +189,7 @@ def test_ui_start_run_passes_step_overrides(tmp_path: Path, monkeypatch):
 
 # ====================================================================== 29장: 분업은 없앴다
 def test_extended_removed(tmp_path: Path):
-    from duet.workflow import WorkflowError, list_workflows
+    from tenure.workflow import WorkflowError, list_workflows
 
     with pytest.raises(WorkflowError):
         load_workflow("extended", None, Config())
@@ -214,7 +214,7 @@ def test_default_model_tiers():
 
 
 def test_cli_default_models(tmp_path: Path, monkeypatch):
-    from duet.ui.server import cli_default_models, model_suggestions
+    from tenure.ui.server import cli_default_models, model_suggestions
 
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))

@@ -7,13 +7,13 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet import gates
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.config import ConfigError, load_config
-from duet.state import RunState, list_run_dirs
-from duet.transcript import Transcript
+import tenure.orchestrator as orch_mod
+from tenure import gates
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.config import ConfigError, load_config
+from tenure.state import RunState, list_run_dirs
+from tenure.transcript import Transcript
 
 
 def f(sev="P2", fid="", file="a.py", evidence="a.py:3 IndexError", title="t"):
@@ -91,7 +91,7 @@ def run(tmp_path, monkeypatch, responder, *extra, toml=""):
     wd = tmp_path / "w"
     if toml:
         wd.mkdir()
-        (wd / "duet.toml").write_text(toml, encoding="utf-8")
+        (wd / "tenure.toml").write_text(toml, encoding="utf-8")
     rc = main(["run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", "--max-review", "4", *extra])
     [rd] = list_run_dirs(wd)
     return rc, seen, RunState.load(rd), rd

@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet.agents.mock import MockAdapter
-from duet.bench import (
+import tenure.orchestrator as orch_mod
+from tenure.agents.mock import MockAdapter
+from tenure.bench import (
     RESULTS_JSON,
     SUMMARY_MD,
     BenchError,
@@ -25,8 +25,8 @@ from duet.bench import (
     run_bench,
     summarize,
 )
-from duet.cli import main
-from duet.workspace import Workspace
+from tenure.cli import main
+from tenure.workspace import Workspace
 
 REFS = Path(__file__).parent / "bench_refs"
 PYTEST = [sys.executable, "-m", "pytest"]
@@ -105,7 +105,7 @@ def test_hard_existing_setup_fails_only_new_tests(tmp_path: Path):
     legacy_only = tmp_path / "legacy"
     shutil.copytree(task.path, legacy_only / "task")
     (legacy_only / "task" / "hidden" / "test_reservations.py").unlink()
-    from duet.bench import Task
+    from tenure.bench import Task
 
     g2 = grade(Task("legacy", "", "existing", legacy_only / "task"), wd, tmp_path / "eval2", pytest_cmd=PYTEST)
     assert g2["all_passed"], g2["output_tail"]

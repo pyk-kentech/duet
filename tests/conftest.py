@@ -8,16 +8,24 @@ from pathlib import Path
 
 import pytest
 
-from duet.config import Config, load_config
+from tenure.config import Config, load_config
 
 FAKE_BIN = Path(__file__).parent / "fake_bin"
 
 
 @pytest.fixture(autouse=True)
-def isolated_duet_home(tmp_path_factory, monkeypatch) -> Path:
-    """테스트가 사용자의 ~/.duet/projects.json 을 건드리지 않게 한다."""
-    home = tmp_path_factory.mktemp("duet-home")
-    monkeypatch.setenv("DUET_HOME", str(home))
+def isolated_tenure_home(tmp_path_factory, monkeypatch) -> Path:
+    """테스트가 사용자의 ~/.tenure/projects.json 을 건드리지 않게 한다."""
+    home = tmp_path_factory.mktemp("tenure-home")
+    monkeypatch.setenv("TENURE_HOME", str(home))
+    # 기본 워크플로는 auto(DESIGN.md 36.5)지만, 기존 테스트는 classic 흐름을 가정한다. auto 는 test_m30 이 따로 확인
+    import tenure.config as _config
+    monkeypatch.setattr(_config, "DEFAULT_WORKFLOW", _config.CLASSIC_WORKFLOW)
+    # worktree 도 기본 auto(36.14)지만 기존 테스트는 그 폴더에서 바로 도는 흐름을 가정한다. test_m32 가 따로 확인
+    monkeypatch.setattr(_config, "DEFAULT_WORKTREE", "off")
+    # 사용자의 ~/.claude·~/.codex 세션 기록을 읽지 않게 (사용량 화면 테스트가 실제 기록을 훑느라 느리고 흔들렸다)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(home / "claude-config"))
+    monkeypatch.setenv("CODEX_HOME", str(home / "codex-home"))
     if os.name == "nt":
         monkeypatch.setenv("PYTHONUTF8", "1")      # 테스트가 직접 띄우는 자식 파이썬도 UTF-8 (DESIGN.md 27.7)
     return home

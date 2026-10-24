@@ -7,11 +7,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _fake_common as fc  # noqa: E402
 
 argv = sys.argv[1:]
+if "-p" not in argv and "exec" not in argv[:1] and "app-server" not in argv[:1] and         ("--settings" in argv or any(a.startswith("notify=") for a in argv)):
+    import _fake_interactive  # 대화형 (M34)
+    sys.exit(_fake_interactive.run("codex", argv))
 if argv == ["--version"]:
     print("codex-cli 0.0.0-fake")
     sys.exit(0)
 if argv[:2] == ["login", "status"]:
-    if os.environ.get("DUET_FAKE_LOGGED", "1") == "1":
+    if os.environ.get("TENURE_FAKE_LOGGED", "1") == "1":
         print("Logged in using ChatGPT")
         sys.exit(0)
     print("Not logged in")

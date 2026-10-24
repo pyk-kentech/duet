@@ -1,0 +1,6 @@
+name = "search-backlog"
+description = "기존 전문 검색 프로젝트(모듈 15개)에 티켓 7개: 유니코드 정규화·하이픈 단어(복사된 경로 여러 곳), update 버그, 동의어(구절·강조 포함), 저장 v3, 성능"
+kind = "existing"
+max_review = 3
+timeout_sec = 3600
+hidden_tests = 148

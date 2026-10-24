@@ -1,0 +1,6 @@
+name = "sheet"
+description = "스프레드시트 계산 엔진 (연산자 우선순위·형 변환·오류 전파·순환 참조, 복사·이동·행열 삽입/삭제의 참조 조정, COUNTIF·SUMIF)"
+kind = "new"
+max_review = 3
+timeout_sec = 3600
+hidden_tests = 487

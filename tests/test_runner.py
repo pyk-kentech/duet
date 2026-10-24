@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from duet.runner import TIMEOUT_EXIT_CODE, ExecutableNotFound, run_process
+from tenure.runner import TIMEOUT_EXIT_CODE, ExecutableNotFound, run_process
 
 
 def test_run_captures_output(tmp_path: Path):
@@ -32,8 +32,8 @@ def test_stdin_devnull_when_absent(tmp_path: Path):
 
 def test_cwd_and_env(tmp_path: Path):
     r = run_process(
-        [sys.executable, "-c", "import os; print(os.getcwd()); print(os.environ['DUET_X'])"],
-        cwd=tmp_path, env={"DUET_X": "1"},
+        [sys.executable, "-c", "import os; print(os.getcwd()); print(os.environ['TENURE_X'])"],
+        cwd=tmp_path, env={"TENURE_X": "1"},
     )
     lines = r.stdout.splitlines()
     assert Path(lines[0]).resolve() == tmp_path.resolve()

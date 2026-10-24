@@ -7,15 +7,15 @@ import json
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet import gates, limits
-from duet.agents.mock import MockAdapter
-from duet.arbiter import format_issues
-from duet.bench import run_bench
-from duet.cli import main
-from duet.config import ConfigError, load_config
-from duet.review_json import REVIEW_SCHEMA, output_instruction, render_review
-from duet.state import RunState, list_run_dirs
+import tenure.orchestrator as orch_mod
+from tenure import gates, limits
+from tenure.agents.mock import MockAdapter
+from tenure.arbiter import format_issues
+from tenure.bench import run_bench
+from tenure.cli import main
+from tenure.config import ConfigError, load_config
+from tenure.review_json import REVIEW_SCHEMA, output_instruction, render_review
+from tenure.state import RunState, list_run_dirs
 
 NOW = dt.datetime(2026, 10, 16, 10, 0, tzinfo=dt.timezone.utc).timestamp()
 
@@ -52,10 +52,10 @@ def test_reset_from_usage_and_plan():
 
 
 def test_config_validation(tmp_path):
-    (tmp_path / "duet.toml").write_text("limit_wait_max_min = 0\n", encoding="utf-8")
+    (tmp_path / "tenure.toml").write_text("limit_wait_max_min = 0\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="limit_wait_max_min"):
         load_config(tmp_path, global_defaults={})
-    (tmp_path / "duet.toml").write_text("wait_on_limit = true\nlimit_wait_max_min = 30\n", encoding="utf-8")
+    (tmp_path / "tenure.toml").write_text("wait_on_limit = true\nlimit_wait_max_min = 30\n", encoding="utf-8")
     cfg = load_config(tmp_path, global_defaults={})
     assert cfg.wait_on_limit is True and cfg.limit_wait_max_min == 30
 
@@ -74,7 +74,7 @@ def run(tmp_path, monkeypatch, *extra, claude=None, codex=None, toml="", sleep=N
     monkeypatch.setattr(limits, "sleep", sleep or waits.append)
     wd = tmp_path / "w"
     wd.mkdir(parents=True)
-    (wd / "duet.toml").write_text('test_command = "none"\n' + toml, encoding="utf-8")
+    (wd / "tenure.toml").write_text('test_command = "none"\n' + toml, encoding="utf-8")
     rc = main(["run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", *extra])
     [rd] = list_run_dirs(wd)
     return rc, seen, RunState.load(rd), waits

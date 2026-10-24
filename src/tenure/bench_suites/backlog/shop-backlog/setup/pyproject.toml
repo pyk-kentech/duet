@@ -1,0 +1,9 @@
+[project]
+name = "shop"
+version = "0.9.2"
+description = "작은 온라인 가게 주문 관리 (라이브러리 + CLI)"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from duet.config import Config, ConfigError, load_config
+from tenure.config import Config, ConfigError, load_config
 
 
 def test_defaults():
@@ -17,7 +17,7 @@ def test_defaults():
 
 
 def test_toml_overrides(tmp_path: Path):
-    (tmp_path / "duet.toml").write_text(
+    (tmp_path / "tenure.toml").write_text(
         'implementer = "codex"\nreviewer = "claude"\ndebate_rounds = 2\n\n'
         '[claude]\nbin = "/opt/claude"\nread_args = ["--allowedTools", "Read"]\n',
         encoding="utf-8",
@@ -34,7 +34,7 @@ def test_toml_overrides(tmp_path: Path):
 
 
 def test_cli_beats_toml(tmp_path: Path):
-    (tmp_path / "duet.toml").write_text("max_review = 5\ndebate_rounds = 2\n", encoding="utf-8")
+    (tmp_path / "tenure.toml").write_text("max_review = 5\ndebate_rounds = 2\n", encoding="utf-8")
     cfg = load_config(tmp_path, {"max_review": 4, "debate_rounds": None, "synth": "claude"})
     assert cfg.max_review == 4          # CLI 우선
     assert cfg.debate_rounds == 2       # None 은 '지정 안 함'
@@ -66,16 +66,16 @@ def test_validation_errors(overrides):
 
 
 def test_unknown_keys_rejected(tmp_path: Path):
-    (tmp_path / "duet.toml").write_text("typo_key = 1\n", encoding="utf-8")
+    (tmp_path / "tenure.toml").write_text("typo_key = 1\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="typo_key"):
         load_config(tmp_path)
-    (tmp_path / "duet.toml").write_text("[claude]\nbinary = 'x'\n", encoding="utf-8")
+    (tmp_path / "tenure.toml").write_text("[claude]\nbinary = 'x'\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="binary"):
         load_config(tmp_path)
 
 
 def test_bad_toml(tmp_path: Path):
-    (tmp_path / "duet.toml").write_text("= broken", encoding="utf-8")
+    (tmp_path / "tenure.toml").write_text("= broken", encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(tmp_path)
 

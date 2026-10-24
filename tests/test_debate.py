@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from duet.agents.mock import MockAdapter
-from duet.phases.common import AgentFailed, RateLimitStop
-from duet.phases.debate import DebatePhase, split_critique, split_revision
-from duet.state import FAILED, RUNNING, STOPPED_RATE_LIMIT, RunState
+from tenure.agents.mock import MockAdapter
+from tenure.phases.common import AgentFailed, RateLimitStop
+from tenure.phases.debate import DebatePhase, split_critique, split_revision
+from tenure.state import FAILED, RUNNING, STOPPED_RATE_LIMIT, RunState
 from tests.helpers import file_names, make_ctx
 
 

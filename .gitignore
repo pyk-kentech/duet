@@ -5,3 +5,14 @@ build/
 dist/
 .venv/
 .pytest_cache/
+node_modules/
+app/node_modules/
+
+# 데스크톱 앱 빌드 결과 (M35)
+app/src-tauri/engine/
+app/src-tauri/target/
+app/src-tauri/gen/
+
+# 오르카 포크(따로 git 저장소)와 휴대용 도구 (DESIGN.md 36.23)
+/orca/
+/.tools/

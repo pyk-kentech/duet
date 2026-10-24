@@ -1,0 +1,34 @@
+/* 사용량 화면 — styles.css 의 토큰만 쓴다 */
+.usage-card { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px; }
+.usage-card h3 { margin-top: 4px; }
+.usage-desc { color: var(--text-2); font-size: 12.5px; margin: -4px 0 0; }
+.usage-tip { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--line-strong);
+  color: var(--text-3); font-size: 10.5px; font-weight: 700; cursor: help; flex: none; vertical-align: middle; }
+.usage-tip:hover, .usage-tip:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
+
+.meter { display: flex; flex-direction: column; gap: 6px; }
+.meter-label { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; flex-wrap: wrap; }
+.meter-bar { height: 10px; border-radius: 99px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; }
+.meter-fill { height: 100%; background: var(--ok); border-radius: 99px; }
+.meter-fill.mid { background: var(--warn); }
+.meter-fill.high { background: var(--bad); }
+
+.usage-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.usage-stat { padding: 12px 14px; display: flex; flex-direction: column; gap: 3px; box-shadow: none; }
+.usage-stat .k { font-size: 12px; color: var(--text-3); }
+.usage-stat .v { font-size: 19px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.usage-stat .s { font-size: 12.5px; color: var(--text-2); }
+
+.usage-page .num { text-align: right; font-variant-numeric: tabular-nums; }
+.usage-table tbody tr { cursor: default; }
+.usage-table tbody tr:hover { background: transparent; }
+.usage-table tbody tr:has(a) { cursor: pointer; }
+.usage-table tbody tr:has(a):hover { background: var(--panel-2); }
+.usage-bar-col { width: 34%; min-width: 120px; }
+.usage-bar { display: flex; height: 8px; border-radius: 99px; background: var(--panel-2); overflow: hidden; }
+.usage-bar .seg { height: 100%; }
+.seg-0 { background: var(--accent); }
+.seg-1 { background: var(--text-3); }
+.seg-2 { background: var(--warn); }
+.usage-legend { gap: 14px; }
+.swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }

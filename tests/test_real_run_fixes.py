@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.state import DONE_APPROVED, DONE_DESIGN, RunState, list_run_dirs
-from duet.testing import resolve_command
-from duet.workflow import WorkflowError, load_workflow, parse_workflow
-from duet.config import Config
-from duet.workspace import Workspace
+import tenure.orchestrator as orch_mod
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.state import DONE_APPROVED, DONE_DESIGN, RunState, list_run_dirs
+from tenure.testing import resolve_command
+from tenure.workflow import WorkflowError, load_workflow, parse_workflow
+from tenure.config import Config
+from tenure.workspace import Workspace
 from tests.helpers import PASS_CMD
 from tests.test_ui import call, server  # noqa: F401 - pytest 픽스처
 
@@ -76,7 +76,7 @@ class TestChangeDesign:
         assert "최종 설계" in (wd / doc).read_text(encoding="utf-8")                # 종합 결과
         assert not (rd / "DESIGN.prev.md").exists()
         ws = Workspace(wd)
-        assert doc in ws.git("show", "--name-only", "--format=", ws.git("log", "--format=%h", "--grep=^duet: design$").strip())
+        assert doc in ws.git("show", "--name-only", "--format=", ws.git("log", "--format=%h", "--grep=^tenure: design$").strip())
         agents = store["rounds"][0]
         propose = agents["claude"].calls[0].prompt
         assert "## 기존 프로젝트의 변경" in propose and doc in propose
@@ -87,7 +87,7 @@ class TestChangeDesign:
         assert f"설계 문서는 {doc}" in review and f"설계({doc}) 위반" in review
         assert "## 기존 프로젝트의 변경" not in review
         fix = next(c for c in agents["claude"].calls if c.step == "fix").prompt
-        assert f"{doc}와 .duet/ 디렉터리는 수정하지 마라." in fix
+        assert f"{doc}와 .tenure/ 디렉터리는 수정하지 마라." in fix
 
     def test_review_diff_excludes_change_doc_but_shows_design_md(self, tmp_path: Path, monkeypatch):
         wd = existing_project(tmp_path)
@@ -186,7 +186,7 @@ def test_codex_reviewer_and_claude_with_bash(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(orch_mod, "make_agents", factory)
     wd = tmp_path / "w"
     wd.mkdir()
-    (wd / "duet.toml").write_text(f"test_command = '{PASS_CMD}'\n", encoding="utf-8")
+    (wd / "tenure.toml").write_text(f"test_command = '{PASS_CMD}'\n", encoding="utf-8")
     assert main(["run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0"]) == 0
     review = next(c for c in seen["codex"].calls if c.step == "review").prompt
     assert "좁게 실행해라" in review and "명령을 실행할 수 없다" not in review
@@ -213,8 +213,8 @@ def test_audit_run_instruction_by_cli(tmp_path: Path, monkeypatch):
 
 # ====================================================================== 4. 테스트 명령 출처
 def test_test_command_source_label(tmp_path: Path):
-    (tmp_path / "duet.toml").write_text('test_command = "uvx pytest -q"\n', encoding="utf-8")
-    assert resolve_command(tmp_path, "uvx pytest -q") == ("uvx pytest -q", "duet.toml")
+    (tmp_path / "tenure.toml").write_text('test_command = "uvx pytest -q"\n', encoding="utf-8")
+    assert resolve_command(tmp_path, "uvx pytest -q") == ("uvx pytest -q", "tenure.toml")
     assert resolve_command(tmp_path, "pytest -x") == ("pytest -x", "설정")
-    assert resolve_command(tmp_path, "auto") == ("uvx pytest -q", "duet.toml")
+    assert resolve_command(tmp_path, "auto") == ("uvx pytest -q", "tenure.toml")
     assert resolve_command(tmp_path / "none", "pytest -x") == ("pytest -x", "설정")

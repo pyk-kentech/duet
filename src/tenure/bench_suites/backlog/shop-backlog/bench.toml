@@ -1,0 +1,6 @@
+name = "shop-backlog"
+description = "기존 주문 관리 프로젝트(모듈 16개, 약 2,500줄)에 티켓 8개 처리: 복제된 계산 경로, 문서화된 기존 동작 지키기, 저장 v3, 판매 채널, 성능"
+kind = "existing"
+max_review = 3
+timeout_sec = 3600
+hidden_tests = 151

@@ -2,8 +2,8 @@
 
 import pytest
 
-from duet import __version__
-from duet.cli import build_parser, main
+from tenure import __version__
+from tenure.cli import build_parser, main
 
 
 def test_help_exits_zero(capsys):

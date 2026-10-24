@@ -12,17 +12,17 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet import limits, options
-from duet.agents.claude_code import claude_rate_limits, load_claude_limits, parse_stream, save_claude_limits
-from duet.agents.mock import MockAdapter
-from duet.bench import known_result_dirs, run_bench, workflow_stats
-from duet.cli import main
-from duet.config import Config, load_config
-from duet.registry import Registry
-from duet.state import RunState, list_run_dirs
-from duet.ui.dashboard import Dashboard, bench_root_of
-from duet.ui.server import COOKIE_PREFIX, make_server, saved_token
+import tenure.orchestrator as orch_mod
+from tenure import limits, options
+from tenure.agents.claude_code import claude_rate_limits, load_claude_limits, parse_stream, save_claude_limits
+from tenure.agents.mock import MockAdapter
+from tenure.bench import known_result_dirs, run_bench, workflow_stats
+from tenure.cli import main
+from tenure.config import Config, load_config
+from tenure.registry import Registry
+from tenure.state import RunState, list_run_dirs
+from tenure.ui.dashboard import Dashboard, bench_root_of
+from tenure.ui.server import COOKIE_PREFIX, make_server, saved_token
 
 TOKEN = "m22-token-123456789012345"
 
@@ -51,7 +51,7 @@ def req(srv, path, *, method="GET", headers=None, body=None):
 
 
 def api(srv, path, *, method="GET", body=None):
-    s, _, raw = req(srv, path, method=method, headers={"X-Duet-Token": TOKEN}, body=body)
+    s, _, raw = req(srv, path, method=method, headers={"X-Tenure-Token": TOKEN}, body=body)
     return s, json.loads(raw or b"null")
 
 
@@ -69,10 +69,10 @@ def test_cookie_opens_page_but_not_api(server):
     assert s == 401
 
 
-def test_saved_token_persists(isolated_duet_home):
+def test_saved_token_persists(isolated_tenure_home):
     a = saved_token()
     assert saved_token() == a and len(a) >= 24
-    assert (isolated_duet_home / "ui-token").read_text().strip() == a
+    assert (isolated_tenure_home / "ui-token").read_text().strip() == a
     b = saved_token(new=True)
     assert b != a and saved_token() == b
 
@@ -191,7 +191,7 @@ def test_settings_options_save(server):
 
 def test_new_run_passes_advanced_options(tmp_path: Path, monkeypatch):
     seen = {}
-    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv: seen.update(argv=argv) or {"id": "j"})
+    monkeypatch.setattr(Dashboard, "_spawn", lambda self, kind, wd, argv, scope=None: seen.update(argv=argv) or {"id": "j"})
     Dashboard().start_run({"task": "t", "project": str(tmp_path / "p"), "mock": True,
                            "options": {"arbiter": "false", "dedup": "", "limit_wait_max_min": "30"}})
     argv = seen["argv"]
@@ -219,7 +219,7 @@ def test_parse_stream_and_limits():
     assert parse_stream("not json") == (None, None) and claude_rate_limits(None) is None
 
 
-def test_claude_limits_saved_and_in_usage(server, isolated_duet_home):
+def test_claude_limits_saved_and_in_usage(server, isolated_tenure_home):
     save_claude_limits({"five_hour": {"used_percent": 12.0, "resets_at": 1}})
     assert load_claude_limits()["limits"]["five_hour"]["used_percent"] == 12.0
     s, u = api(server, "/api/usage")
@@ -239,7 +239,7 @@ def test_default_claude_args_stream():
 
 # ====================================================================== 새 실행 창의 워크플로 순서도
 def test_workflow_api_has_step_effort_for_diagram(tmp_path: Path):
-    from duet.workflow import describe, load_workflow
+    from tenure.workflow import describe, load_workflow
     cfg = Config()
     wf = describe(load_workflow("existing", None, cfg))
     roles = {r["name"]: r for r in wf["roles"]}
@@ -270,12 +270,12 @@ def test_bundled_font_served_with_cache(server):
     assert req(server, "/static/fonts/../app.js")[0] == 404          # 정해진 파일만
 
 
-def test_logos_bundled_and_user_override(server, isolated_duet_home):
+def test_logos_bundled_and_user_override(server, isolated_tenure_home):
     s, h, raw = req(server, "/logos/claude.svg")
     assert s == 200 and h["Content-Type"] == "image/svg+xml" and b"<svg" in raw           # 함께 배포한 로고
     assert "sandbox" in h["Content-Security-Policy"] and "script" not in h["Content-Security-Policy"]
     assert api(server, "/api/server")[1]["logos"] == {"claude": True, "codex": True}
-    d = isolated_duet_home / "logos"
+    d = isolated_tenure_home / "logos"
     d.mkdir()
     (d / "claude.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg" id="mine"/>', encoding="utf-8")
     (d / "evil.svg").write_text("<svg/>", encoding="utf-8")
@@ -292,7 +292,7 @@ def test_settings_api_has_builtin_default_and_model_notes(server):
     assert s == 200
     opts = {o["key"]: o for o in data["options"]}
     assert all("default" in o and "effective" in o for o in opts.values())
-    from duet.config import Config
+    from tenure.config import Config
     assert opts["timeout_sec"]["default"] == Config().timeout_sec
     claude = {m["id"]: m for m in data["suggestions"]["claude"]["models"]}
     assert claude["claude-sonnet-5-5"]["label"] == "Sonnet 5.5" and claude["claude-sonnet-5-5"]["note"]
@@ -301,16 +301,16 @@ def test_settings_api_has_builtin_default_and_model_notes(server):
 
 # ====================================================================== 28.9 폴더 고르기
 def test_list_dirs_and_api(server, tmp_path: Path):
-    from duet.ui.dashboard import ApiError, list_dirs
+    from tenure.ui.dashboard import ApiError, list_dirs
 
     (tmp_path / "b-proj" / ".git").mkdir(parents=True)
-    (tmp_path / "a-run" / ".duet").mkdir(parents=True)
+    (tmp_path / "a-run" / ".tenure").mkdir(parents=True)
     (tmp_path / ".hidden").mkdir()
     (tmp_path / "C-upper").mkdir()
     (tmp_path / "file.txt").write_text("x", encoding="utf-8")
     r = list_dirs(str(tmp_path))
     assert [e["name"] for e in r["entries"]] == ["a-run", "b-proj", "C-upper"]          # 폴더만, 숨김 제외, 대소문자 무시 정렬
-    flags = {e["name"]: (e["git"], e["duet"]) for e in r["entries"]}
+    flags = {e["name"]: (e["git"], e["tenure"]) for e in r["entries"]}
     assert flags == {"a-run": (False, True), "b-proj": (True, False), "C-upper": (False, False)}
     assert r["parent"] == str(tmp_path.resolve().parent) and r["truncated"] is False and r["sep"]
     start = list_dirs("")
@@ -326,7 +326,7 @@ def test_list_dirs_and_api(server, tmp_path: Path):
 
 
 def test_list_dirs_truncates(tmp_path: Path, monkeypatch):
-    import duet.ui.dashboard as dash
+    import tenure.ui.dashboard as dash
 
     monkeypatch.setattr(dash, "FS_MAX_ENTRIES", 3)
     for i in range(5):
@@ -336,8 +336,8 @@ def test_list_dirs_truncates(tmp_path: Path, monkeypatch):
 
 
 def test_native_pick(server, tmp_path: Path, monkeypatch):
-    import duet.ui.server as srvmod
-    from duet.runner import ProcessResult
+    import tenure.ui.server as srvmod
+    from tenure.runner import ProcessResult
 
     monkeypatch.setattr(srvmod, "native_picker_available", lambda: False)
     s, data = api(server, "/api/fs/pick", method="POST", body={"start": str(tmp_path)})
@@ -360,11 +360,11 @@ def test_native_pick(server, tmp_path: Path, monkeypatch):
 
 
 def test_native_picker_available_rules(monkeypatch):
-    import duet.ui.server as srvmod
+    import tenure.ui.server as srvmod
 
-    monkeypatch.setenv("DUET_NO_NATIVE_PICKER", "1")
+    monkeypatch.setenv("TENURE_NO_NATIVE_PICKER", "1")
     assert srvmod.native_picker_available() is False
-    monkeypatch.delenv("DUET_NO_NATIVE_PICKER")
+    monkeypatch.delenv("TENURE_NO_NATIVE_PICKER")
     monkeypatch.setattr(srvmod.sys, "platform", "linux")
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)

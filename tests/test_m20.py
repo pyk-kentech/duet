@@ -7,16 +7,16 @@ from pathlib import Path
 
 import pytest
 
-import duet.orchestrator as orch_mod
-from duet import dedup, revert
-from duet.agents.base import AgentRequest, Mode
-from duet.agents.claude_code import ClaudeCodeAdapter
-from duet.agents.mock import MockAdapter
-from duet.cli import main
-from duet.config import Config, ConfigError, dedup_agent_config, load_config
-from duet.state import RunState, list_run_dirs
-from duet.transcript import Transcript, read_header
-from duet.workspace import Workspace
+import tenure.orchestrator as orch_mod
+from tenure import dedup, revert
+from tenure.agents.base import AgentRequest, Mode
+from tenure.agents.claude_code import ClaudeCodeAdapter
+from tenure.agents.mock import MockAdapter
+from tenure.cli import main
+from tenure.config import Config, ConfigError, dedup_agent_config, load_config
+from tenure.state import RunState, list_run_dirs
+from tenure.transcript import Transcript, read_header
+from tenure.workspace import Workspace
 
 
 def item(i, status="open", sev="P2", round_=1, closed=None, note="", file="a.py", title=None):
@@ -147,10 +147,10 @@ def test_config_and_dedup_agent():
 
 
 def test_config_validation(tmp_path):
-    (tmp_path / "duet.toml").write_text('dedup_agent = "gemini"\n', encoding="utf-8")
+    (tmp_path / "tenure.toml").write_text('dedup_agent = "gemini"\n', encoding="utf-8")
     with pytest.raises(ConfigError, match="dedup_agent"):
         load_config(tmp_path, global_defaults={})
-    (tmp_path / "duet.toml").write_text('dedup_agent = "codex"\ndedup_model = "gpt-mini"\ndedup_effort = "low"\n',
+    (tmp_path / "tenure.toml").write_text('dedup_agent = "codex"\ndedup_model = "gpt-mini"\ndedup_effort = "low"\n',
                                         encoding="utf-8")
     c = load_config(tmp_path, global_defaults={})
     assert dedup_agent_config(c).model == "gpt-mini" and dedup_agent_config(c).effort == "low"
@@ -194,7 +194,7 @@ def run(tmp_path, monkeypatch, reviews, *extra, dedup_adapter=None, toml=""):
     monkeypatch.setattr(orch_mod, "make_agents", factory)
     wd = tmp_path / "w"
     wd.mkdir(parents=True)
-    (wd / "duet.toml").write_text('test_command = "none"\n' + toml, encoding="utf-8")
+    (wd / "tenure.toml").write_text('test_command = "none"\n' + toml, encoding="utf-8")
     rc = main(["run", "t", "--workdir", str(wd), "--mock", "--debate-rounds", "0", *extra])
     [rd] = list_run_dirs(wd)
     return rc, seen, RunState.load(rd), rd

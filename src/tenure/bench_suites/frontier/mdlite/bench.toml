@@ -1,0 +1,6 @@
+name = "mdlite"
+description = "마크다운 부분집합 → HTML, CommonMark 0.31.2 와 글자 단위 일치 (강조 구분자·3의 배수 규칙, 목록 들여쓰기·느슨함, 게으른 이어짐, 링크 참조 정의, 코드 스팬)"
+kind = "new"
+max_review = 3
+timeout_sec = 3600
+hidden_tests = 505

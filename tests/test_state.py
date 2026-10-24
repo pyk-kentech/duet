@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from duet.state import (
+from tenure.state import (
     DONE_APPROVED,
     RUN_JSON,
     RUNNING,
@@ -32,7 +32,8 @@ def test_roundtrip(tmp_path: Path):
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert raw["task"] == "메모 CLI" and raw["calls"][0] == {
         "agent": "claude", "step": "propose", "sec": 41.3, "exit": 0,
-        "rate_limited": False, "timed_out": False, "file": "01_propose_claude.md", "usage": None, "role": None}
+        "rate_limited": False, "timed_out": False, "file": "01_propose_claude.md", "usage": None, "role": None,
+        "outcome": None, "reason": None}
 
     back = RunState.load(tmp_path)
     assert back == st
@@ -62,7 +63,7 @@ def test_run_dirs(tmp_path: Path):
     d2 = create_run_dir(tmp_path, "20261014-000002")
     d3 = create_run_dir(tmp_path, "20261014-000002")  # 충돌 → 접미사
     assert d3.name == "20261014-000002-2"
-    assert d1.parent == tmp_path / ".duet" / "runs"
+    assert d1.parent == tmp_path / ".tenure" / "runs"
     # run.json 이 있는 것만 실행으로 친다
     assert list_run_dirs(tmp_path) == []
     RunState("a", "t").save(d1)

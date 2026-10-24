@@ -1,0 +1,13 @@
+/* 벤치마크 화면 — styles.css 의 토큰만 쓴다 */
+.bench-page h2 { margin-top: 4px; }
+.bench-page .num { text-align: right; font-variant-numeric: tabular-nums; }
+.bench-table th { white-space: nowrap; }
+.bench-table tbody tr { cursor: default; }
+.bench-table tbody tr:hover { background: transparent; }
+.bench-table tbody tr.go { cursor: pointer; }
+.bench-table tbody tr.go:hover { background: var(--panel-2); }
+.bench-bad { color: var(--bad); font-weight: 650; }
+.bench-dir { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bench-rate { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.bench-rate-bar { width: 48px; height: 6px; border-radius: 99px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; display: inline-block; }
+.bench-rate-bar > span { display: block; height: 100%; background: var(--ok); }

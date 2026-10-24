@@ -9,13 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from duet.agents import make_agents
-from duet.agents.base import AgentNotAvailable, AgentRequest, Mode
-from duet.agents.claude_code import ClaudeCodeAdapter
-from duet.agents.codex import CodexAdapter
-from duet.agents.mock import MockAdapter
-from duet.config import Config, load_config
-from duet.runner import run_process
+from tenure.agents import make_agents
+from tenure.agents.base import AgentNotAvailable, AgentRequest, Mode
+from tenure.agents.claude_code import ClaudeCodeAdapter
+from tenure.agents.codex import CodexAdapter
+from tenure.agents.mock import MockAdapter
+from tenure.config import Config, load_config
+from tenure.runner import run_process
 from tests.conftest import read_dump
 
 
@@ -40,8 +40,8 @@ class TestClaude:
         assert "Read,Glob,Grep" not in cmd
 
     def test_ask_parses_json_result(self, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
-        monkeypatch.setenv("DUET_FAKE_TEXT", "# 설계안\n내용")
+        monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
+        monkeypatch.setenv("TENURE_FAKE_TEXT", "# 설계안\n내용")
         r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path, mode=Mode.WRITE))
         assert r.ok and r.exit_code == 0
         assert r.text == "# 설계안\n내용"
@@ -53,7 +53,7 @@ class TestClaude:
         assert "--permission-mode" in d["argv"]
 
     def test_long_prompt_goes_to_stdin(self, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+        monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
         cfg = load_config(None, {"claude": {"bin": fake_cfg.claude.bin}, "prompt_arg_max_bytes": 100,
                                  "access": "standard", "web_search": "off", "package_lookup": False})
         long_prompt = "가" * 101
@@ -67,12 +67,12 @@ class TestClaude:
         assert d["argv"][-1] == "Read,Glob,Grep"  # 위치 인자 없음
 
     def test_garbage_output_falls_back_to_stdout(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_SCENARIO", "garbage")
+        monkeypatch.setenv("TENURE_FAKE_SCENARIO", "garbage")
         r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path))
         assert r.ok and r.text == "this is not json"
 
     def test_empty_output(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_SCENARIO", "empty")
+        monkeypatch.setenv("TENURE_FAKE_SCENARIO", "empty")
         r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path))
         assert r.ok and r.text == ""
 
@@ -87,13 +87,13 @@ class TestClaude:
         assert full('{"result": "ok", "is_error": false}') == ("ok", False)
 
     def test_json_is_error_counts_as_failure(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_SCENARIO", "json_error")
+        monkeypatch.setenv("TENURE_FAKE_SCENARIO", "json_error")
         r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path))
         assert not r.ok and r.exit_code == 1 and r.text == "Invalid API key · Fix external API key"
 
     def test_prompt_not_swallowed_by_variadic_option(self, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
         # 가짜 claude 는 실제처럼 --allowedTools 가 뒤따르는 인자를 삼킨다. `--` 가 없으면 실패해야 한다.
-        monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+        monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
         r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path, prompt="프롬프트"))
         assert r.ok
         d = read_dump(dump_path)
@@ -102,26 +102,26 @@ class TestClaude:
         assert bad.exit_code == 1 and "Input must be provided" in bad.stderr
 
     def test_failure(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_SCENARIO", "fail")
+        monkeypatch.setenv("TENURE_FAKE_SCENARIO", "fail")
         r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path))
         assert not r.ok and r.exit_code == 1
         assert "went wrong" in r.raw_stderr
         assert r.failure_reason().startswith("비정상 종료")
 
     def test_rate_limit_detected(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_SCENARIO", "rate_limit")
+        monkeypatch.setenv("TENURE_FAKE_SCENARIO", "rate_limit")
         r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path))
         assert r.rate_limited and not r.ok
         assert r.failure_reason() == "구독 한도 도달"
 
     def test_rate_limit_in_json_result(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
         # exit 0 이지만 본문에 한도 문구가 있는 경우도 잡는다
-        monkeypatch.setenv("DUET_FAKE_TEXT", "You've hit your weekly limit. resets at 3pm")
+        monkeypatch.setenv("TENURE_FAKE_TEXT", "You've hit your weekly limit. resets at 3pm")
         r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path))
         assert r.rate_limited and not r.ok
 
     def test_timeout(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_SCENARIO", "hang")
+        monkeypatch.setenv("TENURE_FAKE_SCENARIO", "hang")
         r = ClaudeCodeAdapter(fake_cfg).ask(req(tmp_path, timeout=1))
         assert r.timed_out and not r.ok
         assert r.failure_reason() == "시간 초과"
@@ -164,8 +164,8 @@ class TestCodex:
         assert "workspace-write" in cmd and "read-only" not in cmd
 
     def test_ask_reads_last_message(self, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
-        monkeypatch.setenv("DUET_FAKE_TEXT", "리뷰 결과\n<verdict>\nstatus: APPROVED\nmust_fix: 0\n</verdict>")
+        monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
+        monkeypatch.setenv("TENURE_FAKE_TEXT", "리뷰 결과\n<verdict>\nstatus: APPROVED\nmust_fix: 0\n</verdict>")
         r = CodexAdapter(fake_cfg).ask(req(tmp_path, mode=Mode.WRITE))
         assert r.ok
         assert r.text.startswith("리뷰 결과") and r.text.endswith("</verdict>")
@@ -179,7 +179,7 @@ class TestCodex:
         assert not Path(out).exists()
 
     def test_long_prompt_goes_to_stdin(self, fake_cfg: Config, tmp_path: Path, dump_path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_DUMP", str(dump_path))
+        monkeypatch.setenv("TENURE_FAKE_DUMP", str(dump_path))
         cfg = load_config(None, {"codex": {"bin": fake_cfg.codex.bin}, "prompt_arg_max_bytes": 100})
         long_prompt = "나" * 500
         r = CodexAdapter(cfg).ask(req(tmp_path, prompt=long_prompt))
@@ -190,22 +190,22 @@ class TestCodex:
         assert "prompt_len=500" in r.raw_stdout
 
     def test_empty_last_message_falls_back_to_stdout(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_SCENARIO", "empty")
+        monkeypatch.setenv("TENURE_FAKE_SCENARIO", "empty")
         r = CodexAdapter(fake_cfg).ask(req(tmp_path))
         assert r.ok and "stdout fallback text" in r.text
 
     def test_failure(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_SCENARIO", "fail")
+        monkeypatch.setenv("TENURE_FAKE_SCENARIO", "fail")
         r = CodexAdapter(fake_cfg).ask(req(tmp_path))
         assert not r.ok and r.exit_code == 1 and r.text == ""
 
     def test_rate_limit_detected(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_SCENARIO", "rate_limit")
+        monkeypatch.setenv("TENURE_FAKE_SCENARIO", "rate_limit")
         r = CodexAdapter(fake_cfg).ask(req(tmp_path))
         assert r.rate_limited and not r.ok
 
     def test_timeout(self, fake_cfg: Config, tmp_path: Path, monkeypatch):
-        monkeypatch.setenv("DUET_FAKE_SCENARIO", "hang")
+        monkeypatch.setenv("TENURE_FAKE_SCENARIO", "hang")
         r = CodexAdapter(fake_cfg).ask(req(tmp_path, timeout=1))
         assert r.timed_out and not r.ok
 
